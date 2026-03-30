@@ -1,0 +1,376 @@
+豊かさタッピング AIコーチ - Complete Project Structure
+=====================================================
+
+/yutakasa-tapping-coach/
+│
+├── 📄 Configuration Files
+│   ├── tsconfig.json                    TypeScript configuration
+│   ├── tsconfig.node.json               TypeScript config for build tools
+│   ├── next.config.ts                   Next.js configuration
+│   ├── tailwind.config.ts               Tailwind CSS v4 configuration
+│   ├── postcss.config.mjs               PostCSS + Tailwind setup
+│   ├── package.json                     Dependencies and scripts
+│   ├── .env.local.example               Environment variable template
+│   ├── .gitignore                       Git ignore rules
+│   │
+│
+├── 📚 Documentation
+│   ├── README.md                        Complete project documentation
+│   ├── SETUP.md                         Quick setup guide
+│   ├── DEPLOYMENT.md                    Deployment checklist
+│   └── PROJECT_STRUCTURE.txt            This file
+│
+├── 📊 Database
+│   └── supabase-schema.sql              Complete database schema (SQL)
+│       ├── subscribers table            Synced from MyASP
+│       ├── otp_codes table              For email authentication
+│       ├── chat_threads table           User conversation threads
+│       ├── chat_messages table          Message history
+│       ├── Indexes                      For performance
+│       └── RLS Policies                 Service-role-only access
+│
+├── 📁 src/
+│   │
+│   ├── 🎨 app/                          Next.js App Router pages
+│   │   ├── layout.tsx                   Root layout with metadata
+│   │   ├── page.tsx                     Home redirect to /login or /chat
+│   │   ├── globals.css                  Global Tailwind + custom styles
+│   │   │
+│   │   ├── login/
+│   │   │   └── page.tsx                 Email + OTP login form
+│   │   │       ├── Email input step
+│   │   │       ├── OTP code input step
+│   │   │       └── Session creation
+│   │   │
+│   │   ├── chat/
+│   │   │   ├── layout.tsx               Chat page wrapper (auth required)
+│   │   │   └── page.tsx                 Main chat interface
+│   │   │       ├── Sidebar with threads
+│   │   │       ├── Message display area
+│   │   │       └── Input form
+│   │   │
+│   │   └── api/                         REST API routes
+│   │       ├── auth/
+│   │       │   ├── send-otp/
+│   │       │   │   └── route.ts         POST: Check subscriber, send OTP email
+│   │       │   ├── verify-otp/
+│   │       │   │   └── route.ts         POST: Verify code, create JWT session
+│   │       │   └── logout/
+│   │       │       └── route.ts         POST: Clear session cookie
+│   │       │
+│   │       ├── chat/
+│   │       │   └── route.ts             POST: Stream Gemini response
+│   │       │       ├── Message storage
+│   │       │       ├── Streaming setup
+│   │       │       └── ReadableStream
+│   │       │
+│   │       ├── threads/
+│   │       │   ├── route.ts             GET: List threads, POST/PATCH: Create/Update
+│   │       │   └── [id]/
+│   │       │       └── route.ts         GET/DELETE: Thread with messages
+│   │       │
+│   │       ├── messages/
+│   │       │   └── [threadId]/
+│   │       │       └── route.ts         GET: Messages for thread
+│   │       │
+│   │       ├── webhook/
+│   │       │   └── myasp/
+│   │       │       └── route.ts         POST: MyASP payment/cancel webhook
+│   │       │           ├── Secret verification
+│   │       │           ├── Subscriber upsert
+│   │       │           └── Status updates
+│   │       │
+│   │       └── admin/
+│   │           └── refresh-content/
+│   │               └── route.ts         POST: Clear transcript cache
+│   │
+│   ├── 💬 components/                   Reusable React components
+│   │   ├── ChatSidebar.tsx              Thread list + controls
+│   │   │   ├── Create new thread button
+│   │   │   ├── Thread selection
+│   │   │   ├── Thread deletion
+│   │   │   └── Logout button
+│   │   │
+│   │   ├── ChatMessages.tsx             Message display area
+│   │   │   ├── User message bubbles
+│   │   │   ├── Assistant message bubbles
+│   │   │   ├── Markdown rendering
+│   │   │   ├── Code highlighting
+│   │   │   └── Auto-scroll to bottom
+│   │   │
+│   │   └── ChatInput.tsx                Message input form
+│   │       ├── Textarea input
+│   │       ├── Auto-resize textarea
+│   │       ├── Send button
+│   │       ├── Shift+Enter for newline
+│   │       └── Streaming indicator
+│   │
+│   ├── 🛠️ lib/                          Utility functions and helpers
+│   │   ├── supabase.ts                  Database client & functions
+│   │   │   ├── Subscriber management
+│   │   │   ├── OTP generation/verification
+│   │   │   ├── Chat thread CRUD
+│   │   │   ├── Message storage
+│   │   │   └── Type definitions
+│   │   │
+│   │   ├── auth.ts                      JWT authentication
+│   │   │   ├── JWT creation
+│   │   │   ├── JWT verification
+│   │   │   ├── Session cookie management
+│   │   │   └── Session retrieval
+│   │   │
+│   │   ├── gemini.ts                    Google Gemini AI integration
+│   │   │   ├── API client initialization
+│   │   │   ├── Transcript fetching
+│   │   │   ├── In-memory caching (24h TTL)
+│   │   │   ├── System prompt generation
+│   │   │   ├── Chat completion (streaming)
+│   │   │   └── Safety settings
+│   │   │
+│   │   ├── transcript-config.ts         Google Doc IDs configuration
+│   │   │   ├── All 41 document IDs
+│   │   │   ├── Document titles
+│   │   │   └── Export URL helpers
+│   │   │
+│   │   └── constants.ts                 App-wide constants
+│   │       ├── Site name
+│   │       ├── OTP settings
+│   │       ├── Session configuration
+│   │       ├── Gemini settings
+│   │       └── System prompt template
+│   │
+│   └── 🔐 middleware.ts                 Authentication middleware
+│       ├── JWT verification
+│       ├── Protected route checking
+│       └── Redirect to login if unauthorized
+│
+├── 🔧 scripts/                          (Optional) Utility scripts
+│   └── (Can be added for admin tasks)
+│
+└── 📦 node_modules/                     Dependencies (gitignored)
+    ├── next
+    ├── react
+    ├── react-dom
+    ├── @google/generative-ai
+    ├── @supabase/supabase-js
+    ├── tailwindcss
+    ├── jose
+    ├── resend
+    ├── react-markdown
+    └── ... (and more)
+
+TECHNOLOGY STACK
+================
+
+Frontend:
+  - Next.js 14 (App Router)
+  - React 19
+  - TypeScript
+  - Tailwind CSS v4
+  - React Markdown
+  - Responsive Mobile-First Design
+
+Backend:
+  - Next.js API Routes
+  - Node.js Runtime
+  - Middleware for Auth
+
+Database:
+  - Supabase (PostgreSQL)
+  - Row Level Security (RLS)
+  - Automatic indexes
+
+AI/ML:
+  - Google Generative AI (Gemini 1.5 Flash)
+  - Streaming responses
+  - In-memory transcript caching
+
+Authentication:
+  - JWT (jose)
+  - Email OTP (6-digit code)
+  - HTTP-only cookies
+  - 7-day session expiry
+
+Email:
+  - Resend (transactional email)
+  - HTML templating
+
+Deployment:
+  - Vercel (recommended)
+  - Environment-based configuration
+  - Automatic scaling
+
+KEY FEATURES
+============
+
+✨ Authentication
+  • Email-based OTP login (no account creation)
+  • Verify against MyASP subscriber list
+  • JWT session management
+  • Middleware-protected routes
+
+💬 AI Chatbot
+  • Gemini 1.5 Flash model
+  • 41 Google Doc transcripts in system prompt
+  • Streaming responses for real-time feedback
+  • Conversation history persistence
+
+📚 Multi-Thread Chat
+  • Multiple conversation threads per user
+  • Thread creation, switching, deletion
+  • Message history storage
+  • Auto-save all interactions
+
+🔗 MyASP Integration
+  • Webhook endpoint for payments
+  • Automatic subscriber sync
+  • Status tracking (active/cancelled)
+  • Secure webhook verification
+
+🎨 Modern UI
+  • Responsive mobile-first design
+  • ChatGPT-style interface
+  • Markdown rendering
+  • Code highlighting
+  • Smooth animations
+
+🔐 Security
+  • JWT authentication
+  • HTTP-only secure cookies
+  • Environment variable secrets
+  • Supabase RLS policies
+  • Webhook secret verification
+
+DATABASE SCHEMA
+===============
+
+subscribers (synced from MyASP)
+  id: UUID (PRIMARY KEY)
+  email: TEXT (UNIQUE)
+  name: TEXT
+  status: TEXT ('active' | 'cancelled')
+  myasp_data: JSONB
+  created_at: TIMESTAMPTZ
+  updated_at: TIMESTAMPTZ
+  INDEX: email
+
+otp_codes (for authentication)
+  id: UUID (PRIMARY KEY)
+  email: TEXT
+  code: TEXT (6 digits)
+  expires_at: TIMESTAMPTZ (10 min validity)
+  used: BOOLEAN
+  created_at: TIMESTAMPTZ
+  INDEX: email
+
+chat_threads (conversation threads)
+  id: UUID (PRIMARY KEY)
+  user_email: TEXT (FOREIGN KEY → subscribers.email)
+  title: TEXT ('新しいチャット')
+  created_at: TIMESTAMPTZ
+  updated_at: TIMESTAMPTZ
+  INDEX: user_email
+
+chat_messages (message history)
+  id: UUID (PRIMARY KEY)
+  thread_id: UUID (FOREIGN KEY → chat_threads.id)
+  role: TEXT ('user' | 'assistant')
+  content: TEXT
+  created_at: TIMESTAMPTZ
+  INDEX: thread_id
+
+API ENDPOINTS
+=============
+
+Authentication:
+  POST   /api/auth/send-otp          → Send OTP email
+  POST   /api/auth/verify-otp        → Verify code & create session
+  POST   /api/auth/logout            → Clear session
+
+Chat:
+  POST   /api/chat                   → Stream AI response
+
+Threads:
+  GET    /api/threads                → List user threads
+  POST   /api/threads                → Create new thread
+  PATCH  /api/threads                → Update thread title
+  GET    /api/threads/[id]           → Get thread with messages
+  DELETE /api/threads/[id]           → Delete thread
+
+Messages:
+  GET    /api/messages/[threadId]    → Get messages for thread
+
+Webhooks:
+  POST   /api/webhook/myasp          → MyASP webhook (secured)
+
+Admin:
+  POST   /api/admin/refresh-content  → Clear transcript cache
+
+ENVIRONMENT VARIABLES
+=====================
+
+Database:
+  SUPABASE_URL                       Supabase project URL
+  SUPABASE_ANON_KEY                  Public key (client-side)
+  SUPABASE_SERVICE_ROLE_KEY          Service role key (server-side)
+
+AI:
+  GEMINI_API_KEY                     Google Generative AI key
+
+Email:
+  RESEND_API_KEY                     Resend transactional email key
+
+Security:
+  JWT_SECRET                         32+ char random string
+  MYASP_WEBHOOK_SECRET               32+ char random string
+
+Branding:
+  NEXT_PUBLIC_SITE_NAME              Site display name (optional)
+
+DEPLOYMENT
+==========
+
+Development:
+  npm run dev              → Start dev server (http://localhost:3000)
+
+Production:
+  npm run build            → Build for production
+  npm run start            → Start production server
+  vercel --prod            → Deploy to Vercel (or push to GitHub)
+
+FOLDER ORGANIZATION
+===================
+
+By Feature:
+  /api/auth/*              → Authentication logic
+  /api/chat/*              → Chat streaming
+  /api/threads/*           → Thread management
+  /api/webhook/*           → External integrations
+
+By Type:
+  /app/*                   → Pages and layouts
+  /components/*            → Reusable React components
+  /lib/*                   → Business logic and utilities
+  /middleware.ts           → Global middleware
+
+By Domain:
+  /lib/supabase.ts         → Database operations
+  /lib/auth.ts             → Authentication
+  /lib/gemini.ts           → AI integration
+  /lib/constants.ts        → Configuration
+
+NEXT STEPS
+==========
+
+1. Setup: Follow SETUP.md for local development
+2. Development: npm run dev to start working
+3. Customization: Add all 41 Google Doc IDs to transcript-config.ts
+4. Testing: Test all flows locally before deployment
+5. Deployment: Follow DEPLOYMENT.md checklist
+6. Monitoring: Set up error tracking and analytics
+7. Maintenance: Regular updates and backups
+
+For detailed information, see:
+  • README.md           → Complete documentation
+  • SETUP.md            → Quick setup guide
+  • DEPLOYMENT.md       → Deployment checklist
