@@ -21,7 +21,7 @@ export default function ChatInput({
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = "auto";
-      textarea.style.height = Math.min(textarea.scrollHeight, 160) + "px";
+      textarea.style.height = Math.min(textarea.scrollHeight, 180) + "px";
     }
   }, [message]);
 
@@ -70,11 +70,11 @@ export default function ChatInput({
             placeholder="メッセージを入力... (Shift+Enter で改行)"
             disabled={disabled}
             rows={1}
-            className="flex-1 px-3 py-2 bg-transparent border-none resize-none text-sm leading-relaxed placeholder:text-[var(--text-muted)] disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-0 focus:shadow-none"
+            className="flex-1 px-4 py-3 bg-transparent border-none resize-none text-base leading-relaxed placeholder:text-[var(--text-muted)] disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-0 focus:shadow-none"
             style={{
               color: "var(--text-primary)",
-              minHeight: "40px",
-              maxHeight: "160px",
+              minHeight: "52px",
+              maxHeight: "180px",
               boxShadow: "none",
             }}
           />
@@ -82,7 +82,7 @@ export default function ChatInput({
           <button
             type="submit"
             disabled={disabled || !message.trim()}
-            className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
             style={{
               background:
                 !disabled && message.trim()
@@ -97,7 +97,7 @@ export default function ChatInput({
             aria-label="送信"
           >
             {isStreaming ? (
-              <svg className="w-4.5 h-4.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle
                   className="opacity-25"
                   cx="12"
@@ -113,7 +113,7 @@ export default function ChatInput({
                 />
               </svg>
             ) : (
-              <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -125,7 +125,7 @@ export default function ChatInput({
           </button>
         </div>
 
-        <p className="text-center text-xs mt-2.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+        <p className="text-center text-sm mt-3" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
           AIコーチは講座内容に基づいて回答します
         </p>
       </form>

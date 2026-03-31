@@ -39,10 +39,10 @@ export default function ChatMessages({
             <h2 className="font-display text-2xl font-semibold mb-3" style={{ color: "var(--text-primary)" }}>
               ようこそ
             </h2>
-            <p className="text-sm leading-relaxed mb-2" style={{ color: "var(--text-secondary)" }}>
+            <p className="text-base leading-relaxed mb-2" style={{ color: "var(--text-secondary)" }}>
               豊かさタッピングについて、何でもお気軽にご質問ください。
             </p>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
               講座の内容に基づいて、AIコーチがサポートします。
             </p>
 
@@ -55,7 +55,7 @@ export default function ChatMessages({
               ].map((prompt, i) => (
                 <div
                   key={i}
-                  className="px-4 py-3 rounded-xl text-sm text-left cursor-default transition-all duration-150"
+                  className="px-5 py-3.5 rounded-xl text-base text-left cursor-default transition-all duration-150"
                   style={{
                     backgroundColor: "var(--bg-secondary)",
                     border: "1px solid var(--border-secondary)",
@@ -81,16 +81,16 @@ export default function ChatMessages({
               {message.role === "assistant" && (
                 <div className="flex-shrink-0 mr-3 mt-1">
                   <div
-                    className="w-8 h-8 rounded-lg flex items-center justify-center"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center"
                     style={{ backgroundColor: "var(--bg-tertiary)" }}
                   >
-                    <span className="text-sm">🌿</span>
+                    <span className="text-lg">🌿</span>
                   </div>
                 </div>
               )}
 
               <div
-                className={`max-w-[85%] lg:max-w-[75%] px-5 py-3.5 rounded-2xl ${
+                className={`max-w-[85%] lg:max-w-[75%] px-6 py-4 rounded-2xl ${
                   message.role === "user" ? "rounded-br-md" : "rounded-bl-md"
                 }`}
                 style={
@@ -113,29 +113,29 @@ export default function ChatMessages({
                     <ReactMarkdown
                       components={{
                         p: ({ children }) => (
-                          <p className="mb-2 text-sm leading-relaxed">{children}</p>
+                          <p className="mb-3 text-base leading-relaxed">{children}</p>
                         ),
                         h1: ({ children }) => (
-                          <h1 className="text-base font-bold mt-4 mb-2">{children}</h1>
+                          <h1 className="text-lg font-bold mt-5 mb-2.5">{children}</h1>
                         ),
                         h2: ({ children }) => (
-                          <h2 className="text-sm font-bold mt-3 mb-1.5">{children}</h2>
+                          <h2 className="text-base font-bold mt-4 mb-2">{children}</h2>
                         ),
                         h3: ({ children }) => (
-                          <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>
+                          <h3 className="text-base font-semibold mt-3 mb-1.5">{children}</h3>
                         ),
                         ul: ({ children }) => (
-                          <ul className="list-disc list-outside ml-4 space-y-1 my-2">{children}</ul>
+                          <ul className="list-disc list-outside ml-5 space-y-1.5 my-3">{children}</ul>
                         ),
                         ol: ({ children }) => (
-                          <ol className="list-decimal list-outside ml-4 space-y-1 my-2">{children}</ol>
+                          <ol className="list-decimal list-outside ml-5 space-y-1.5 my-3">{children}</ol>
                         ),
                         li: ({ children }) => (
-                          <li className="text-sm leading-relaxed">{children}</li>
+                          <li className="text-base leading-relaxed">{children}</li>
                         ),
                         code: ({ children }) => (
                           <code
-                            className="px-1.5 py-0.5 rounded text-xs font-mono"
+                            className="px-1.5 py-0.5 rounded text-sm font-mono"
                             style={{
                               backgroundColor: "var(--bg-tertiary)",
                               color: "var(--accent-green)",
@@ -145,13 +145,13 @@ export default function ChatMessages({
                           </code>
                         ),
                         pre: ({ children }) => (
-                          <pre className="bg-[#0a1a0a] text-[#e8f0de] p-3.5 rounded-xl overflow-auto my-2 text-xs border border-[#2d4a2d]">
+                          <pre className="bg-[#0a1a0a] text-[#e8f0de] p-4 rounded-xl overflow-auto my-3 text-sm border border-[#2d4a2d]">
                             {children}
                           </pre>
                         ),
                         blockquote: ({ children }) => (
                           <blockquote
-                            className="pl-3.5 italic my-2 text-sm"
+                            className="pl-4 italic my-3 text-base"
                             style={{
                               borderLeft: "3px solid var(--accent-gold)",
                               color: "var(--text-secondary)",
@@ -170,7 +170,7 @@ export default function ChatMessages({
                     </ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                  <p className="whitespace-pre-wrap text-base leading-relaxed">
                     {message.content}
                   </p>
                 )}
