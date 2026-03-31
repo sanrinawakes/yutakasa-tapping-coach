@@ -45,27 +45,6 @@ export default function ChatMessages({
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
               講座の内容に基づいて、AIコーチがサポートします。
             </p>
-
-            {/* Suggested prompts */}
-            <div className="mt-8 space-y-2">
-              {[
-                "タッピングの基本的なやり方を教えて",
-                "お金のブロックを外すワークは？",
-                "セットアップフレーズの作り方は？",
-              ].map((prompt, i) => (
-                <div
-                  key={i}
-                  className="px-5 py-3.5 rounded-xl text-base text-left cursor-default transition-all duration-150"
-                  style={{
-                    backgroundColor: "var(--bg-secondary)",
-                    border: "1px solid var(--border-secondary)",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  {prompt}
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       ) : (
