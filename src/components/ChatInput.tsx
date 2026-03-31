@@ -6,12 +6,16 @@ interface ChatInputProps {
   onSendMessage: (message: string) => void;
   disabled?: boolean;
   isStreaming?: boolean;
+  remainingMessages?: number | null;
+  dailyLimit?: number;
 }
 
 export default function ChatInput({
   onSendMessage,
   disabled = false,
   isStreaming = false,
+  remainingMessages = null,
+  dailyLimit = 15,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,9 +129,26 @@ export default function ChatInput({
           </button>
         </div>
 
-        <p className="text-center text-sm mt-3" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
-          AIコーチは講座内容に基づいて回答します
-        </p>
+        <div className="flex items-center justify-between mt-3 px-1">
+          <p className="text-sm" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+            AIコーチは講座内容に基づいて回答します
+          </p>
+          {remainingMessages !== null && (
+            <p
+              className="text-sm font-medium"
+              style={{
+                color:
+                  remainingMessages <= 3
+                    ? "#ef4444"
+                    : remainingMessages <= 7
+                    ? "var(--accent-gold)"
+                    : "var(--text-muted)",
+              }}
+            >
+              残り {remainingMessages}/{dailyLimit} 回
+            </p>
+          )}
+        </div>
       </form>
     </div>
   );

@@ -30,11 +30,27 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [streaming, setStreaming] = useState(false);
+  const [remainingMessages, setRemainingMessages] = useState<number | null>(null);
+  const [dailyLimit, setDailyLimit] = useState(15);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load threads on mount
+  const loadUsage = async () => {
+    try {
+      const response = await fetch("/api/chat/usage");
+      if (response.ok) {
+        const data = await response.json();
+        setRemainingMessages(data.remaining);
+        setDailyLimit(data.limit);
+      }
+    } catch (error) {
+      console.error("Failed to load usage:", error);
+    }
+  };
+
+  // Load threads and usage on mount
   useEffect(() => {
     loadThreads();
+    loadUsage();
   }, []);
 
   // Load messages when thread changes
@@ -139,6 +155,7 @@ export default function ChatPage() {
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, limitMessage]);
+        loadUsage();
         return;
       }
 
@@ -184,6 +201,7 @@ export default function ChatPage() {
       }
 
       loadThreads();
+      loadUsage();
     } catch (error) {
       console.error("Failed to send message:", error);
     } finally {
@@ -238,6 +256,8 @@ export default function ChatPage() {
           onSendMessage={handleSendMessage}
           disabled={loading}
           isStreaming={streaming}
+          remainingMessages={remainingMessages}
+          dailyLimit={dailyLimit}
         />
       </div>
     </div>
