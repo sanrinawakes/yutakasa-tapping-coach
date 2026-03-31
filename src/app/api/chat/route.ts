@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
-import { getChatMessages, addChatMessage, getChatThread } from "@/lib/supabase";
+import { getChatMessages, addChatMessage, getChatThread, getDailyUserMessageCount } from "@/lib/supabase";
 import { streamChatCompletion, ChatMessage as GeminiMessage } from "@/lib/gemini";
+import { DAILY_MESSAGE_LIMIT } from "@/lib/constants";
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,6 +25,15 @@ export async function POST(request: NextRequest) {
     const thread = await getChatThread(threadId);
     if (!thread || thread.user_email !== session.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check daily message limit
+    const dailyCount = await getDailyUserMessageCount(session.email);
+    if (dailyCount >= DAILY_MESSAGE_LIMIT) {
+      return NextResponse.json(
+        { error: `本日の利用回数（${DAILY_MESSAGE_LIMIT}回）に達しました。明日またご利用ください。`, code: "DAILY_LIMIT_REACHED" },
+        { status: 429 }
+      );
     }
 
     // Add user message to database

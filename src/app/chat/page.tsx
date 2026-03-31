@@ -129,6 +129,19 @@ export default function ChatPage() {
         }),
       });
 
+      if (response.status === 429) {
+        const errorData = await response.json();
+        const limitMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          thread_id: currentThreadId,
+          role: "assistant",
+          content: errorData.error || "本日の利用回数に達しました。明日またご利用ください。",
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, limitMessage]);
+        return;
+      }
+
       if (!response.ok) {
         throw new Error("Failed to send message");
       }

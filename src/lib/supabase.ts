@@ -237,6 +237,38 @@ export async function addChatMessage(
   return data as ChatMessage;
 }
 
+export async function getDailyUserMessageCount(userEmail: string): Promise<number> {
+  const supabase = getSupabase();
+
+  // 日本時間（JST = UTC+9）で当日の開始時刻をUTCに変換
+  const now = new Date();
+  const jstOffset = 9 * 60 * 60 * 1000;
+  const jstNow = new Date(now.getTime() + jstOffset);
+  const jstTodayStart = new Date(jstNow.getFullYear(), jstNow.getMonth(), jstNow.getDate());
+  const todayStartUTC = new Date(jstTodayStart.getTime() - jstOffset);
+
+  // ユーザーのスレッドIDを取得
+  const { data: threads } = await supabase
+    .from("chat_threads")
+    .select("id")
+    .eq("user_email", userEmail);
+
+  if (!threads || threads.length === 0) return 0;
+
+  const threadIds = threads.map((t) => t.id);
+
+  // 当日のユーザーメッセージ数をカウント
+  const { count, error } = await supabase
+    .from("chat_messages")
+    .select("*", { count: "exact", head: true })
+    .in("thread_id", threadIds)
+    .eq("role", "user")
+    .gte("created_at", todayStartUTC.toISOString());
+
+  if (error) throw error;
+  return count || 0;
+}
+
 export async function getChatMessages(threadId: string) {
   const supabase = getSupabase();
   const { data, error } = await supabase

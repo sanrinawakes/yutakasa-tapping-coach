@@ -6,6 +6,8 @@ export const OTP_LENGTH = 6;
 export const SESSION_COOKIE_NAME = "session";
 export const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
 
+export const DAILY_MESSAGE_LIMIT = 15;
+
 export const GEMINI_MODEL = "gemini-2.5-flash";
 export const TRANSCRIPT_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
