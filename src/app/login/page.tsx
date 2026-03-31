@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTheme } from "@/components/ThemeProvider";
 
 type LoginStep = "email" | "otp";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const [step, setStep] = useState<LoginStep>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -72,21 +74,63 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-warm-50 to-primary-50 px-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-2xl shadow-lg p-8">
-          <div className="text-center mb-8">
-            <div className="text-4xl mb-3">✨</div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">
+    <div
+      className="min-h-screen flex items-center justify-center px-4 bg-pattern"
+      style={{ backgroundColor: "var(--bg-primary)" }}
+    >
+      {/* Theme toggle */}
+      <button
+        onClick={toggleTheme}
+        className="fixed top-6 right-6 p-2.5 rounded-full transition-all duration-200 hover:scale-110"
+        style={{
+          backgroundColor: "var(--bg-secondary)",
+          border: "1px solid var(--border-secondary)",
+          color: "var(--text-secondary)",
+          boxShadow: "var(--shadow-sm)",
+        }}
+        aria-label="テーマ切替"
+      >
+        {theme === "dark" ? (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        )}
+      </button>
+
+      <div className="w-full max-w-md fade-in">
+        {/* Card */}
+        <div
+          className="rounded-2xl p-10"
+          style={{
+            backgroundColor: "var(--bg-card)",
+            border: "1px solid var(--border-secondary)",
+            boxShadow: "var(--shadow-lg)",
+          }}
+        >
+          {/* Logo & Title */}
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-5" style={{ backgroundColor: "var(--bg-tertiary)" }}>
+              <span className="text-3xl">🌿</span>
+            </div>
+            <h1 className="font-display text-3xl font-semibold tracking-wide mb-1" style={{ color: "var(--text-primary)" }}>
               豊かさタッピング
             </h1>
-            <p className="text-gray-600 text-sm">AIコーチ</p>
+            <p className="text-gold-gradient text-sm font-medium tracking-widest uppercase">
+              AI Coach
+            </p>
           </div>
 
           {step === "email" ? (
-            <form onSubmit={handleSendOTP} className="space-y-4">
+            <form onSubmit={handleSendOTP} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label
+                  className="block text-xs font-medium tracking-wider uppercase mb-2"
+                  style={{ color: "var(--text-muted)" }}
+                >
                   メールアドレス
                 </label>
                 <input
@@ -95,13 +139,18 @@ export default function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="your@email.com"
                   disabled={loading}
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-primary-500 focus:ring-2 focus:ring-primary-200 transition disabled:bg-gray-100"
+                  className="w-full px-4 py-3.5 rounded-xl text-sm transition-all duration-200 disabled:opacity-50"
+                  style={{
+                    backgroundColor: "var(--bg-input)",
+                    border: "1px solid var(--border-primary)",
+                    color: "var(--text-primary)",
+                  }}
                   required
                 />
               </div>
 
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <div className="p-3.5 rounded-xl text-sm" style={{ backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", color: "#ef4444" }}>
                   {error}
                 </div>
               )}
@@ -109,22 +158,45 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || !email}
-                className="w-full bg-primary-500 hover:bg-primary-600 text-white font-semibold py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full py-3.5 rounded-xl font-semibold text-sm text-white transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  background: loading ? "var(--accent-green)" : "linear-gradient(135deg, #166534, #15803d)",
+                  boxShadow: !loading && email ? "0 4px 16px rgba(22, 101, 52, 0.25)" : "none",
+                }}
               >
-                {loading ? "送信中..." : "ログインコードを送信"}
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    送信中...
+                  </span>
+                ) : (
+                  "ログインコードを送信"
+                )}
               </button>
             </form>
           ) : (
-            <form onSubmit={handleVerifyOTP} className="space-y-4">
-              <div className="p-4 bg-primary-50 rounded-lg mb-4">
-                <p className="text-sm text-gray-700">
-                  <strong>{email}</strong> に送信されたコードを入力してください
-                </p>
+            <form onSubmit={handleVerifyOTP} className="space-y-5">
+              <div
+                className="p-4 rounded-xl text-sm"
+                style={{
+                  backgroundColor: "var(--accent-gold-soft)",
+                  border: "1px solid rgba(200, 164, 21, 0.15)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span className="font-semibold" style={{ color: "var(--text-primary)" }}>{email}</span>
+                <span> にコードを送信しました</span>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  6桁のコード
+                <label
+                  className="block text-xs font-medium tracking-wider uppercase mb-2"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  6桁の認証コード
                 </label>
                 <input
                   type="text"
@@ -135,14 +207,19 @@ export default function LoginPage() {
                   placeholder="000000"
                   maxLength={6}
                   disabled={loading}
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-primary-500 focus:ring-2 focus:ring-primary-200 text-center text-2xl letter-spacing-4 transition disabled:bg-gray-100"
+                  className="w-full px-4 py-3.5 rounded-xl text-center text-2xl tracking-[0.5em] font-mono transition-all duration-200 disabled:opacity-50"
+                  style={{
+                    backgroundColor: "var(--bg-input)",
+                    border: "1px solid var(--border-primary)",
+                    color: "var(--text-primary)",
+                  }}
                   required
                   autoFocus
                 />
               </div>
 
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <div className="p-3.5 rounded-xl text-sm" style={{ backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", color: "#ef4444" }}>
                   {error}
                 </div>
               )}
@@ -150,25 +227,48 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || code.length !== 6}
-                className="w-full bg-primary-500 hover:bg-primary-600 text-white font-semibold py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full py-3.5 rounded-xl font-semibold text-sm text-white transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  background: loading ? "var(--accent-green)" : "linear-gradient(135deg, #166534, #15803d)",
+                  boxShadow: !loading && code.length === 6 ? "0 4px 16px rgba(22, 101, 52, 0.25)" : "none",
+                }}
               >
-                {loading ? "確認中..." : "ログイン"}
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    確認中...
+                  </span>
+                ) : (
+                  "ログイン"
+                )}
               </button>
 
               <button
                 type="button"
-                onClick={() => setStep("email")}
-                className="w-full text-primary-600 hover:text-primary-700 font-medium py-2 transition"
+                onClick={() => {
+                  setStep("email");
+                  setError("");
+                }}
+                className="w-full py-2 text-sm font-medium transition-colors duration-200"
+                style={{ color: "var(--text-muted)" }}
               >
                 メールアドレスを変更
               </button>
             </form>
           )}
 
-          <p className="text-center text-xs text-gray-500 mt-6">
-            10分以内にコードを入力してください
+          <p className="text-center text-xs mt-8" style={{ color: "var(--text-muted)" }}>
+            コードの有効期限は10分間です
           </p>
         </div>
+
+        {/* Footer credit */}
+        <p className="text-center text-xs mt-6" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+          Powered by AI
+        </p>
       </div>
     </div>
   );

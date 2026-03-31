@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 
 interface Message {
@@ -21,21 +20,56 @@ export default function ChatMessages({
   messagesEndRef,
 }: ChatMessagesProps) {
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 bg-warm-50">
+    <div
+      className="flex-1 overflow-y-auto px-4 md:px-8 py-6 bg-pattern"
+      style={{ backgroundColor: "var(--bg-primary)" }}
+    >
       {messages.length === 0 ? (
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center text-gray-500">
-            <div className="text-5xl mb-4">✨</div>
-            <h2 className="text-2xl font-semibold mb-2 text-gray-700">
-              新しいチャットを始めましょう
+        <div className="h-full flex items-center justify-center fade-in">
+          <div className="text-center max-w-sm">
+            <div
+              className="inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-6"
+              style={{
+                backgroundColor: "var(--bg-tertiary)",
+                boxShadow: "var(--shadow-glow)",
+              }}
+            >
+              <span className="text-4xl">🌿</span>
+            </div>
+            <h2 className="font-display text-2xl font-semibold mb-3" style={{ color: "var(--text-primary)" }}>
+              ようこそ
             </h2>
-            <p className="text-gray-600">
-              何か質問したいことはありますか？
+            <p className="text-sm leading-relaxed mb-2" style={{ color: "var(--text-secondary)" }}>
+              豊かさタッピングについて、何でもお気軽にご質問ください。
             </p>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              講座の内容に基づいて、AIコーチがサポートします。
+            </p>
+
+            {/* Suggested prompts */}
+            <div className="mt-8 space-y-2">
+              {[
+                "タッピングの基本的なやり方を教えて",
+                "お金のブロックを外すワークは？",
+                "セットアップフレーズの作り方は？",
+              ].map((prompt, i) => (
+                <div
+                  key={i}
+                  className="px-4 py-3 rounded-xl text-sm text-left cursor-default transition-all duration-150"
+                  style={{
+                    backgroundColor: "var(--bg-secondary)",
+                    border: "1px solid var(--border-secondary)",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {prompt}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       ) : (
-        <>
+        <div className="max-w-3xl mx-auto space-y-5">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -43,72 +77,100 @@ export default function ChatMessages({
                 message.role === "user" ? "justify-end" : "justify-start"
               } message-item`}
             >
+              {/* Assistant avatar */}
+              {message.role === "assistant" && (
+                <div className="flex-shrink-0 mr-3 mt-1">
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center"
+                    style={{ backgroundColor: "var(--bg-tertiary)" }}
+                  >
+                    <span className="text-sm">🌿</span>
+                  </div>
+                </div>
+              )}
+
               <div
-                className={`max-w-xs lg:max-w-2xl px-4 py-3 rounded-lg ${
-                  message.role === "user"
-                    ? "bg-primary-500 text-white"
-                    : "bg-white text-gray-900 border border-gray-200 shadow-sm"
+                className={`max-w-[85%] lg:max-w-[75%] px-5 py-3.5 rounded-2xl ${
+                  message.role === "user" ? "rounded-br-md" : "rounded-bl-md"
                 }`}
+                style={
+                  message.role === "user"
+                    ? {
+                        background: "var(--bg-user-msg)",
+                        color: "var(--text-inverse)",
+                        boxShadow: "0 2px 8px rgba(22, 101, 52, 0.15)",
+                      }
+                    : {
+                        backgroundColor: "var(--bg-assistant-msg)",
+                        color: "var(--text-primary)",
+                        border: "1px solid var(--border-secondary)",
+                        boxShadow: "var(--shadow-sm)",
+                      }
+                }
               >
                 {message.role === "assistant" ? (
                   <div className="prose prose-sm max-w-none">
                     <ReactMarkdown
                       components={{
-                        p: ({ children }) => <p className="mb-2">{children}</p>,
+                        p: ({ children }) => (
+                          <p className="mb-2 text-sm leading-relaxed">{children}</p>
+                        ),
                         h1: ({ children }) => (
-                          <h1 className="text-lg font-bold mt-3 mb-2">
-                            {children}
-                          </h1>
+                          <h1 className="text-base font-bold mt-4 mb-2">{children}</h1>
                         ),
                         h2: ({ children }) => (
-                          <h2 className="text-base font-bold mt-2 mb-1">
-                            {children}
-                          </h2>
+                          <h2 className="text-sm font-bold mt-3 mb-1.5">{children}</h2>
                         ),
                         h3: ({ children }) => (
-                          <h3 className="text-sm font-semibold mt-2 mb-1">
-                            {children}
-                          </h3>
+                          <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>
                         ),
                         ul: ({ children }) => (
-                          <ul className="list-disc list-inside space-y-1 my-2">
-                            {children}
-                          </ul>
+                          <ul className="list-disc list-outside ml-4 space-y-1 my-2">{children}</ul>
                         ),
                         ol: ({ children }) => (
-                          <ol className="list-decimal list-inside space-y-1 my-2">
-                            {children}
-                          </ol>
+                          <ol className="list-decimal list-outside ml-4 space-y-1 my-2">{children}</ol>
                         ),
-                        li: ({ children }) => <li className="ml-2">{children}</li>,
+                        li: ({ children }) => (
+                          <li className="text-sm leading-relaxed">{children}</li>
+                        ),
                         code: ({ children }) => (
-                          <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono">
+                          <code
+                            className="px-1.5 py-0.5 rounded text-xs font-mono"
+                            style={{
+                              backgroundColor: "var(--bg-tertiary)",
+                              color: "var(--accent-green)",
+                            }}
+                          >
                             {children}
                           </code>
                         ),
                         pre: ({ children }) => (
-                          <pre className="bg-gray-900 text-white p-3 rounded overflow-auto my-2 text-xs">
+                          <pre className="bg-[#0a1a0a] text-[#e8f0de] p-3.5 rounded-xl overflow-auto my-2 text-xs border border-[#2d4a2d]">
                             {children}
                           </pre>
                         ),
                         blockquote: ({ children }) => (
-                          <blockquote className="border-l-4 border-gray-400 pl-3 italic my-2">
+                          <blockquote
+                            className="pl-3.5 italic my-2 text-sm"
+                            style={{
+                              borderLeft: "3px solid var(--accent-gold)",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
                             {children}
                           </blockquote>
                         ),
                         strong: ({ children }) => (
                           <strong className="font-semibold">{children}</strong>
                         ),
-                        em: ({ children }) => (
-                          <em className="italic">{children}</em>
-                        ),
+                        em: ({ children }) => <em className="italic">{children}</em>,
                       }}
                     >
                       {message.content}
                     </ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap text-sm">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed">
                     {message.content}
                   </p>
                 )}
@@ -116,7 +178,7 @@ export default function ChatMessages({
             </div>
           ))}
           <div ref={messagesEndRef} />
-        </>
+        </div>
       )}
     </div>
   );

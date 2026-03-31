@@ -55,11 +55,9 @@ export default function ChatPage() {
       if (response.ok) {
         const data = await response.json();
         setThreads(data.threads || []);
-        // Auto-select first thread if available
         if (data.threads?.length > 0 && !currentThreadId) {
           setCurrentThreadId(data.threads[0].id);
         } else if (!currentThreadId) {
-          // Create new thread if none exist
           createNewThread();
         }
       } else if (response.status === 401) {
@@ -96,6 +94,7 @@ export default function ChatPage() {
         const data = await response.json();
         setThreads((prev) => [data.thread, ...prev]);
         setCurrentThreadId(data.thread.id);
+        setMessages([]);
       }
     } catch (error) {
       console.error("Failed to create thread:", error);
@@ -112,7 +111,6 @@ export default function ChatPage() {
     setStreaming(true);
 
     try {
-      // Add user message to UI
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
         thread_id: currentThreadId,
@@ -122,7 +120,6 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, userMessage]);
 
-      // Get streaming response
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -136,9 +133,8 @@ export default function ChatPage() {
         throw new Error("Failed to send message");
       }
 
-      // Process stream
       let assistantMessage = "";
-      const assistantId = Date.now().toString();
+      const assistantId = (Date.now() + 1).toString();
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No response body");
@@ -174,7 +170,6 @@ export default function ChatPage() {
         });
       }
 
-      // Reload threads to update UI
       loadThreads();
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -212,7 +207,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex w-full h-full">
+    <div className="flex w-full h-screen overflow-hidden" style={{ backgroundColor: "var(--bg-primary)" }}>
       <ChatSidebar
         threads={threads}
         currentThreadId={currentThreadId}
@@ -224,7 +219,7 @@ export default function ChatPage() {
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <ChatMessages messages={messages} messagesEndRef={messagesEndRef} />
         <ChatInput
           onSendMessage={handleSendMessage}
