@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     // Send email via Resend
     const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({
-      from: "noreply@yutakasa-tapping.com",
+      from: "豊かさタッピング AIコーチ <noreply@silversense.cc>",
       to: normalizedEmail,
       subject: "豊かさタッピング AIコーチ - ログインコード",
       html: `
