@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { upsertSubscriber, recordFirstPaymentIfMissing } from "@/lib/supabase";
+import { setSubscriptionState } from "@/lib/supabase";
 
 /**
- * 単発購入シナリオ（豊かさタッピング / BL / BL再受講）からのwebhook受信
+ * 月額9800円サブスクシナリオからのwebhook受信
  *
  * 動作：
- *  - email を upsert（なければ新規登録、あれば更新）
- *  - first_payment_date が未設定なら「現在時刻」を初回決済日として記録（仕様：初回決済日固定）
- *  - Typeに応じて status を active / cancelled に
+ *  - Typeが「決済成功（決済 / 継続）」系 → subscription_status = 'active'
+ *  - Typeが「解約 / 退会 / 決済失敗」系 → subscription_status = 'cancelled'
  *
  * MyASP側の設定：
- *   外部フォームPOST URL = https://yutakasa-tapping-coach.vercel.app/api/webhook/myasp?token=<MYASP_WEBHOOK_SECRET>
- *   送信フィールド = data[User][mail], data[User][name1], Type など
+ *   外部フォームPOST URL = https://yutakasa-tapping-coach.vercel.app/api/webhook/myasp/subscription?token=<MYASP_WEBHOOK_SECRET>
+ *   このエンドポイントは「月額継続コーチング」シナリオ専用に設定すること
  */
 export async function POST(request: NextRequest) {
   try {
@@ -24,7 +23,6 @@ export async function POST(request: NextRequest) {
     const token =
       request.headers.get("x-webhook-token") ||
       request.nextUrl.searchParams.get("token");
-
     if (token !== webhookSecret) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -56,56 +54,47 @@ export async function POST(request: NextRequest) {
     }
 
     if (!email) {
-      return NextResponse.json(
-        { error: "Email is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Email is required" }, { status: 400 });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Type判定
+    // Type判定（解約 / 失敗 / それ以外）
     const typeStr = (type || "").toLowerCase();
-    const isCancel =
+    const isCancellation =
       typeStr.includes("cancel") ||
       typeStr === "退会" ||
       typeStr === "解約" ||
       typeStr.includes("退会") ||
-      typeStr.includes("解約");
-    const status: "active" | "cancelled" = isCancel ? "cancelled" : "active";
+      typeStr.includes("解約") ||
+      typeStr.includes("fail") ||
+      typeStr.includes("失敗") ||
+      typeStr.includes("不能") ||
+      typeStr.includes("delinquent") ||
+      typeStr.includes("decline");
 
-    // 1. subscriber upsert
-    await upsertSubscriber(normalizedEmail, {
+    const newStatus: "active" | "cancelled" = isCancellation
+      ? "cancelled"
+      : "active";
+
+    await setSubscriptionState(normalizedEmail, {
+      status: newStatus,
+      eventAt: new Date(),
+      setStartedAtIfMissing: newStatus === "active",
       name: name || undefined,
-      status,
-      myasp_data: {
-        type,
-        scenario_id: scenarioId,
-        webhookReceivedAt: new Date().toISOString(),
-      },
     });
 
-    // 2. 単発購入webhookの場合、first_payment_date を「未設定なら今」に
-    //    解約通知の場合は決済日記録しない
-    if (!isCancel) {
-      try {
-        await recordFirstPaymentIfMissing(normalizedEmail, new Date());
-      } catch (e) {
-        console.warn("recordFirstPaymentIfMissing failed:", e);
-      }
-    }
-
     console.log(
-      `MyASP webhook (one-time): ${normalizedEmail} -> ${status} (scenario: ${scenarioId || "n/a"})`
+      `MyASP webhook (subscription): ${normalizedEmail} -> subscription_status=${newStatus} (scenario: ${scenarioId || "n/a"}, type: ${type || "n/a"})`
     );
 
     return NextResponse.json({
       success: true,
       email: normalizedEmail,
-      status,
+      subscription_status: newStatus,
     });
   } catch (error) {
-    console.error("MyASP webhook error:", error);
+    console.error("MyASP subscription webhook error:", error);
     return NextResponse.json(
       { error: "Webhook processing failed" },
       { status: 500 }

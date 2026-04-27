@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSubscriberByEmail, createOTPCode } from "@/lib/supabase";
+import { evaluateAccess, accessReasonToMessage } from "@/lib/access-control";
 import { Resend } from "resend";
 
 export async function POST(request: NextRequest) {
@@ -15,13 +16,21 @@ export async function POST(request: NextRequest) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check if subscriber exists and is active
+    // 認可チェック（365日ライセンス & 月額サブスク）
     const subscriber = await getSubscriberByEmail(normalizedEmail);
+    const access = evaluateAccess(subscriber);
 
-    if (!subscriber || subscriber.status !== "active") {
+    if (!access.allowed) {
+      const message = accessReasonToMessage(access.reason);
+      // 期限切れケースは加入導線を返すため reason をフロントに伝える
+      const status = access.reason === "no_subscriber" ? 404 : 403;
       return NextResponse.json(
-        { error: "このメールアドレスは登録されていません" },
-        { status: 404 }
+        {
+          error: message,
+          reason: access.reason,
+          firstPaymentDate: access.firstPaymentDate ?? null,
+        },
+        { status }
       );
     }
 

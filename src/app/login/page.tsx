@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [errorReason, setErrorReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSendOTP = async (e: React.FormEvent) => {
@@ -31,9 +32,12 @@ export default function LoginPage() {
 
       if (!response.ok) {
         setError(data.error || "メール送信に失敗しました");
+        setErrorReason(data.reason ?? null);
         return;
       }
 
+      setError("");
+      setErrorReason(null);
       setStep("otp");
       setCode("");
     } catch (err) {
@@ -150,8 +154,19 @@ export default function LoginPage() {
               </div>
 
               {error && (
-                <div className="p-4 rounded-xl text-base" style={{ backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", color: "#ef4444" }}>
-                  {error}
+                <div className="p-4 rounded-xl text-base space-y-3" style={{ backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", color: "#ef4444" }}>
+                  <div>{error}</div>
+                  {errorReason === "license_expired_no_subscription" && (
+                    <a
+                      href="/subscribe"
+                      className="inline-block w-full text-center py-3 rounded-lg font-bold text-base text-white transition-all duration-200"
+                      style={{
+                        background: "linear-gradient(135deg, #166534, #15803d)",
+                      }}
+                    >
+                      月額継続プランへのご加入はこちら
+                    </a>
+                  )}
                 </div>
               )}
 

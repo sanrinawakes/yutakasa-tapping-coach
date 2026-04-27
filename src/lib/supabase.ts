@@ -25,6 +25,11 @@ export interface Subscriber {
   name?: string;
   status: "active" | "cancelled";
   myasp_data?: Record<string, unknown>;
+  // 365日ライセンス & 月額サブスク制御
+  first_payment_date?: string | null;
+  subscription_status: "active" | "cancelled" | "none";
+  subscription_started_at?: string | null;
+  subscription_last_event_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -280,3 +285,96 @@ export async function getChatMessages(threadId: string) {
   if (error) throw error;
   return (data || []) as ChatMessage[];
 }
+
+/**
+ * 単発購入webhook受信時に「初回決済日」を記録する。
+ * 既に first_payment_date が入っている場合は更新しない（仕様：初回決済日固定）。
+ */
+export async function recordFirstPaymentIfMissing(
+  email: string,
+  paidAt: Date
+): Promise<{ updated: boolean; first_payment_date: string }> {
+  const supabase = getSupabase();
+  const isoPaidAt = paidAt.toISOString();
+
+  // 現状確認
+  const { data: existing } = await supabase
+    .from("subscribers")
+    .select("first_payment_date")
+    .eq("email", email)
+    .single();
+
+  if (existing?.first_payment_date) {
+    // 既に決済日が入ってる → そのまま
+    return { updated: false, first_payment_date: existing.first_payment_date };
+  }
+
+  // 既存レコードに first_payment_date が無い、もしくはレコード自体が無いケース
+  const { data: result, error } = await supabase
+    .from("subscribers")
+    .upsert(
+      {
+        email,
+        first_payment_date: isoPaidAt,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "email" }
+    )
+    .select()
+    .single();
+
+  if (error) throw error;
+  return { updated: true, first_payment_date: (result as Subscriber).first_payment_date || isoPaidAt };
+}
+
+/**
+ * 月額サブスクの状態を更新する（webhook受信時用）
+ */
+export async function setSubscriptionState(
+  email: string,
+  state: {
+    status: "active" | "cancelled";
+    eventAt: Date;
+    setStartedAtIfMissing?: boolean;
+    name?: string;
+  }
+) {
+  const supabase = getSupabase();
+
+  // 既存レコード取得（subscription_started_atの判定用）
+  const { data: existing } = await supabase
+    .from("subscribers")
+    .select("subscription_started_at, first_payment_date")
+    .eq("email", email)
+    .single();
+
+  const updateRow: Record<string, unknown> = {
+    email,
+    subscription_status: state.status,
+    subscription_last_event_at: state.eventAt.toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (state.name) {
+    updateRow.name = state.name;
+  }
+
+  // サブスク開始日が未設定の場合のみセット
+  if (state.status === "active" && state.setStartedAtIfMissing && !existing?.subscription_started_at) {
+    updateRow.subscription_started_at = state.eventAt.toISOString();
+  }
+
+  // first_payment_dateが空のサブスク新規加入者（過去購入なくいきなりサブスクから入る人）には
+  // first_payment_date 自体は設定しない。365日ライセンスは単発購入だけのもの。
+  // サブスクの加入者はそもそも subscription_status='active' で許可されるので問題ない。
+
+  const { data: result, error } = await supabase
+    .from("subscribers")
+    .upsert(updateRow, { onConflict: "email" })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return result as Subscriber;
+}
+

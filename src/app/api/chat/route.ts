@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
-import { getChatMessages, addChatMessage, getChatThread, getDailyUserMessageCount } from "@/lib/supabase";
+import { getChatMessages, addChatMessage, getChatThread, getDailyUserMessageCount, getSubscriberByEmail } from "@/lib/supabase";
+import { evaluateAccess, accessReasonToMessage } from "@/lib/access-control";
 import { streamChatCompletion, ChatMessage as GeminiMessage } from "@/lib/gemini";
 import { DAILY_MESSAGE_LIMIT } from "@/lib/constants";
 
@@ -10,6 +11,20 @@ export async function POST(request: NextRequest) {
     const session = await getSessionFromCookies();
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // 認可ゲート（365日ライセンス＆月額サブスク）。セッション残存中に期限切れになるケース対策。
+    const subscriber = await getSubscriberByEmail(session.email);
+    const access = evaluateAccess(subscriber);
+    if (!access.allowed) {
+      return NextResponse.json(
+        {
+          error: accessReasonToMessage(access.reason),
+          reason: access.reason,
+          code: "ACCESS_DENIED",
+        },
+        { status: 403 }
+      );
     }
 
     const { threadId, message } = await request.json();
