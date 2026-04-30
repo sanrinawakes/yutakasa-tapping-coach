@@ -3,255 +3,176 @@
 import { useTheme } from "@/components/ThemeProvider";
 
 /**
- * MONTHLY LIFE COACHING 加入LP
- * 白基調ミニマル、プロフィール写真メイン
+ * MONTHLY LIFE COACHING 加入LP v4
+ * - 白基調・余白多め・タイポグラフィ重視
+ * - 画像はプロフィール写真1枚のみ
+ * - 装飾控えめ、品格優先
  */
-
-const PROFILE_IMG = "/satoshi-profile.jpg"; // public/satoshi-profile.jpg
-const HERO_BG_IMG =
-  "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=2400&q=80&auto=format&fit=crop"; // 海・自由
-const FREEDOM_IMG =
-  "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1600&q=80&auto=format&fit=crop"; // 山頂・自由
-const ABUNDANCE_IMG =
-  "https://images.unsplash.com/photo-1507608616759-54f48f0af0ee?w=1600&q=80&auto=format&fit=crop"; // 朝のカフェ・豊かさ
-const TAPPING_IMG =
-  "https://images.unsplash.com/photo-1545389336-cf090694435e?w=1600&q=80&auto=format&fit=crop"; // 瞑想・タッピング
-
 export default function SubscribePage() {
   const { theme, toggleTheme } = useTheme();
   const subscribeUrl = process.env.NEXT_PUBLIC_SUBSCRIPTION_LANDING_URL || "";
 
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        backgroundColor: "#ffffff",
-        color: "#1a1a1a",
-      }}
-    >
-      {/* テーマ切替ボタン */}
+    <div className="min-h-screen" style={{ backgroundColor: "var(--bg-primary)", color: "var(--text-primary)" }}>
+      {/* Theme toggle */}
       <button
         onClick={toggleTheme}
-        className="fixed top-5 right-5 z-50 p-3 rounded-full transition-all duration-200 hover:scale-110"
+        className="fixed top-5 right-5 z-50 p-3 rounded-full transition-all duration-200 hover:scale-105"
         style={{
-          backgroundColor: "rgba(255,255,255,0.95)",
-          border: "1px solid #e5e5e5",
-          color: "#666",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+          backgroundColor: "var(--bg-secondary)",
+          border: "1px solid var(--border-subtle)",
+          color: "var(--text-secondary)",
         }}
         aria-label="テーマ切替"
       >
         {theme === "dark" ? "☀" : "☾"}
       </button>
 
-      {/* ===== HERO ===== */}
-      <section className="relative overflow-hidden">
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: `linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.95) 100%), url(${HERO_BG_IMG})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
-        />
-        <div className="relative max-w-6xl mx-auto px-6 py-24 md:py-32">
-          <div className="grid md:grid-cols-2 gap-10 md:gap-16 items-center">
-            <div>
-              <div
-                className="inline-block text-xs md:text-sm font-bold tracking-[0.3em] uppercase mb-6"
-                style={{ color: "#15803d" }}
-              >
-                MONTHLY LIFE COACHING
-              </div>
-              <h1
-                className="text-4xl md:text-6xl font-bold leading-[1.15] mb-6"
-                style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}
-              >
-                頑張らなくても<br />
-                豊かさが流れこむ<br />
-                人生へ。
-              </h1>
-              <p className="text-base md:text-lg leading-relaxed mb-10" style={{ color: "#444" }}>
-                三凛さとし直接の月1グループコーチング ×<br />
-                24時間365日いつでも頼れるAIコーチbot。<br />
-                意識を本気で書き換えて、現実をひっくり返す。
-              </p>
-              <div className="flex flex-wrap items-center gap-6 mb-8">
-                <div>
-                  <div className="text-xs font-bold tracking-widest uppercase mb-1" style={{ color: "#15803d" }}>
-                    月額
-                  </div>
-                  <div className="text-5xl md:text-6xl font-bold" style={{ color: "#0a0a0a" }}>
-                    ¥9,800
-                  </div>
-                  <div className="text-sm" style={{ color: "#888" }}>
-                    （税込）・いつでも解約OK
-                  </div>
-                </div>
-              </div>
-              {subscribeUrl ? (
-                <a
-                  href={subscribeUrl}
-                  className="inline-block px-10 py-4 rounded-full font-bold text-lg transition-all duration-200 hover:scale-105"
-                  style={{
-                    background: "linear-gradient(135deg, #166534, #15803d)",
-                    color: "#fff",
-                    boxShadow: "0 6px 20px rgba(22, 101, 52, 0.3)",
-                  }}
-                >
-                  今すぐ加入する →
-                </a>
-              ) : (
-                <div className="inline-block px-6 py-3 rounded-xl text-sm" style={{ backgroundColor: "#fee2e2", color: "#991b1b" }}>
-                  申込URL準備中
-                </div>
-              )}
-            </div>
-
-            {/* 三凛さとし写真 */}
-            <div className="flex justify-center md:justify-end">
-              <div
-                className="relative w-full max-w-md aspect-[3/4] rounded-3xl overflow-hidden"
-                style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}
-              >
-                <img
-                  src={PROFILE_IMG}
-                  alt="三凛さとし"
-                  className="w-full h-full object-cover"
-                  style={{ display: "block" }}
-                />
-                <div
-                  className="absolute bottom-0 left-0 right-0 p-5 text-white"
-                  style={{
-                    background: "linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.7) 100%)",
-                  }}
-                >
-                  <div className="text-xs font-bold tracking-widest uppercase opacity-90 mb-1">Your Coach</div>
-                  <div className="text-2xl font-bold">三凛さとし</div>
-                  <div className="text-sm opacity-90">ライフコーチ／作家</div>
-                </div>
-              </div>
-            </div>
+      {/* ────────── Header bar (minimal) ────────── */}
+      <header className="sticky top-0 z-40 backdrop-blur-md"
+              style={{ backgroundColor: "var(--bg-primary)CC", borderBottom: "1px solid var(--border-subtle)" }}>
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="text-sm font-bold tracking-[0.2em] uppercase" style={{ color: "var(--text-primary)" }}>
+            Monthly Life Coaching
           </div>
+          {subscribeUrl && (
+            <a href={subscribeUrl}
+               className="hidden md:inline-flex items-center px-5 py-2 rounded-full text-sm font-bold transition-colors"
+               style={{ backgroundColor: "#111", color: "#fff" }}>
+              加入する
+            </a>
+          )}
         </div>
-      </section>
+      </header>
 
-      {/* ===== すでに豊かさタッピング受講中の方へ ===== */}
-      <section className="px-6 py-12" style={{ backgroundColor: "#f0fdf4" }}>
-        <div className="max-w-4xl mx-auto">
-          <div
-            className="rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center gap-5"
-            style={{ backgroundColor: "#fff", border: "1px solid #bbf7d0" }}
-          >
-            <div className="flex-shrink-0 w-14 h-14 rounded-full flex items-center justify-center text-2xl"
-                 style={{ background: "linear-gradient(135deg, #166534, #15803d)" }}>
-              💡
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg md:text-xl font-bold mb-2" style={{ color: "#0a0a0a" }}>
-                すでに「豊かさタッピング」をご受講中の方へ
-              </h3>
-              <p className="text-sm md:text-base leading-relaxed" style={{ color: "#444" }}>
-                ご購入から<strong>365日以内</strong>の方は、このプランへの加入なしでAIコーチbotをご利用いただけます。
-                MyASPに登録したメールアドレスで <a href="/login" className="underline font-bold" style={{ color: "#15803d" }}>ログインページ</a> からそのままログインしてください。
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* ────────── Hero ────────── */}
+      <section className="px-6 pt-20 pb-24 md:pt-28 md:pb-32">
+        <div className="max-w-4xl mx-auto text-center">
+          <p className="text-xs font-bold tracking-[0.3em] uppercase mb-8" style={{ color: "#15803d" }}>
+            ─ Monthly Life Coaching ─
+          </p>
+          <h1 className="font-bold mb-8 leading-[1.15] tracking-tight"
+              style={{ color: "var(--text-primary)", fontSize: "clamp(2.25rem, 5.5vw, 4.5rem)" }}>
+            頑張らなくても、<br />
+            豊かさが流れこむ人生へ。
+          </h1>
+          <p className="text-lg md:text-xl mb-12 leading-relaxed max-w-2xl mx-auto"
+             style={{ color: "var(--text-secondary)" }}>
+            三凛さとしの月1グループコーチングと、24時間いつでも頼れるAIコーチbot。<br className="hidden md:inline" />
+            意識を本気で書き換えて、現実をひっくり返す月額プラン。
+          </p>
 
-      {/* ===== こんなあなたへ ===== */}
-      <section className="px-6 py-20 md:py-28">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-              FOR YOU
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold mb-4" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
-              こんなあなたへ
-            </h2>
-            <p className="text-base md:text-lg" style={{ color: "#666" }}>
-              ひとつでも当てはまるなら、このプランはあなたのためのものです
+          {/* CTA */}
+          <div className="inline-flex flex-col items-center gap-4">
+            {subscribeUrl ? (
+              <a href={subscribeUrl}
+                 className="inline-flex items-center justify-center px-12 py-5 rounded-full text-lg font-bold transition-transform hover:scale-[1.03]"
+                 style={{ backgroundColor: "#111", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }}>
+                月¥9,800で加入する →
+              </a>
+            ) : (
+              <div className="px-8 py-4 rounded-full text-sm" style={{ backgroundColor: "#fef2f2", color: "#dc2626" }}>
+                ⚠ 申込URL準備中
+              </div>
+            )}
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              月額9,800円（税込）・いつでも解約OK・初月から課金
             </p>
           </div>
-          <div className="grid md:grid-cols-2 gap-4">
+        </div>
+      </section>
+
+      {/* ────────── Existing user notice ────────── */}
+      <section className="px-6 pb-16">
+        <div
+          className="max-w-3xl mx-auto px-6 py-5 md:px-8 md:py-6 rounded-2xl flex items-start gap-4"
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <div className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-base"
+               style={{ backgroundColor: "#15803d", color: "#fff" }}>
+            ✓
+          </div>
+          <div className="flex-1 text-sm md:text-base leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+            <p className="font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+              すでに「豊かさタッピング」をご受講中の方へ
+            </p>
+            <p>
+              ご購入から<strong>365日以内</strong>の方は、このプランへの加入なしでAIコーチbotをご利用いただけます。
+              MyASPにご登録のメールアドレスで <a href="/login" className="underline font-medium" style={{ color: "#15803d" }}>ログインページ</a> からそのままログインしてください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ────────── Section: For You ────────── */}
+      <section className="px-6 py-20 md:py-28" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+              For You
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
+              こんなあなたへ
+            </h2>
+          </div>
+          <ul className="grid md:grid-cols-2 gap-x-12 gap-y-5">
             {[
               "豊かさ・お金のメンタルブロックを根こそぎ外したい",
               "頑張らずに豊かさ・自由・充実を全部手に入れたい",
               "心から安心しリラックスしながら、現実面も豊かになりたい",
               "お金・豊かさ・自由を青天井に増やしていきたい",
-              "夢を叶えたい／何が夢かまだわからないけど100%後悔しない人生を生きたい",
-              "幸せなお金持ちになりたい（働く幸せ＋資産が毎月増える）",
+              "夢を叶えたい／100%後悔しない人生を生きたい",
+              "幸せなお金持ちになりたい",
               "意識を本当に変えて、現実そのものを変容させたい",
               "三凛さとしから直接グループコーチングを受けたい",
             ].map((text, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-3 p-5 rounded-xl"
-                style={{ backgroundColor: "#fafafa", border: "1px solid #f0f0f0" }}
-              >
-                <span className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs text-white font-bold mt-0.5"
-                      style={{ background: "linear-gradient(135deg, #166534, #15803d)" }}>
-                  ✓
-                </span>
-                <p className="text-base leading-relaxed" style={{ color: "#222" }}>
-                  {text}
-                </p>
-              </div>
+              <li key={i} className="flex items-start gap-3 text-base md:text-lg leading-relaxed"
+                  style={{ color: "var(--text-primary)" }}>
+                <span className="flex-shrink-0 mt-2 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: "#15803d" }} />
+                <span>{text}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       </section>
 
-      {/* ===== 続けることで起こる変化 + イメージ画像 ===== */}
-      <section className="relative px-6 py-20 md:py-28" style={{ backgroundColor: "#fafafa" }}>
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-              YOUR FUTURE
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold mb-4" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
-              続けることで起こる変化
+      {/* ────────── Section: Your Future ────────── */}
+      <section className="px-6 py-20 md:py-28" style={{ backgroundColor: "var(--bg-secondary)" }}>
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+              Your Future
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4" style={{ color: "var(--text-primary)" }}>
+              続けることで、こうなる
             </h2>
-            <p className="text-base md:text-lg" style={{ color: "#666" }}>
+            <p className="text-base md:text-lg" style={{ color: "var(--text-secondary)" }}>
               内側が変われば、外の現実は嘘みたいに動きはじめる
             </p>
           </div>
-
-          {/* 自由・豊かさのイメージ */}
-          <div className="grid md:grid-cols-2 gap-4 mb-12">
-            <div className="rounded-2xl overflow-hidden aspect-[4/3]" style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.08)" }}>
-              <img src={FREEDOM_IMG} alt="自由" className="w-full h-full object-cover" />
-            </div>
-            <div className="rounded-2xl overflow-hidden aspect-[4/3]" style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.08)" }}>
-              <img src={ABUNDANCE_IMG} alt="豊かさ" className="w-full h-full object-cover" />
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid md:grid-cols-3 gap-x-10 gap-y-12">
             {[
-              { title: "月収が上がる", desc: "豊かさのブロックが外れて、収入が自然と増えていく" },
-              { title: "不安が減る", desc: "毎日が安心と幸せの感覚に包まれる" },
-              { title: "人間関係が良くなる", desc: "家族・パートナー・周りとの関係が穏やかに" },
-              { title: "頑張らずに進む", desc: "頑張ってないのに物事がどんどん前に動く" },
-              { title: "他力が働く", desc: "なぜか助けてもらえる、応援される人になる" },
-              { title: "悩みが消える", desc: "ぐるぐる悩む時間そのものが減っていく" },
-              { title: "日々が幸せ", desc: "安心と充実が日常になる" },
-              { title: "他力で夢が叶う", desc: "大きな夢が思いがけない流れで実現する" },
-              { title: "選択肢が広がる", desc: "場所も働き方も自由に選べる人生に" },
+              { num: "01", title: "月収が上がる", desc: "豊かさのブロックが外れて、収入が自然と増える" },
+              { num: "02", title: "不安が減る", desc: "毎日が安心と幸せの感覚に包まれる" },
+              { num: "03", title: "人間関係が良くなる", desc: "家族・パートナー・周りが穏やかになる" },
+              { num: "04", title: "頑張らずに進む", desc: "頑張っていないのに物事がどんどん前へ" },
+              { num: "05", title: "他力が働く", desc: "なぜか助けてもらえる、応援される人になる" },
+              { num: "06", title: "悩みが消える", desc: "ぐるぐる悩む時間そのものが減る" },
+              { num: "07", title: "日々が幸せ", desc: "安心と充実が日常になる" },
+              { num: "08", title: "他力で夢が叶う", desc: "大きな夢が思いがけない流れで実現" },
+              { num: "09", title: "選択肢が広がる", desc: "場所も働き方も自由に選べる人生に" },
             ].map((item, i) => (
-              <div
-                key={i}
-                className="p-6 rounded-xl"
-                style={{ backgroundColor: "#fff", border: "1px solid #f0f0f0" }}
-              >
-                <div className="text-xs font-bold tracking-widest uppercase mb-3" style={{ color: "#15803d" }}>
-                  {String(i + 1).padStart(2, "0")}
+              <div key={i}>
+                <div className="text-sm font-mono mb-2" style={{ color: "#15803d", opacity: 0.7 }}>
+                  {item.num}
                 </div>
-                <h3 className="text-lg font-bold mb-2" style={{ color: "#0a0a0a" }}>
+                <h3 className="text-xl font-bold mb-2" style={{ color: "var(--text-primary)" }}>
                   {item.title}
                 </h3>
-                <p className="text-sm leading-relaxed" style={{ color: "#666" }}>
+                <p className="text-base leading-relaxed" style={{ color: "var(--text-secondary)" }}>
                   {item.desc}
                 </p>
               </div>
@@ -260,230 +181,227 @@ export default function SubscribePage() {
         </div>
       </section>
 
-      {/* ===== プラン内容 ===== */}
-      <section className="px-6 py-20 md:py-28">
+      {/* ────────── Section: What's Included ────────── */}
+      <section className="px-6 py-20 md:py-28" style={{ borderTop: "1px solid var(--border-subtle)" }}>
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-              WHAT'S INCLUDED
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold mb-4" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
+          <div className="mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+              What's Included
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4" style={{ color: "var(--text-primary)" }}>
               プラン内容
             </h2>
-            <p className="text-base md:text-lg" style={{ color: "#666" }}>
-              月額9,800円で、これ全部つきます
+            <p className="text-base md:text-lg" style={{ color: "var(--text-secondary)" }}>
+              月額9,800円で、すべて含まれます
             </p>
           </div>
 
-          <div className="space-y-5">
-            {/* メイン */}
-            <div
-              className="rounded-2xl overflow-hidden"
-              style={{ background: "linear-gradient(135deg, #14532d 0%, #166534 100%)" }}
-            >
-              <div className="p-8 md:p-12 text-white">
-                <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3 opacity-80">
-                  ⭐ MAIN BENEFIT
-                </div>
-                <h3 className="text-2xl md:text-3xl font-bold mb-4 leading-tight">
-                  三凛さとし直接<br />
-                  月1グループコーチング
-                </h3>
-                <p className="text-base md:text-lg leading-relaxed opacity-95 mb-6">
-                  <strong className="text-yellow-200">ここが本命です。</strong><br />
-                  成功と達成のディクシャからはじまり、
-                  あなたの現実を堰き止めている内側のブロックに高い解像度で気づき、
-                  その場で解消していくプロセス。
-                </p>
-                <p className="text-sm md:text-base leading-relaxed opacity-90">
-                  2025年5月から世界最先端の意識研究機関 oneness（インド）で
-                  Sri Krishnaji・Sri Preethaji に師事した三凛が、1年間で実証した
-                  「意識を本気で書き換える」ワークを月1で受けられます。
-                </p>
-                <div className="mt-5 inline-block text-sm bg-white/15 backdrop-blur px-4 py-2 rounded-full">
-                  💎 単発で受けたら数万円相当の価値
+          <div className="space-y-4">
+            {/* Main Benefit */}
+            <div className="rounded-3xl p-8 md:p-12"
+                 style={{ backgroundColor: "#0f1f17", color: "#ffffff" }}>
+              <div className="grid md:grid-cols-[auto_1fr] gap-6 md:gap-10 items-start">
+                <div className="text-3xl md:text-4xl font-mono font-bold opacity-30">01</div>
+                <div>
+                  <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#fde68a" }}>
+                    Main Benefit ★
+                  </p>
+                  <h3 className="text-2xl md:text-4xl font-bold mb-5 leading-tight">
+                    三凛さとし直接の<br />
+                    月1グループコーチング
+                  </h3>
+                  <p className="text-base md:text-lg leading-relaxed opacity-90 mb-4">
+                    <strong style={{ color: "#fde68a" }}>このプランの本命がこれです。</strong>
+                    成功と達成のディクシャからはじまり、あなたの現実を堰き止めている内側のブロックに高い解像度で気づき、その場で解消していくプロセス。
+                  </p>
+                  <p className="text-base md:text-lg leading-relaxed opacity-90 mb-6">
+                    2025年5月から世界最先端の意識研究機関 oneness（インド）で Sri Krishnaji・Sri Preethaji に師事した三凛が、1年間で実証した「意識を本気で書き換える」ワークを月1で受けられます。
+                  </p>
+                  <div className="inline-block text-sm px-4 py-2 rounded-full" style={{ backgroundColor: "rgba(253,230,138,0.15)", color: "#fde68a" }}>
+                    単発で受けたら数万円相当の価値
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* AIコーチbot */}
-            <div className="rounded-2xl overflow-hidden grid md:grid-cols-2"
-                 style={{ backgroundColor: "#fff", border: "1px solid #e5e5e5" }}>
-              <div className="aspect-[4/3] md:aspect-auto">
-                <img src={TAPPING_IMG} alt="タッピング" className="w-full h-full object-cover" />
-              </div>
-              <div className="p-8 md:p-10">
-                <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-                  AI COACH BOT
+            {/* AI Coach Bot */}
+            <div className="rounded-3xl p-8 md:p-12"
+                 style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-subtle)" }}>
+              <div className="grid md:grid-cols-[auto_1fr] gap-6 md:gap-10 items-start">
+                <div className="text-3xl md:text-4xl font-mono font-bold" style={{ color: "var(--text-muted)", opacity: 0.4 }}>02</div>
+                <div>
+                  <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+                    AI Coach Bot
+                  </p>
+                  <h3 className="text-2xl md:text-4xl font-bold mb-5 leading-tight" style={{ color: "var(--text-primary)" }}>
+                    24時間365日<br />
+                    AIコーチbot使い放題
+                  </h3>
+                  <p className="text-base md:text-lg leading-relaxed mb-6" style={{ color: "var(--text-secondary)" }}>
+                    深夜2時の不安、朝の焦り、仕事中のイライラ。その瞬間にAIコーチに話しかけて、タッピングのお題を出してもらえる。過去の会話履歴も全部残るので、自分の変容の過程も振り返れます。
+                  </p>
+                  <ul className="grid md:grid-cols-2 gap-x-8 gap-y-2 text-base" style={{ color: "var(--text-secondary)" }}>
+                    {[
+                      "タッピングのお題出し（24h）",
+                      "お金のメンタルブロックの言語化",
+                      "人生相談・お悩み相談",
+                      "過去の履歴がそのまま残る",
+                      "🎤 音声入力にも対応",
+                      "1日15回まで（実質無制限）",
+                    ].map((t, i) => (
+                      <li key={i} className="flex items-center gap-2">
+                        <span style={{ color: "#15803d" }}>✓</span> {t}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <h3 className="text-2xl md:text-3xl font-bold mb-4" style={{ color: "#0a0a0a" }}>
-                  24時間365日<br />
-                  AIコーチbot使い放題
-                </h3>
-                <p className="text-sm md:text-base leading-relaxed mb-5" style={{ color: "#444" }}>
-                  深夜2時の不安、朝の焦り、仕事中のイライラ。
-                  その瞬間にAIコーチに話しかけて、
-                  タッピングのお題を出してもらえる。
-                </p>
-                <ul className="space-y-2 text-sm md:text-base" style={{ color: "#444" }}>
-                  <li className="flex items-center gap-2">
-                    <span style={{ color: "#15803d" }}>✓</span>
-                    タッピングのお題出し（24h）
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span style={{ color: "#15803d" }}>✓</span>
-                    お金のメンタルブロックの言語化
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span style={{ color: "#15803d" }}>✓</span>
-                    人生相談・お悩み相談
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span style={{ color: "#15803d" }}>✓</span>
-                    過去の履歴がそのまま残る
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span style={{ color: "#15803d" }}>✓</span>
-                    🎤 音声入力にも対応
-                  </li>
-                </ul>
+              </div>
+            </div>
+
+            {/* Continuity */}
+            <div className="rounded-3xl p-8 md:p-12"
+                 style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-subtle)" }}>
+              <div className="grid md:grid-cols-[auto_1fr] gap-6 md:gap-10 items-start">
+                <div className="text-3xl md:text-4xl font-mono font-bold" style={{ color: "var(--text-muted)", opacity: 0.4 }}>03</div>
+                <div>
+                  <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+                    Continuity
+                  </p>
+                  <h3 className="text-2xl md:text-4xl font-bold mb-5 leading-tight" style={{ color: "var(--text-primary)" }}>
+                    継続だからこそ<br />
+                    深まる変容
+                  </h3>
+                  <p className="text-base md:text-lg leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                    意識の書き換えは「1回受けて終わり」ではありません。毎月の積み重ねで、3ヶ月後、半年後、1年後の自分がまったく別人のようになっていく。タッピングと内省を毎日の習慣にして、「悟った意識状態」「美しい意識状態」を日常に落とし込みます。
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ===== 講師：三凛さとし ===== */}
-      <section className="px-6 py-20 md:py-28" style={{ backgroundColor: "#fafafa" }}>
+      {/* ────────── Section: Your Coach ────────── */}
+      <section className="px-6 py-20 md:py-32" style={{ backgroundColor: "var(--bg-secondary)" }}>
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-12">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-              YOUR COACH
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
-              講師：三凛さとし
+          <div className="mb-12 md:mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+              Your Coach
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
+              三凛さとし
             </h2>
+            <p className="text-base md:text-lg mt-3" style={{ color: "var(--text-secondary)" }}>
+              ライフコーチ・作家
+            </p>
           </div>
 
-          <div className="grid md:grid-cols-5 gap-10 items-center">
-            <div className="md:col-span-2">
-              <div
-                className="rounded-3xl overflow-hidden aspect-[3/4]"
-                style={{ boxShadow: "0 16px 48px rgba(0,0,0,0.12)" }}
-              >
-                <img src={PROFILE_IMG} alt="三凛さとし" className="w-full h-full object-cover" />
+          <div className="grid md:grid-cols-[2fr_3fr] gap-10 md:gap-16 items-start">
+            {/* Profile photo */}
+            <div className="relative">
+              <div className="aspect-[3/4] rounded-3xl overflow-hidden"
+                   style={{ backgroundColor: "#dbeafe" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/satoshi-profile.jpg"
+                  alt="三凛さとし"
+                  className="w-full h-full object-cover"
+                />
               </div>
             </div>
 
-            <div className="md:col-span-3 space-y-5 text-base md:text-lg leading-relaxed" style={{ color: "#333" }}>
+            {/* Bio */}
+            <div className="space-y-6 text-base md:text-lg leading-relaxed" style={{ color: "var(--text-secondary)" }}>
               <p>
-                ライフコーチ・作家として<strong>12年以上</strong>活動。
-                世界4拠点（ポルトガル・マルタ・タイ・ドバイ）を転々としながら、
-                SNSフォロワー合計<strong>約50万人</strong>、
-                これまで<strong>数万人</strong>の人生変容に関わってきました。
+                ライフコーチ・作家として<strong style={{ color: "var(--text-primary)" }}>12年以上</strong>活動。世界4拠点（ポルトガル・マルタ・タイ・ドバイ）を転々としながら、SNSフォロワー合計<strong style={{ color: "var(--text-primary)" }}>約50万人</strong>、これまで<strong style={{ color: "var(--text-primary)" }}>数万人</strong>の人生変容に関わってきました。
               </p>
               <p>
-                テレビ・雑誌・ラジオ・新聞での出演実績多数。
-                お金の引き寄せ（金運）、親子関係、人間関係、仕事、健康と、
-                人生の根幹に関わるテーマで発信。
-                <strong>LINE占いの公認占い師</strong>でもあり、
-                スピリチュアル・開運・自己啓発・心理学・占いと幅広い分野で活動しています。
+                テレビ・雑誌・ラジオ・新聞での出演実績多数。お金の引き寄せ、親子関係、人間関係、仕事、健康と、人生の根幹に関わるテーマで発信しています。<strong style={{ color: "var(--text-primary)" }}>LINE占いの公認占い師</strong>でもあり、スピリチュアル・開運・自己啓発・心理学・占いと幅広い分野で活動。
               </p>
-
-              <div className="border-l-4 pl-5 py-1" style={{ borderColor: "#ca8a04" }}>
-                <p className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: "#ca8a04" }}>
-                  🌀 大きな転機：2024〜2026
+              <div className="pt-6 mt-6" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                <p className="text-xs font-bold tracking-[0.2em] uppercase mb-3" style={{ color: "#15803d" }}>
+                  ─ 大きな転機：2024–2026 ─
                 </p>
-                <p className="text-sm md:text-base">
-                  2024年末、人工衛星打ち上げ事業をきっかけにSNSがプチ炎上、
-                  事業も<strong>1億円の赤字</strong>。
-                  そこから2025年5月、インドのoneness で Sri Krishnaji・Sri Preethaji に師事。
-                  1年間学び続けた結果——
+                <p className="mb-4">
+                  2024年末、人工衛星打ち上げ事業をきっかけにSNSがプチ炎上、事業も<strong style={{ color: "var(--text-primary)" }}>1億円の赤字</strong>。そこから2025年5月、インドの oneness で Sri Krishnaji・Sri Preethaji に師事。1年間学び続けた結果——
                 </p>
-                <p className="text-sm md:text-base mt-3">
-                  2026年4月、<strong>夢叶フェス</strong>を開催。
-                  立ち上げから<strong>たった3週間</strong>で、
-                  ユニーク<strong>2.3万人</strong>・リアルタイム視聴のべ<strong>5.3万人</strong>を動員。
-                  日本の自己啓発業界では過去最大規模のフェスに。
+                <p className="mb-4">
+                  2026年4月、<strong style={{ color: "var(--text-primary)" }}>夢叶フェス</strong>を開催。立ち上げから<strong>たった3週間</strong>で、ユニーク<strong style={{ color: "var(--text-primary)" }}>2.3万人</strong>・リアルタイム視聴のべ<strong style={{ color: "var(--text-primary)" }}>5.3万人</strong>を動員。日本の自己啓発業界では過去最大規模のフェスに。
                 </p>
-                <p className="text-sm md:text-base mt-3">
-                  仕事時間は半分以下、YouTubeもほぼ手放した。
-                  でも売上と利益は増えた。
-                  <strong>この変容の裏には、瞑想とタッピングがありました。</strong>
+                <p>
+                  仕事時間は半分以下、YouTubeもほぼ手放した。でも売上と利益は増えた。<strong style={{ color: "var(--text-primary)" }}>この変容の裏には、瞑想とタッピングがありました。</strong>
+                </p>
+                <p className="mt-4">
+                  このプランは、その1年間で身体で実証してきた「意識の書き換え方」を、毎月のグループコーチングで直接伝えていく場です。
                 </p>
               </div>
-
-              <p>
-                このプランは、その1年間で身体で実証してきた「意識の書き換え方」を、
-                毎月のグループコーチングで直接お伝えしていく場です。
-              </p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ===== 実践者の声 ===== */}
-      <section className="px-6 py-20 md:py-28">
+      {/* ────────── Section: Stories ────────── */}
+      <section className="px-6 py-20 md:py-28" style={{ borderTop: "1px solid var(--border-subtle)" }}>
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
-              SUCCESS STORIES
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold mb-4" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
-              タッピング実践者の声
+          <div className="mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+              Success Stories
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4" style={{ color: "var(--text-primary)" }}>
+              実践者の声
             </h2>
-            <p className="text-base md:text-lg" style={{ color: "#666" }}>
-              内側を変えた人たちの「現実」がこちら
+            <p className="text-base md:text-lg" style={{ color: "var(--text-secondary)" }}>
+              内側を変えた人たちの「現実」
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-5">
+          <div className="grid md:grid-cols-2 gap-x-10 gap-y-16">
             {[
               {
+                photo: "/testimonials/miwa.jpg",
+                badge: "底辺生活 → 月収 22倍",
                 name: "MIWAさん",
-                badge: "底辺生活 → 月収22倍",
-                story: "人前に出るのが苦手でしたが、メンタルブロックを外しミセスオブザイヤー2025グランプリ受賞！50万円のドレスを躊躇なく買える生活に。日本と世界を駆け巡る人生に。",
+                story: "人前に出るのが苦手でしたが、メンタルブロックを外しミセスオブザイヤー2025グランプリ受賞。50万円のドレスを躊躇なく買える生活に。日本と世界を駆け巡る人生になりました。",
               },
               {
+                photo: "/testimonials/yuta.jpg",
+                badge: "借金 6,000万 → 年商 1億超",
                 name: "ゆうたさん",
-                badge: "借金6,000万 → 年商1億超",
-                story: "パワハラに悩まされた介護士時代、当時の婚約者に婚約破棄もされてしまいました。タッピングに出会って三凛さんから直接指導を受け、売れっ子カウンセラー兼発信者に！彼女もGET！",
+                story: "パワハラに悩まされた介護士時代、当時の婚約者に婚約破棄もされました。タッピングに出会って三凛さんから直接指導を受け、売れっ子カウンセラー兼発信者に。彼女もできました。",
               },
               {
+                photo: "/testimonials/usagi.jpg",
+                badge: "限界OL → 年収 3,500万",
                 name: "うさぎさん",
-                badge: "限界OL → 年収3,500万",
-                story: "コロナ禍に副業講座に複数チャレンジするも次々挫折。2021年にタッピングに出会い「稼ぐことへのメンタルブロック」に集中して取り組んで収入は10倍に！月1で海外へ行ける生活に。",
+                story: "コロナ禍に副業講座に複数チャレンジするも次々挫折。2021年にタッピングに出会い「稼ぐことへのメンタルブロック」に集中して取り組み、収入は10倍に。月1で海外へ行ける生活になりました。",
               },
               {
+                photo: "/testimonials/yoshida.jpg",
+                badge: "パン屋パート → 月収 5倍",
                 name: "よしだりよさん",
-                badge: "パン屋パート → 月収5倍",
                 story: "自分責めが減り、感謝してお金を受け取れるように。念願だった東京の一等地に引っ越しました。家族との関係もかなり良くなりました。",
               },
               {
-                name: "田村望さん（51歳）",
+                photo: "/testimonials/tamura.jpg",
                 badge: "我慢OL → 女性経営者",
-                story: "損保会社で我慢して働くOLから女性経営者になり、念願だった地元の県知事とお仕事まで実現！行動のスピードが圧倒的にUP。家族の協力も得られるように。若返りも実現しました。",
+                name: "田村望さん（51歳）",
+                story: "損保会社で我慢して働くOLから女性経営者になり、念願だった地元の県知事とお仕事まで実現。行動のスピードが圧倒的にUP、家族の協力も得られるように、若返りも実現しました。",
               },
             ].map((v, i) => (
-              <div
-                key={i}
-                className="p-6 md:p-8 rounded-2xl"
-                style={{ backgroundColor: "#fff", border: "1px solid #f0f0f0" }}
-              >
-                <div
-                  className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-4"
-                  style={{
-                    background: "linear-gradient(135deg, #ca8a04, #f59e0b)",
-                    color: "#fff",
-                  }}
-                >
-                  {v.badge}
+              <div key={i}>
+                <div className="aspect-[3/4] rounded-2xl overflow-hidden mb-5"
+                     style={{ backgroundColor: "var(--bg-secondary)" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={v.photo} alt={v.name} className="w-full h-full object-cover" />
                 </div>
-                <h3 className="text-base font-bold mb-3" style={{ color: "#0a0a0a" }}>
-                  {v.name}
-                </h3>
-                <p className="text-sm md:text-base leading-relaxed" style={{ color: "#444" }}>
+                <p className="text-xs font-bold tracking-[0.2em] uppercase mb-3" style={{ color: "#15803d" }}>
+                  {v.badge}
+                </p>
+                <p className="text-base md:text-lg leading-relaxed mb-4" style={{ color: "var(--text-primary)" }}>
                   「{v.story}」
+                </p>
+                <p className="text-sm font-medium" style={{ color: "var(--text-muted)" }}>
+                  — {v.name}
                 </p>
               </div>
             ))}
@@ -491,23 +409,22 @@ export default function SubscribePage() {
         </div>
       </section>
 
-      {/* ===== Q&A ===== */}
-      <section className="px-6 py-20 md:py-28" style={{ backgroundColor: "#fafafa" }}>
+      {/* ────────── Section: FAQ ────────── */}
+      <section className="px-6 py-20 md:py-28" style={{ backgroundColor: "var(--bg-secondary)" }}>
         <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
+          <div className="mb-16 text-center">
+            <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: "#15803d" }}>
               FAQ
-            </div>
-            <h2 className="text-3xl md:text-5xl font-bold" style={{ color: "#0a0a0a", letterSpacing: "-0.02em" }}>
+            </p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
               よくある質問
             </h2>
           </div>
-
           <div className="space-y-3">
             {[
               {
                 q: "解約はいつでもできますか？",
-                a: "はい、ネットからいつでも解約可能です。決済日の7日前までにご解約手続きをいただければ、次回の決済は走りません。引き留めや解約理由のヒアリングなどもありません。",
+                a: "はい、ネットからいつでも解約可能です。決済日の7日前までに手続きいただければ、次回の決済は走りません。引き留めや解約理由のヒアリングもありません。",
               },
               {
                 q: "途中で辞めても違約金はかかりますか？",
@@ -519,7 +436,7 @@ export default function SubscribePage() {
               },
               {
                 q: "決済後、すぐにbotが使えますか？",
-                a: "決済完了後、自動的にあなたのメールアドレスでアカウントが作成されます。決済時のメールアドレスでログインページからログインしてください。AIコーチbotはすぐにご利用いただけます。",
+                a: "決済完了後、ご登録のメールアドレスでログインページからログインしていただけば、すぐにAIコーチbotが使えるようになります。利用方法のご案内メールも届きます。",
               },
               {
                 q: "タッピング初心者でも大丈夫ですか？",
@@ -531,28 +448,28 @@ export default function SubscribePage() {
               },
               {
                 q: "すでに豊かさタッピングを受講しているのですが、加入する必要はありますか？",
-                a: "ご購入から365日以内であれば、追加加入なしでAIコーチbotをそのままご利用いただけます。月1のグループコーチングを希望される方はぜひこちらにご加入ください。",
+                a: "ご購入から365日以内であれば、追加の加入なしでAIコーチbotをご利用いただけます。MyASPに登録のメールアドレスでログインページから直接ログインしてください。365日経過後も継続したい方、毎月の三凛グループコーチングを受けたい方はこのプランへのご加入をご検討ください。",
               },
               {
                 q: "音声入力は使えますか？",
-                a: "はい、使えます。Chrome / Safari / Edge ブラウザで、AIコーチへのメッセージをマイクから音声入力できます（日本語対応）。",
+                a: "はい。AIコーチbotではマイクボタンから日本語の音声入力ができます（Chrome / Safari / Edge対応）。スマホからも使えます。",
               },
             ].map((item, i) => (
               <details
                 key={i}
-                className="group rounded-xl overflow-hidden transition-all"
-                style={{ backgroundColor: "#fff", border: "1px solid #f0f0f0" }}
+                className="group rounded-2xl"
+                style={{
+                  backgroundColor: "var(--bg-primary)",
+                  border: "1px solid var(--border-subtle)",
+                }}
               >
-                <summary
-                  className="cursor-pointer p-5 md:p-6 font-bold flex items-start justify-between gap-4 list-none"
-                  style={{ color: "#0a0a0a" }}
-                >
-                  <span className="text-base md:text-lg">{item.q}</span>
-                  <span className="text-2xl flex-shrink-0 transition-transform group-open:rotate-45" style={{ color: "#15803d" }}>
-                    +
-                  </span>
+                <summary className="cursor-pointer px-6 py-5 font-bold flex items-center justify-between gap-4 list-none"
+                         style={{ color: "var(--text-primary)" }}>
+                  <span className="flex-1">{item.q}</span>
+                  <span className="flex-shrink-0 transition-transform group-open:rotate-45 text-2xl font-light"
+                        style={{ color: "var(--text-muted)" }}>+</span>
                 </summary>
-                <div className="px-5 md:px-6 pb-5 md:pb-6 text-sm md:text-base leading-relaxed" style={{ color: "#555" }}>
+                <div className="px-6 pb-6 -mt-1 text-base leading-relaxed" style={{ color: "var(--text-secondary)" }}>
                   {item.a}
                 </div>
               </details>
@@ -561,67 +478,48 @@ export default function SubscribePage() {
         </div>
       </section>
 
-      {/* ===== 最終CTA ===== */}
-      <section
-        className="relative px-6 py-24 md:py-32 text-center text-white overflow-hidden"
-        style={{
-          background: "linear-gradient(135deg, #14532d 0%, #166534 50%, #15803d 100%)",
-        }}
-      >
-        <div className="relative max-w-3xl mx-auto">
-          <div className="text-xs font-bold tracking-[0.3em] uppercase mb-6 opacity-80">
-            START YOUR TRANSFORMATION
-          </div>
-          <h2 className="text-3xl md:text-5xl font-bold mb-6 leading-tight" style={{ letterSpacing: "-0.02em" }}>
+      {/* ────────── Section: Final CTA ────────── */}
+      <section className="px-6 py-24 md:py-32 text-center" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div className="max-w-3xl mx-auto">
+          <p className="text-xs font-bold tracking-[0.3em] uppercase mb-6" style={{ color: "#15803d" }}>
+            ─ Start Your Transformation ─
+          </p>
+          <h2 className="font-bold mb-8 leading-[1.2] tracking-tight"
+              style={{ color: "var(--text-primary)", fontSize: "clamp(2rem, 4.5vw, 3.5rem)" }}>
             あなたの人生は、<br />
             あなたの意識でできている。
           </h2>
-          <p className="text-base md:text-lg mb-10 opacity-95 leading-relaxed">
+          <p className="text-base md:text-lg mb-12 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
             意識を変えれば、現実は雪崩のように変わる。<br />
-            その瞬間を、月1のセッションとAIコーチで一緒につくろう。
+            その瞬間を、月1のセッションとAIコーチで一緒につくりましょう。
           </p>
 
-          <div className="inline-block bg-white text-gray-900 rounded-2xl px-8 py-6 mb-8" style={{ boxShadow: "0 12px 40px rgba(0,0,0,0.25)" }}>
-            <div className="text-xs font-bold tracking-widest uppercase mb-1" style={{ color: "#15803d" }}>
-              月額継続コーチング
-            </div>
-            <div className="text-5xl md:text-6xl font-bold" style={{ color: "#0a0a0a" }}>
-              ¥9,800
-            </div>
-            <div className="text-sm" style={{ color: "#666" }}>/ 月（税込）・いつでも解約OK</div>
-          </div>
-
-          <div>
+          <div className="inline-flex flex-col items-center gap-3">
             {subscribeUrl ? (
-              <a
-                href={subscribeUrl}
-                className="inline-block px-12 py-5 rounded-full font-bold text-xl transition-all duration-200 hover:scale-105"
-                style={{
-                  background: "linear-gradient(135deg, #ca8a04, #f59e0b)",
-                  color: "#fff",
-                  boxShadow: "0 10px 30px rgba(202, 138, 4, 0.5)",
-                }}
-              >
-                今すぐ加入する →
+              <a href={subscribeUrl}
+                 className="inline-flex items-center justify-center px-12 py-5 rounded-full text-lg font-bold transition-transform hover:scale-[1.03]"
+                 style={{ backgroundColor: "#111", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.15)" }}>
+                月¥9,800で加入する →
               </a>
             ) : (
-              <div className="bg-red-500/20 border border-red-300 rounded-xl px-6 py-4 text-base inline-block">
+              <div className="px-8 py-4 rounded-full text-sm" style={{ backgroundColor: "#fef2f2", color: "#dc2626" }}>
                 ⚠ 申込URL準備中
               </div>
             )}
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              月額9,800円（税込）・1ヶ月毎課金・決済日7日前までの解約で次月停止
+            </p>
           </div>
-          <p className="text-sm mt-6 opacity-80">
-            初月から月額9,800円・1ヶ月毎課金・決済日の7日前までの解約で次月課金停止
-          </p>
         </div>
       </section>
 
-      {/* ===== Footer ===== */}
-      <footer className="px-6 py-10 text-center text-sm" style={{ color: "#888", backgroundColor: "#fafafa" }}>
-        <a href="/login" className="underline hover:opacity-80" style={{ color: "#15803d" }}>
-          ← ログインに戻る
-        </a>
-        <p className="mt-4 opacity-70">© 三凛さとし / MONTHLY LIFE COACHING</p>
+      {/* ────────── Footer ────────── */}
+      <footer className="px-6 py-10 text-center text-sm"
+              style={{ color: "var(--text-muted)", borderTop: "1px solid var(--border-subtle)" }}>
+        <a href="/login" className="underline hover:opacity-80">ログインページへ</a>
+        <p className="mt-4 opacity-60">
+          © 三凛さとし · MONTHLY LIFE COACHING
+        </p>
       </footer>
     </div>
   );
