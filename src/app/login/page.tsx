@@ -278,6 +278,26 @@ export default function LoginPage() {
           <p className="text-center text-sm mt-8" style={{ color: "var(--text-muted)" }}>
             コードの有効期限は10分間です
           </p>
+
+          {/* 既に豊かさタッピング受講中の方への案内 */}
+          {step === "email" && (
+            <div
+              className="mt-6 p-4 rounded-xl text-sm leading-relaxed"
+              style={{
+                backgroundColor: "var(--accent-gold-soft)",
+                border: "1px solid rgba(200, 164, 21, 0.15)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <p className="font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+                💡 すでに「豊かさタッピング」をご受講中の方へ
+              </p>
+              <p>
+                MyASPに登録したメールアドレスをそのまま入力してください。
+                ご購入から365日以内であれば、追加のお手続きなしでログインしてご利用いただけます。
+              </p>
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs mt-6" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
