@@ -1,17 +1,31 @@
 "use client";
 
 /**
- * MONTHLY LIFE COACHING 加入LP v5
- * セールスレター形式：Word風シンプルレイアウト・黒/赤/青の3色・縦長で読みやすく
+ * MONTHLY LIFE COACHING 加入LP v6
+ * ユーザー指示反映版：青字基調、ゴールドアクセント、僕一人称、Krishnaji画像
  */
 export default function SubscribePage() {
   const subscribeUrl = process.env.NEXT_PUBLIC_SUBSCRIPTION_LANDING_URL || "";
+
+  // 色定義
+  const C = {
+    text: "#111111",
+    sub: "#444444",
+    muted: "#888888",
+    blue: "#1d4ed8",      // メインアクセント
+    blueDeep: "#1e3a8a",  // 強調
+    blueSoft: "#eff6ff",  // パネル背景
+    red: "#c00000",        // 緊急時のみ
+    gold: "#ca8a04",
+    goldLight: "#f59e0b",
+    line: "#dddddd",
+  };
 
   return (
     <article
       style={{
         backgroundColor: "#ffffff",
-        color: "#111111",
+        color: C.text,
         fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif",
         lineHeight: 1.9,
         fontSize: "17px",
@@ -21,22 +35,32 @@ export default function SubscribePage() {
 
         {/* タイトル */}
         <header style={{ textAlign: "center", marginBottom: "60px" }}>
-          <p style={{ fontSize: "13px", letterSpacing: "0.3em", color: "#888", marginBottom: "30px", fontWeight: "bold" }}>
+          <p style={{ fontSize: "13px", letterSpacing: "0.3em", color: C.muted, marginBottom: "30px", fontWeight: "bold" }}>
             ━ MONTHLY LIFE COACHING ━
           </p>
           <h1 style={{
             fontSize: "32px",
             fontWeight: "bold",
-            lineHeight: 1.5,
-            color: "#c00000",
+            lineHeight: 1.55,
+            color: C.blue,
             marginBottom: "30px",
             textAlign: "center",
           }}>
-            頑張らなくても、<br />
-            豊かさが流れこむ人生へ。
+            頑張らなくても豊かさが流れこむ<br />
+            <span style={{
+              background: `linear-gradient(90deg, ${C.gold}, ${C.goldLight})`,
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+              fontSize: "1.15em",
+              letterSpacing: "0.04em",
+            }}>
+              意識のステージ
+            </span>
+            へ。
           </h1>
-          <p style={{ fontSize: "16px", color: "#444", lineHeight: 2 }}>
-            三凛さとしの月1グループコーチング × 24時間頼れるAIコーチbot<br />
+          <p style={{ fontSize: "16px", color: C.sub, lineHeight: 2 }}>
+            三凛さとしの月1グループコーチング × 24時間頼れる「幸せなお金引き寄せbot」<br />
             意識を本気で書き換えて、現実をひっくり返す月額プラン
           </p>
         </header>
@@ -61,32 +85,32 @@ export default function SubscribePage() {
               "意識を本当に変えて、人生そのものを変えたい",
             ].map((s, i) => (
               <li key={i} style={{ marginBottom: "0.6em", paddingLeft: "1.5em", textIndent: "-1.5em" }}>
-                <span style={{ color: "#c00000", fontWeight: "bold" }}>□</span>　{s}
+                <span style={{ color: C.blue, fontWeight: "bold" }}>□</span>　{s}
               </li>
             ))}
           </ul>
 
           <p>
             ひとつでも当てはまったあなたへ、<br />
-            <strong style={{ color: "#c00000" }}>このプランは、あなたのためのものです。</strong>
+            <strong style={{ color: C.blue }}>このプランは、あなたのためのものです。</strong>
           </p>
         </section>
 
         <Hr />
 
-        {/* なぜタッピング+月1セッションが効くのか */}
+        {/* 僕のストーリー */}
         <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", textAlign: "center", marginBottom: "40px", lineHeight: 1.5 }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, textAlign: "center", marginBottom: "40px", lineHeight: 1.5 }}>
             なぜ、意識を変えると<br />
             人生が雪崩のように動き出すのか？
           </h2>
 
           <p>
-            実は私自身、2024年末に大きな挫折を経験しました。
+            実は僕自身、2024年末に大きな挫折を経験しました。
           </p>
           <p style={{ marginTop: "1em" }}>
             人工衛星の打ち上げ事業をきっかけにSNSがプチ炎上、<br />
-            事業は<strong style={{ color: "#c00000" }}>1億円の赤字</strong>。
+            事業は<strong>1億円の赤字</strong>。
           </p>
           <p style={{ marginTop: "1em" }}>
             「もうダメかもしれない」<br />
@@ -94,21 +118,52 @@ export default function SubscribePage() {
           </p>
 
           <p style={{ marginTop: "2em" }}>
-            そこから2025年5月、私はインドへ渡りました。
+            そこから2025年5月、僕はインドへ渡りました。
           </p>
           <p style={{ marginTop: "1em" }}>
             世界最先端の意識研究機関「<strong>oneness</strong>」で、<br />
             <strong>Sri Krishnaji</strong>と<strong>Sri Preethaji</strong>に師事するためです。
           </p>
 
+          {/* Krishnaji & Preethaji 写真 */}
+          <figure style={{ margin: "32px 0", textAlign: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/krishnaji-preethaji.jpg"
+              alt="Sri Krishnaji と Sri Preethaji"
+              style={{ maxWidth: "100%", borderRadius: "8px", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" }}
+            />
+            <figcaption style={{ fontSize: "13px", color: C.muted, marginTop: "8px" }}>
+              師である Sri Krishnaji と Sri Preethaji
+            </figcaption>
+          </figure>
+
           <p style={{ marginTop: "2em" }}>
-            そして1年間、毎日のように<br />
-            <strong style={{ color: "#c00000" }}>瞑想</strong>と<strong style={{ color: "#c00000" }}>タッピング</strong>を続けながら、<br />
+            学びの場は、世界中の意識探求者が集う<br />
+            インド・<strong>ekam キャンパス</strong>。
+          </p>
+
+          {/* ekamキャンパス画像 */}
+          <figure style={{ margin: "32px 0", textAlign: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/ekam-campus.jpg"
+              alt="ekam キャンパス"
+              style={{ maxWidth: "100%", borderRadius: "8px", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" }}
+            />
+            <figcaption style={{ fontSize: "13px", color: C.muted, marginTop: "8px" }}>
+              インド・ekam キャンパス
+            </figcaption>
+          </figure>
+
+          <p style={{ marginTop: "2em" }}>
+            そして1年間、毎日、<br />
+            <strong>瞑想</strong>と<strong>タッピング</strong>を続けながら、<br />
             自分の内側のブロックと向き合いました。
           </p>
 
           <p style={{ marginTop: "2em" }}>
-            すると、何が起きたか——
+            すると——
           </p>
 
           <ul style={{ marginTop: "1.5em", marginBottom: "1.5em", paddingLeft: 0, listStyle: "none" }}>
@@ -116,26 +171,37 @@ export default function SubscribePage() {
               ✓ 仕事する時間は<strong>半分以下</strong>に
             </li>
             <li style={{ marginBottom: "0.5em" }}>
-              ✓ YouTubeもほぼ手放した
+              ✓ YouTubeもほぼ手放し<strong>暇人に</strong>
             </li>
             <li style={{ marginBottom: "0.5em" }}>
-              ✓ それなのに、<strong style={{ color: "#c00000" }}>売上も利益も増えた</strong>
+              ✓ それなのに、<strong style={{ color: C.blue }}>売上も利益も増えた</strong>
             </li>
             <li style={{ marginBottom: "0.5em" }}>
               ✓ 2026年4月、立ち上げから<strong>たった3週間</strong>で<br />
-              　<strong style={{ color: "#c00000" }}>夢叶フェス（ユニーク2.3万人・延べ5.3万人動員）</strong>を実現
+              　<strong style={{ color: C.blue }}>夢叶フェス（登録2.3万人・延べ5.3万人動員）</strong>を実現
             </li>
             <li style={{ marginBottom: "0.5em" }}>
-              ✓ 日本の自己啓発業界では<strong>過去最大規模</strong>のフェスに
+              ✓ 日本の自己啓発業界では<strong>過去最大規模</strong>のフェスになり、<strong>ニュースにも取り上げられる</strong>
             </li>
           </ul>
 
           <p style={{ marginTop: "2em" }}>
-            正直、自分でも信じられないくらいの変化でした。
+            大きく変わったのは、<br />
+            <strong style={{ color: C.blue }}>自分が必死で動いてないのに、まわりが勝手に動いてくれて、大きな成果があがるようになったこと</strong>。
           </p>
-          <p style={{ marginTop: "1em" }}>
-            <strong style={{ color: "#c00000" }}>そしてこの変容の裏には、</strong><br />
-            <strong style={{ color: "#c00000" }}>瞑想とタッピングがありました。</strong>
+          <p style={{ marginTop: "1.2em" }}>
+            自分が忙しくなることなく、<br />
+            必要な展開や協力を得て、<br />
+            思ってもみなかった恩恵に恵まれる——<br />
+            そういう人生のステージに移ったのです。
+          </p>
+          <p style={{ marginTop: "1.2em" }}>
+            <strong style={{ color: C.blue }}>自分は苦労もせず、何かに抗うこともなく、</strong><br />
+            <strong style={{ color: C.blue }}>でも人間離れした結果が出る。</strong>
+          </p>
+          <p style={{ marginTop: "1.2em" }}>
+            これこそが、<br />
+            三凛コーチングのテーマでありコンセプトです。
           </p>
 
           <p style={{ marginTop: "2em" }}>
@@ -150,61 +216,12 @@ export default function SubscribePage() {
 
         <Hr />
 
-        {/* 講師紹介 */}
-        <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", textAlign: "center", marginBottom: "40px", lineHeight: 1.5 }}>
-            講師：三凛さとし
-          </h2>
-
-          <div style={{ textAlign: "center", marginBottom: "30px" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/satoshi-profile.jpg"
-              alt="三凛さとし"
-              style={{
-                maxWidth: "320px",
-                width: "100%",
-                borderRadius: "8px",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
-              }}
-            />
-          </div>
-
-          <p>
-            改めまして、<strong>三凛さとし</strong>と申します。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            今は世界4拠点生活で、<br />
-            ポルトガル・マルタ・タイ・ドバイを転々としながら、<br />
-            <strong>ライフコーチ・作家として12年以上</strong>活動しています。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            SNSのフォロワーは合計<strong style={{ color: "#c00000" }}>約50万人</strong>、<br />
-            これまで<strong style={{ color: "#c00000" }}>数万人</strong>の方の人生変容に関わらせていただきました。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            テレビ・雑誌・ラジオ・新聞でも取り上げていただき、<br />
-            主にお金の引き寄せ（金運）の話、<br />
-            親子関係や人間関係、お仕事、健康といった<br />
-            人生において大切なテーマで発信しています。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            <strong>LINE占いの公認占い師</strong>でもあります。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            スピリチュアル、開運、自己啓発、心理学、占い——<br />
-            幅広い分野で活動している人間です。
-          </p>
-        </section>
-
-        <Hr />
-
         {/* 実践者の声 */}
         <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", textAlign: "center", marginBottom: "20px", lineHeight: 1.5 }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, textAlign: "center", marginBottom: "20px", lineHeight: 1.5 }}>
             タッピング実践者の声
           </h2>
-          <p style={{ textAlign: "center", color: "#666", marginBottom: "50px" }}>
+          <p style={{ textAlign: "center", color: C.muted, marginBottom: "50px" }}>
             内側を変えた人たちの「現実」がこちら
           </p>
 
@@ -243,36 +260,28 @@ export default function SubscribePage() {
             <div key={i} style={{
               marginBottom: "50px",
               paddingBottom: "40px",
-              borderBottom: i < 4 ? "1px dashed #ddd" : "none",
+              borderBottom: i < 4 ? `1px dashed ${C.line}` : "none",
             }}>
               <div style={{ textAlign: "center", marginBottom: "20px" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={v.photo}
                   alt={v.name}
-                  style={{
-                    maxWidth: "240px",
-                    width: "100%",
-                    borderRadius: "8px",
-                  }}
+                  style={{ maxWidth: "240px", width: "100%", borderRadius: "8px" }}
                 />
               </div>
               <p style={{
                 fontSize: "20px",
                 fontWeight: "bold",
-                color: "#c00000",
+                color: C.blue,
                 textAlign: "center",
                 marginBottom: "16px",
                 lineHeight: 1.6,
               }}>
                 「{v.headline}」
               </p>
-              <p style={{ marginBottom: "0.8em" }}>
-                {v.story}
-              </p>
-              <p style={{ textAlign: "right", color: "#666", fontSize: "15px" }}>
-                — {v.name}
-              </p>
+              <p style={{ marginBottom: "0.8em" }}>{v.story}</p>
+              <p style={{ textAlign: "right", color: C.muted, fontSize: "15px" }}>— {v.name}</p>
             </div>
           ))}
 
@@ -280,8 +289,8 @@ export default function SubscribePage() {
             こうした変化は、特別な人だけに起こるものではありません。
           </p>
           <p style={{ marginTop: "1em" }}>
-            <strong style={{ color: "#c00000" }}>意識を本気で書き換えれば、</strong><br />
-            <strong style={{ color: "#c00000" }}>誰の人生にも、こうした変化は起こります。</strong>
+            <strong style={{ color: C.blue }}>意識状態を正しく調整すれば、</strong><br />
+            <strong style={{ color: C.blue }}>誰の人生にも、奇跡のような変容が起こります。</strong>
           </p>
         </section>
 
@@ -289,34 +298,105 @@ export default function SubscribePage() {
 
         {/* プラン内容 */}
         <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", textAlign: "center", marginBottom: "40px", lineHeight: 1.5 }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, textAlign: "center", marginBottom: "40px", lineHeight: 1.5 }}>
             このプランで得られる<br />
-            ふたつの大きな価値
+            4つの大きな価値
           </h2>
 
-          <h3 style={{ fontSize: "22px", fontWeight: "bold", color: "#c00000", marginTop: "40px", marginBottom: "20px" }}>
+          {/* ① 三凛コーチング */}
+          <h3 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginTop: "40px", marginBottom: "20px" }}>
             ① 三凛さとし直接の月1グループコーチング
           </h3>
           <p>
-            <strong style={{ color: "#c00000" }}>このプランの本命がこちらです。</strong>
+            <strong style={{ color: C.blue }}>このプランの本命がこちらです。</strong>
           </p>
           <p style={{ marginTop: "1em" }}>
-            毎月のセッションで、<br />
-            成功と達成のディクシャからはじまり、<br />
-            あなたの現実を堰き止めている内側のブロックに<br />
-            高い解像度で気づき、その場で解消していくプロセスを行います。
+            毎月毎回、<strong>特定の苦しみ</strong>（不安、恐怖、怒り、悲しみ、焦りなど）に視点をあてて、次のセッションまでの1ヶ月間で、どんな苦しみ・感情をタッピングしていくかをレクチャーします。
           </p>
           <p style={{ marginTop: "1em" }}>
-            私が1年間、インドのonenessで学び、身体で実証してきた<br />
-            「意識の書き換え方」を、毎月の場で直接お伝えします。
+            参加者どうしのシェアも交えながら、毎月、ネガティブ感情を綺麗さっぱり掃除していきます。
           </p>
           <p style={{ marginTop: "1em" }}>
-            <strong>単発で受けたら数万円相当の価値</strong>のあるセッションを、<br />
-            このプランに加入していただければ毎月受けられます。
+            地味に思えるかもしれません。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            でも、<strong>僕が毎回1,000〜1,500万円かけて参加している oneness の合宿でも、やることは同じ</strong>です。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            ただひたすら苦しみを見つけて解消していく——<br />
+            これだけ。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            結局これをやらずに、<br />
+            いくら外側の行動を変えたり、思考法を学んでも、<br />
+            苦しみが消えないので人生は楽にも豊かにもなりません。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            <strong style={{ color: C.blue }}>美しい意識状態 ＝ 素晴らしい引き寄せが起きる状態</strong>。<br />
+            その美しい意識状態に近づいていくための、毎月のコーチングです。
           </p>
 
-          <h3 style={{ fontSize: "22px", fontWeight: "bold", color: "#c00000", marginTop: "50px", marginBottom: "20px" }}>
-            ② 24時間365日 AIコーチbot使い放題
+          {/* ② 成功と達成のディクシャ */}
+          <h3 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginTop: "50px", marginBottom: "20px" }}>
+            ② 成功と達成のディクシャ
+          </h3>
+          <p>
+            これは本来、<strong>1,200万円・14日間</strong>かけないと習得できない、<br />
+            <strong>現実面での豊かさを引き寄せる脳波に書き換えるエネルギーワーク</strong>です。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            毎月のコーチング冒頭でこのディクシャを行います。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            あなたの脳波が、<br />
+            <strong>豊かさを引き寄せる状態</strong>へと整えられていきます。
+          </p>
+
+          {/* ③ Krishnajiの祝福（青枠で目立たせる） */}
+          <div style={{
+            marginTop: "50px",
+            marginBottom: "30px",
+            padding: "30px",
+            backgroundColor: C.blueSoft,
+            border: `2px solid ${C.blue}`,
+            borderRadius: "8px",
+          }}>
+            <p style={{ fontSize: "13px", letterSpacing: "0.2em", color: C.gold, fontWeight: "bold", marginBottom: "12px" }}>
+              ★ 本日中のお申込み限定 ★
+            </p>
+            <h3 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginBottom: "20px" }}>
+              ③ Sri Krishnaji からの祝福エネルギー
+            </h3>
+            <p>
+              僕の師であり、今、世界のスピリチュアルにおいて<br />
+              <strong>最も影響力のある悟った聖者</strong>——<br />
+              それが<strong>Sri Krishnaji</strong>。
+            </p>
+            <p style={{ marginTop: "1em" }}>
+              僕は年に3〜4回、<br />
+              毎回数千万円を払って Krishnaji に直接会いに行っています。
+            </p>
+            <p style={{ marginTop: "1em" }}>
+              そこでは毎回、<strong>3つの願い事</strong>をお願いできます。
+            </p>
+            <p style={{ marginTop: "1em" }}>
+              そのうちの<strong>1回</strong>を実は使って、<br />
+              この毎月の三凛コーチングについても認識してもらっていて、<br />
+              うちの口座やサービスすべてを祝福してもらっています。
+            </p>
+            <p style={{ marginTop: "1em" }}>
+              そして、<strong style={{ color: C.gold }}>当日中にお申込みいただいた方</strong>に関しては、<br />
+              <strong>Sri Krishnaji からも祝福していただける</strong>ようにしています。
+            </p>
+            <p style={{ marginTop: "1em", fontSize: "15px", color: C.sub }}>
+              これは値段がつけられない価値です。<br />
+              本日中にご決断いただいた方だけの特典になります。
+            </p>
+          </div>
+
+          {/* ④ 幸せなお金引き寄せbot */}
+          <h3 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginTop: "50px", marginBottom: "20px" }}>
+            ④ 24時間365日「幸せなお金引き寄せbot」使い放題
           </h3>
           <p>
             深夜2時の不安。<br />
@@ -346,11 +426,11 @@ export default function SubscribePage() {
             意識の書き換えは、月1のセッションだけでは深まりません。
           </p>
           <p style={{ marginTop: "1em" }}>
-            <strong style={{ color: "#c00000" }}>毎日の積み重ねが、変容を生みます。</strong>
+            <strong style={{ color: C.blue }}>毎日の積み重ねが、変容を生みます。</strong>
           </p>
           <p style={{ marginTop: "1em" }}>
             だからこそ、月1の直接セッションと、<br />
-            24時間頼れるAIコーチbotを<br />
+            24時間頼れる「幸せなお金引き寄せbot」を<br />
             <strong>セットでご提供しています。</strong>
           </p>
         </section>
@@ -359,31 +439,29 @@ export default function SubscribePage() {
 
         {/* 価格 */}
         <section style={{ marginBottom: "60px", textAlign: "center" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", marginBottom: "30px", lineHeight: 1.5 }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, marginBottom: "30px", lineHeight: 1.5 }}>
             気になる料金は？
           </h2>
 
-          <p>
-            これだけの内容を含んだプランの料金は——
-          </p>
+          <p>これだけの内容を含んだプランの料金は——</p>
 
           <div style={{
             margin: "30px auto",
             padding: "40px 30px",
-            border: "3px double #c00000",
+            border: `3px double ${C.blue}`,
             borderRadius: "8px",
             display: "inline-block",
             textAlign: "center",
           }}>
-            <p style={{ fontSize: "16px", color: "#888", marginBottom: "10px" }}>月額</p>
-            <p style={{ fontSize: "56px", fontWeight: "bold", color: "#c00000", lineHeight: 1, marginBottom: "10px" }}>
+            <p style={{ fontSize: "16px", color: C.muted, marginBottom: "10px" }}>月額</p>
+            <p style={{ fontSize: "56px", fontWeight: "bold", color: C.blue, lineHeight: 1, marginBottom: "10px" }}>
               ¥9,800
             </p>
-            <p style={{ fontSize: "14px", color: "#666" }}>（税込）／ 月</p>
+            <p style={{ fontSize: "14px", color: C.sub }}>（税込）／ 月</p>
           </div>
 
           <p style={{ marginTop: "20px" }}>
-            1日あたり、たった<strong style={{ color: "#c00000" }}>320円</strong>。
+            1日あたり、たった<strong style={{ color: C.blue }}>320円</strong>。
           </p>
           <p style={{ marginTop: "1em" }}>
             毎日のスタバ1杯分よりも安い金額で、<br />
@@ -393,54 +471,42 @@ export default function SubscribePage() {
 
         <Hr />
 
-        {/* 安心ポイント */}
+        {/* 安心ポイント（縮小） */}
         <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", textAlign: "center", marginBottom: "30px", lineHeight: 1.5 }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, textAlign: "center", marginBottom: "30px", lineHeight: 1.5 }}>
             安心して始めていただくために
           </h2>
 
           <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>◆ いつでも解約できます</strong><br />
-            ネットからいつでも解約可能。引き留めや解約理由のヒアリングも一切ありません。
+            <strong style={{ color: C.blue }}>◆ いつでも解約できます</strong><br />
+            ネットからいつでも解約可能。引き留めや解約理由のヒアリングも一切ありません。決済日の7日前までに手続きいただければ、次回の決済は走りません。
           </p>
           <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>◆ 違約金は一切ありません</strong><br />
-            お試しで1ヶ月だけ受けてみて、合わなければ解約、で全くOKです。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>◆ 解約は決済日の7日前までに</strong><br />
-            決済日の7日前までに解約手続きをいただければ、次回の決済は走りません。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>◆ 海外在住でも参加OK</strong><br />
-            グループコーチングはオンライン開催。AIコーチbotもブラウザがあればどこからでも使えます。
-          </p>
-          <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>◆ タッピング初心者でも大丈夫</strong><br />
-            AIコーチがあなたのレベルに合わせてお題を出してくれます。月1のセッションでも基礎から丁寧にお伝えします。
+            <strong style={{ color: C.blue }}>◆ 海外在住でも参加OK</strong><br />
+            グループコーチングはオンライン開催。「幸せなお金引き寄せbot」もブラウザがあればどこからでも使えます。
           </p>
         </section>
 
         <Hr />
 
-        {/* 既存ユーザー向け案内（青字） */}
+        {/* 既存ユーザー向け案内 */}
         <section style={{
           marginBottom: "60px",
           padding: "30px",
-          backgroundColor: "#f0f7ff",
-          border: "2px solid #1d4ed8",
+          backgroundColor: C.blueSoft,
+          border: `2px solid ${C.blue}`,
           borderRadius: "8px",
         }}>
-          <h3 style={{ color: "#1d4ed8", fontSize: "18px", fontWeight: "bold", marginBottom: "16px" }}>
+          <h3 style={{ color: C.blue, fontSize: "18px", fontWeight: "bold", marginBottom: "16px" }}>
             ※ すでに「豊かさタッピング」をご受講中の方へ
           </h3>
-          <p style={{ color: "#1d4ed8" }}>
+          <p style={{ color: C.blue }}>
             ご購入から<strong>365日以内</strong>の方は、このプランへのご加入なしで、AIコーチbotをそのままご利用いただけます。
           </p>
-          <p style={{ color: "#1d4ed8", marginTop: "1em" }}>
-            MyASPにご登録のメールアドレスで、<a href="/login" style={{ color: "#1d4ed8", textDecoration: "underline", fontWeight: "bold" }}>ログインページ</a>からそのままログインしてください。
+          <p style={{ color: C.blue, marginTop: "1em" }}>
+            MyASPにご登録のメールアドレスで、<a href="/login" style={{ color: C.blue, textDecoration: "underline", fontWeight: "bold" }}>ログインページ</a>からそのままログインしてください。
           </p>
-          <p style={{ color: "#1d4ed8", marginTop: "1em" }}>
+          <p style={{ color: C.blue, marginTop: "1em" }}>
             365日経過後も継続したい方、毎月の三凛グループコーチングを受けたい方は、ぜひこのプランへのご加入をご検討ください。
           </p>
         </section>
@@ -449,15 +515,13 @@ export default function SubscribePage() {
 
         {/* 追伸 */}
         <section style={{ marginBottom: "60px" }}>
-          <h2 style={{ fontSize: "22px", fontWeight: "bold", color: "#c00000", marginBottom: "30px" }}>
+          <h2 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginBottom: "30px" }}>
             追伸
           </h2>
 
-          <p>
-            最後まで読んでくださって、ありがとうございます。
-          </p>
+          <p>最後まで読んでくださって、ありがとうございます。</p>
           <p style={{ marginTop: "1.2em" }}>
-            私自身、人生の中で本当に大きな挫折を経験して、<br />
+            僕自身、人生の中で本当に大きな挫折を経験して、<br />
             「もう全部終わった」と思った時期もありました。
           </p>
           <p style={{ marginTop: "1.2em" }}>
@@ -469,25 +533,23 @@ export default function SubscribePage() {
             この変化を、ひとりでも多くの方に体験していただきたい。
           </p>
           <p style={{ marginTop: "1.2em" }}>
-            <strong style={{ color: "#c00000" }}>あなたの人生は、あなたの意識でできています。</strong>
+            <strong style={{ color: C.blue }}>あなたの人生は、あなたの意識でできています。</strong>
           </p>
           <p style={{ marginTop: "1.2em" }}>
             意識を変えれば、現実は雪崩のように変わります。
           </p>
           <p style={{ marginTop: "1.2em" }}>
-            その瞬間を、月1のセッションとAIコーチで、<br />
-            私と一緒につくっていきましょう。
+            その瞬間を、月1のセッションと「幸せなお金引き寄せbot」で、<br />
+            僕と一緒につくっていきましょう。
           </p>
-          <p style={{ marginTop: "2em", textAlign: "right" }}>
-            三凛さとし
-          </p>
+          <p style={{ marginTop: "2em", textAlign: "right" }}>三凛さとし</p>
         </section>
 
         <Hr />
 
         {/* 最終CTA */}
-        <section style={{ textAlign: "center", marginBottom: "40px" }}>
-          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: "#c00000", marginBottom: "30px", lineHeight: 1.5 }}>
+        <section style={{ textAlign: "center", marginBottom: "60px" }}>
+          <h2 style={{ fontSize: "26px", fontWeight: "bold", color: C.blue, marginBottom: "30px", lineHeight: 1.5 }}>
             さあ、はじめましょう。
           </h2>
           <p style={{ marginBottom: "30px" }}>
@@ -503,31 +565,79 @@ export default function SubscribePage() {
                 fontSize: "20px",
                 fontWeight: "bold",
                 color: "#fff",
-                backgroundColor: "#c00000",
+                background: `linear-gradient(135deg, ${C.blueDeep}, ${C.blue})`,
                 borderRadius: "8px",
                 textDecoration: "none",
-                boxShadow: "0 4px 12px rgba(192, 0, 0, 0.3)",
+                boxShadow: `0 4px 12px rgba(30, 58, 138, 0.3)`,
               }}
             >
               月¥9,800で加入する →
             </a>
           ) : (
-            <div style={{ padding: "20px", backgroundColor: "#fef2f2", color: "#c00000", borderRadius: "8px", display: "inline-block" }}>
+            <div style={{ padding: "20px", backgroundColor: "#fef2f2", color: C.red, borderRadius: "8px", display: "inline-block" }}>
               ⚠ 申込URL準備中
             </div>
           )}
 
-          <p style={{ marginTop: "20px", fontSize: "14px", color: "#666" }}>
+          <p style={{ marginTop: "20px", fontSize: "14px", color: C.muted }}>
             月額9,800円（税込）・初月から課金・1ヶ月毎・いつでも解約OK
           </p>
         </section>
 
         <Hr />
 
-        {/* Footer */}
-        <footer style={{ textAlign: "center", color: "#888", fontSize: "14px", paddingTop: "20px" }}>
+        {/* プロフィール（最後に配置） */}
+        <section style={{ marginBottom: "40px" }}>
+          <h2 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, textAlign: "center", marginBottom: "30px", lineHeight: 1.5 }}>
+            プロフィール
+          </h2>
+
+          <div style={{ textAlign: "center", marginBottom: "30px" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/satoshi-profile.jpg"
+              alt="三凛さとし"
+              style={{
+                maxWidth: "280px",
+                width: "100%",
+                borderRadius: "8px",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+              }}
+            />
+          </div>
+
+          <p style={{ fontSize: "20px", fontWeight: "bold", textAlign: "center", marginBottom: "20px" }}>
+            三凛さとし
+          </p>
+          <p style={{ textAlign: "center", color: C.sub, marginBottom: "20px", fontSize: "15px" }}>
+            ライフコーチ・作家
+          </p>
+
           <p>
-            <a href="/login" style={{ color: "#1d4ed8", textDecoration: "underline" }}>ログインページへ</a>
+            ライフコーチ・作家として<strong>12年以上</strong>活動。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            世界4拠点（ポルトガル・マルタ・タイ・ドバイ）を転々としながら、<br />
+            SNSフォロワー合計<strong>約50万人</strong>、これまで<strong>数万人</strong>の人生変容に関わってきた。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            テレビ・雑誌・ラジオ・新聞での出演実績多数。<br />
+            お金の引き寄せ（金運）、親子関係、人間関係、仕事、健康と、人生の根幹に関わるテーマで発信している。<br />
+            <strong>LINE占いの公認占い師</strong>でもあり、スピリチュアル・開運・自己啓発・心理学・占いと幅広い分野で活動。
+          </p>
+          <p style={{ marginTop: "1em" }}>
+            2025年からインドの oneness で <strong>Sri Krishnaji・Sri Preethaji</strong> に師事。<br />
+            2026年4月、立ち上げから3週間で<strong>夢叶フェス（登録2.3万人・延べ5.3万人動員）</strong>を開催。<br />
+            日本の自己啓発業界では過去最大規模のフェスとなり、ニュースにも取り上げられる。
+          </p>
+        </section>
+
+        <Hr />
+
+        {/* Footer */}
+        <footer style={{ textAlign: "center", color: C.muted, fontSize: "14px", paddingTop: "20px" }}>
+          <p>
+            <a href="/login" style={{ color: C.blue, textDecoration: "underline" }}>ログインページへ</a>
           </p>
           <p style={{ marginTop: "16px" }}>© 三凛さとし · MONTHLY LIFE COACHING</p>
         </footer>
@@ -542,10 +652,8 @@ function Hr() {
     <hr style={{
       border: "none",
       borderTop: "1px solid #ddd",
-      margin: "60px 0",
+      margin: "60px auto",
       width: "60%",
-      marginLeft: "auto",
-      marginRight: "auto",
     }} />
   );
 }
