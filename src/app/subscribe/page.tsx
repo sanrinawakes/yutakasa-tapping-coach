@@ -336,6 +336,33 @@ export default function SubscribePage() {
             その美しい意識状態に近づいていくための、毎月のコーチングです。
           </p>
 
+          {/* 開催スケジュール */}
+          <div style={{
+            marginTop: "30px",
+            padding: "24px 28px",
+            backgroundColor: C.blueSoft,
+            border: `1px solid ${C.blue}`,
+            borderRadius: "8px",
+          }}>
+            <p style={{ fontWeight: "bold", color: C.blue, marginBottom: "12px" }}>
+              ◆ 開催スケジュール
+            </p>
+            <ul style={{ paddingLeft: "1.5em", margin: 0, color: C.text }}>
+              <li style={{ marginBottom: "0.5em" }}>
+                <strong>毎月 第4金曜日 20:00〜</strong>（オンラインZoom開催）
+              </li>
+              <li style={{ marginBottom: "0.5em" }}>
+                Zoom URLは <strong>前日まで</strong>にご登録のメールアドレスへお送りします
+              </li>
+              <li style={{ marginBottom: "0.5em" }}>
+                第3金曜日など別日に変更となる場合は <strong>前月までに</strong> ご連絡します
+              </li>
+              <li style={{ marginBottom: "0.5em" }}>
+                欠席される場合、<strong>前日までにご連絡</strong>いただければ、<strong style={{ color: C.gold }}>年1回まで返金対応</strong>いたします
+              </li>
+            </ul>
+          </div>
+
           {/* ② 成功と達成のディクシャ */}
           <h3 style={{ fontSize: "22px", fontWeight: "bold", color: C.blue, marginTop: "50px", marginBottom: "20px" }}>
             ② 成功と達成のディクシャ
@@ -508,6 +535,12 @@ export default function SubscribePage() {
           </p>
           <p style={{ color: C.blue, marginTop: "1em" }}>
             365日経過後も継続したい方、毎月の三凛グループコーチングを受けたい方は、ぜひこのプランへのご加入をご検討ください。
+          </p>
+          <p style={{ color: C.blue, marginTop: "1em" }}>
+            <strong>※ アカウントはそのまま引き継がれます。</strong><br />
+            このプランへのお申込み時に <strong>豊かさタッピングと同じメールアドレス</strong> をご利用いただければ、
+            これまでのチャット履歴やAIコーチとの会話メモリは <strong>すべてそのまま</strong>。
+            ログイン情報も変わりません。
           </p>
         </section>
 
