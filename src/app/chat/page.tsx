@@ -32,6 +32,7 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [remainingMessages, setRemainingMessages] = useState<number | null>(null);
   const [dailyLimit, setDailyLimit] = useState(15);
+  const [showWelcome, setShowWelcome] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadUsage = async () => {
@@ -74,6 +75,10 @@ export default function ChatPage() {
         if (data.threads?.length > 0 && !currentThreadId) {
           setCurrentThreadId(data.threads[0].id);
         } else if (!currentThreadId) {
+          // 初回ログイン判定: threadsが0件 かつ welcome未表示
+          if (typeof window !== "undefined" && !localStorage.getItem("yutakasa_welcome_seen")) {
+            setShowWelcome(true);
+          }
           createNewThread();
         }
       } else if (response.status === 401) {
@@ -237,6 +242,13 @@ export default function ChatPage() {
     }
   };
 
+  const dismissWelcome = () => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("yutakasa_welcome_seen", "1");
+    }
+    setShowWelcome(false);
+  };
+
   return (
     <div className="flex w-full h-screen overflow-hidden" style={{ backgroundColor: "var(--bg-primary)" }}>
       <ChatSidebar
@@ -260,6 +272,104 @@ export default function ChatPage() {
           dailyLimit={dailyLimit}
         />
       </div>
+
+      {/* 初回ユーザー welcome modal */}
+      {showWelcome && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="welcome-title"
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl p-8 md:p-10 fade-in"
+            style={{
+              backgroundColor: "var(--bg-card)",
+              border: "1px solid var(--border-secondary)",
+              boxShadow: "var(--shadow-lg)",
+            }}
+          >
+            <div className="text-center mb-6">
+              <div
+                className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
+                style={{ backgroundColor: "var(--bg-tertiary)" }}
+              >
+                <span className="text-3xl">🌿</span>
+              </div>
+              <h2
+                id="welcome-title"
+                className="font-display text-2xl font-semibold tracking-wide mb-2"
+                style={{ color: "var(--text-primary)" }}
+              >
+                ようこそ豊かさタッピング AIコーチへ
+              </h2>
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                ご利用前に、簡単に使い方をご案内します
+              </p>
+            </div>
+
+            <div className="space-y-4 mb-8">
+              <div
+                className="p-4 rounded-xl"
+                style={{
+                  backgroundColor: "var(--accent-gold-soft)",
+                  border: "1px solid rgba(200, 164, 21, 0.15)",
+                }}
+              >
+                <p className="text-sm font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+                  💬 AIコーチに相談できます
+                </p>
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  豊かさタッピングの内容について、いつでも気軽に質問してください。
+                  41のコース動画の知識をもとに、AIがあなたの実践をサポートします。
+                </p>
+              </div>
+
+              <div
+                className="p-4 rounded-xl"
+                style={{
+                  backgroundColor: "rgba(34, 197, 94, 0.06)",
+                  border: "1px solid rgba(34, 197, 94, 0.18)",
+                }}
+              >
+                <p className="text-sm font-bold mb-1" style={{ color: "#16a34a" }}>
+                  📅 1日{dailyLimit}メッセージまで
+                </p>
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  毎日{dailyLimit}回まで質問できます。回数は毎日リセットされます。
+                </p>
+              </div>
+
+              <div
+                className="p-4 rounded-xl"
+                style={{
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-secondary)",
+                }}
+              >
+                <p className="text-sm font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+                  ⏰ ご購入から365日ご利用いただけます
+                </p>
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  期限を過ぎた後も、月額継続プランへのご加入で引き続きご利用可能です。
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={dismissWelcome}
+              className="w-full py-4 rounded-xl font-bold text-base text-white transition-all duration-200"
+              style={{
+                background: "linear-gradient(135deg, #166534, #15803d)",
+                boxShadow: "0 4px 16px rgba(22, 101, 52, 0.25)",
+              }}
+            >
+              はじめる
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
