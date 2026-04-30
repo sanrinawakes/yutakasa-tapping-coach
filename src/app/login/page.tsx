@@ -1,20 +1,23 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
 
 type LoginStep = "email" | "otp";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { theme, toggleTheme } = useTheme();
   const [step, setStep] = useState<LoginStep>("email");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => searchParams.get("email") ?? "");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [errorReason, setErrorReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const isWelcome = searchParams.get("welcome") === "1";
 
   const handleSendOTP = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,6 +130,27 @@ export default function LoginPage() {
               AI Coach
             </p>
           </div>
+
+          {/* 決済直後 welcome バナー */}
+          {isWelcome && step === "email" && (
+            <div
+              className="mb-6 p-5 rounded-xl text-base leading-relaxed"
+              style={{
+                backgroundColor: "rgba(34, 197, 94, 0.08)",
+                border: "1px solid rgba(34, 197, 94, 0.25)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <p className="font-bold mb-2 text-lg" style={{ color: "#16a34a" }}>
+                ✨ ご決済ありがとうございます
+              </p>
+              <p>
+                ようこそ「豊かさタッピング AIコーチ」へ。
+                ご決済時にご登録いただいたメールアドレスを下に入力してください。
+                認証コードをお送りします。
+              </p>
+            </div>
+          )}
 
           {step === "email" ? (
             <form onSubmit={handleSendOTP} className="space-y-6">
@@ -279,8 +303,8 @@ export default function LoginPage() {
             コードの有効期限は10分間です
           </p>
 
-          {/* 既に豊かさタッピング受講中の方への案内 */}
-          {step === "email" && (
+          {/* 既に豊かさタッピング受講中の方への案内 (welcome表示時は重複するので隠す) */}
+          {step === "email" && !isWelcome && (
             <div
               className="mt-6 p-4 rounded-xl text-sm leading-relaxed"
               style={{
@@ -305,5 +329,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
   );
 }
