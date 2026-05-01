@@ -75,7 +75,7 @@ export default function ChatSidebar({
 
       {/* Sidebar */}
       <div
-        className={`fixed md:relative w-80 h-full z-20 transform transition-transform duration-300 ease-out md:transform-none flex flex-col ${
+        className={`fixed md:relative w-72 h-full z-20 transform transition-transform duration-300 ease-out md:transform-none flex flex-col ${
           isOpen ? "translate-x-0" : "-translate-x-full"
         }`}
         style={{
@@ -161,8 +161,8 @@ export default function ChatSidebar({
                   )}
 
                   <div className="flex-1 min-w-0 pr-8">
-                    <p className="text-base font-medium truncate leading-snug">{thread.title}</p>
-                    <p className="text-sm mt-1 leading-relaxed pb-0.5" style={{ color: "var(--text-muted)" }}>
+                    <p className="text-base font-medium truncate" style={{ lineHeight: 1.5 }}>{thread.title}</p>
+                    <p className="text-sm mt-1" style={{ color: "var(--text-muted)", lineHeight: 1.6, paddingBottom: 3 }}>
                       {new Date(thread.updated_at).toLocaleDateString("ja-JP", {
                         month: "short",
                         day: "numeric",
