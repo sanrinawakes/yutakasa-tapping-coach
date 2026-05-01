@@ -352,13 +352,16 @@ export default function SubscribePage() {
                 <strong>毎月 第4金曜日 20:00〜</strong>（オンラインZoom開催）
               </li>
               <li style={{ marginBottom: "0.5em" }}>
-                Zoom URLは <strong>前日まで</strong>にご登録のメールアドレスへお送りします
+                Zoom URLは <strong>開催日の3日前まで</strong>にご登録のメールアドレスへお送りします
               </li>
               <li style={{ marginBottom: "0.5em" }}>
-                第3金曜日など別日に変更となる場合は <strong>前月までに</strong> ご連絡します
+                第3金曜日や第5金曜日など別日に変更となる場合は <strong>当月1週目中に</strong> ご連絡します
               </li>
               <li style={{ marginBottom: "0.5em" }}>
-                欠席される場合、<strong>前日までにご連絡</strong>いただければ、<strong style={{ color: C.gold }}>年1回まで返金対応</strong>いたします
+                三凛側の都合で日程変更により参加できなくなった場合は <strong style={{ color: C.gold }}>後日、該当回分を返金</strong>いたします
+              </li>
+              <li style={{ marginBottom: "0.5em" }}>
+                ご自身の都合で欠席された場合、<strong style={{ color: C.gold }}>年2回まで</strong>、タイミングに応じて<strong>返金</strong>または<strong>翌月以降への支払い繰越し</strong>でご対応いたします
               </li>
             </ul>
           </div>
