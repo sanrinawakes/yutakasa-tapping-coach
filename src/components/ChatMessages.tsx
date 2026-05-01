@@ -48,7 +48,7 @@ export default function ChatMessages({
           </div>
         </div>
       ) : (
-        <div className="max-w-3xl mx-auto space-y-5">
+        <div className="max-w-2xl mx-auto space-y-5">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -70,7 +70,7 @@ export default function ChatMessages({
 
               <div
                 className={`max-w-[80%] lg:max-w-[70%] px-6 py-4 rounded-2xl break-words ${
-                  message.role === "user" ? "rounded-br-md" : "rounded-bl-md"
+                  message.role === "user" ? "rounded-br-md mr-2 lg:mr-6" : "rounded-bl-md"
                 }`}
                 style={
                   message.role === "user"
