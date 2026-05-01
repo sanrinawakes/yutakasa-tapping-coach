@@ -162,7 +162,7 @@ export default function ChatSidebar({
 
                   <div className="flex-1 min-w-0 pr-8">
                     <p className="text-base font-medium truncate leading-snug">{thread.title}</p>
-                    <p className="text-sm mt-1 leading-snug" style={{ color: "var(--text-muted)" }}>
+                    <p className="text-sm mt-1 leading-relaxed pb-0.5" style={{ color: "var(--text-muted)" }}>
                       {new Date(thread.updated_at).toLocaleDateString("ja-JP", {
                         month: "short",
                         day: "numeric",
