@@ -88,13 +88,13 @@ export default function ChatSidebar({
           {/* Brand */}
           <div className="flex items-center gap-3 mb-5">
             <div
-              className="w-11 h-11 rounded-xl flex items-center justify-center"
+              className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
               style={{ backgroundColor: "var(--bg-tertiary)" }}
             >
               <span className="text-2xl">🌿</span>
             </div>
-            <div>
-              <h1 className="text-base font-bold leading-tight" style={{ color: "var(--text-primary)" }}>
+            <div className="min-w-0">
+              <h1 className="text-base font-bold leading-tight truncate" style={{ color: "var(--text-primary)" }}>
                 豊かさタッピング
               </h1>
               <p className="text-sm text-gold-gradient font-medium">AI Coach</p>
@@ -140,7 +140,7 @@ export default function ChatSidebar({
                     onSelectThread(thread.id);
                     if (window.innerWidth < 768) onToggle();
                   }}
-                  className="group relative flex items-center px-4 py-3.5 rounded-xl cursor-pointer transition-all duration-150"
+                  className="group relative flex items-center px-4 py-4 rounded-xl cursor-pointer transition-all duration-150"
                   style={{
                     backgroundColor: isActive ? "var(--bg-active)" : "transparent",
                     color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
@@ -161,8 +161,8 @@ export default function ChatSidebar({
                   )}
 
                   <div className="flex-1 min-w-0 pr-8">
-                    <p className="text-base font-medium truncate">{thread.title}</p>
-                    <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    <p className="text-base font-medium truncate leading-snug">{thread.title}</p>
+                    <p className="text-sm mt-1 leading-snug" style={{ color: "var(--text-muted)" }}>
                       {new Date(thread.updated_at).toLocaleDateString("ja-JP", {
                         month: "short",
                         day: "numeric",
