@@ -21,7 +21,7 @@ export default function ChatMessages({
 }: ChatMessagesProps) {
   return (
     <div
-      className="flex-1 overflow-y-auto px-4 md:px-8 py-6 bg-pattern"
+      className="flex-1 overflow-y-auto px-4 md:px-8 lg:px-12 py-6 bg-pattern"
       style={{ backgroundColor: "var(--bg-primary)" }}
     >
       {messages.length === 0 ? (
@@ -69,7 +69,7 @@ export default function ChatMessages({
               )}
 
               <div
-                className={`max-w-[85%] lg:max-w-[75%] px-6 py-4 rounded-2xl ${
+                className={`max-w-[80%] lg:max-w-[70%] px-6 py-4 rounded-2xl break-words ${
                   message.role === "user" ? "rounded-br-md" : "rounded-bl-md"
                 }`}
                 style={
@@ -78,12 +78,14 @@ export default function ChatMessages({
                         background: "var(--bg-user-msg)",
                         color: "var(--text-inverse)",
                         boxShadow: "0 2px 8px rgba(22, 101, 52, 0.15)",
+                        overflowWrap: "anywhere",
                       }
                     : {
                         backgroundColor: "var(--bg-assistant-msg)",
                         color: "var(--text-primary)",
                         border: "1px solid var(--border-secondary)",
                         boxShadow: "var(--shadow-sm)",
+                        overflowWrap: "anywhere",
                       }
                 }
               >
