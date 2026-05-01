@@ -21,7 +21,7 @@ export default function ChatMessages({
 }: ChatMessagesProps) {
   return (
     <div
-      className="flex-1 overflow-y-auto px-4 md:px-8 lg:px-12 py-6 bg-pattern"
+      className="flex-1 overflow-y-auto px-6 md:px-12 lg:px-20 py-6 bg-pattern"
       style={{ backgroundColor: "var(--bg-primary)" }}
     >
       {messages.length === 0 ? (
@@ -48,7 +48,7 @@ export default function ChatMessages({
           </div>
         </div>
       ) : (
-        <div className="max-w-2xl mx-auto space-y-5">
+        <div className="max-w-3xl mx-auto space-y-5">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -94,7 +94,7 @@ export default function ChatMessages({
                     <ReactMarkdown
                       components={{
                         p: ({ children }) => (
-                          <p className="mb-3 text-base leading-relaxed">{children}</p>
+                          <p className="mb-3 text-lg leading-relaxed">{children}</p>
                         ),
                         h1: ({ children }) => (
                           <h1 className="text-lg font-bold mt-5 mb-2.5">{children}</h1>
@@ -112,7 +112,7 @@ export default function ChatMessages({
                           <ol className="list-decimal list-outside ml-5 space-y-1.5 my-3">{children}</ol>
                         ),
                         li: ({ children }) => (
-                          <li className="text-base leading-relaxed">{children}</li>
+                          <li className="text-lg leading-relaxed">{children}</li>
                         ),
                         code: ({ children }) => (
                           <code
@@ -151,7 +151,7 @@ export default function ChatMessages({
                     </ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap text-base leading-relaxed">
+                  <p className="whitespace-pre-wrap text-lg leading-relaxed">
                     {message.content}
                   </p>
                 )}
