@@ -21,7 +21,7 @@ export const GOOGLE_DOC_TRANSCRIPTS = [
   },
   {
     id: "16fI651JVviRQOnEzp7dLvqFQaarhySCveD75pYoRD9w",
-    title: "第5回：お金のメンタルブロックのルーツ",
+    title: "第5回:お金のメンタルブロックのルーツ",
   },
   {
     id: "1_gYvJEz9I1ASC46xBwpM44EHiVgIi3vP0H4pE_vYE6k",
@@ -162,6 +162,10 @@ export const GOOGLE_DOC_TRANSCRIPTS = [
   {
     id: "1PdVZNDEnZITX-k8Ttu62nGZ-zkbi4_Jhk9_BZE40Cbw",
     title: "年収２億円インタビュー",
+  },
+  {
+    id: "1FLHZvDs0wPASxgGuIKWCwbuCmSh8Jdi6cMbtlA42uXE",
+    title: "補足: タッピングの科学的エビデンス",
   },
 ];
 
