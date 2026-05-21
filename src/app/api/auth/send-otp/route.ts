@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSubscriberByEmail, createOTPCode } from "@/lib/supabase";
 import { evaluateAccess, accessReasonToMessage } from "@/lib/access-control";
 import { rescueFromStripe } from "@/lib/stripe-fallback";
+import { rescueFromPayPal } from "@/lib/paypal-fallback";
 import { Resend } from "resend";
 
 export async function POST(request: NextRequest) {
@@ -21,10 +22,17 @@ export async function POST(request: NextRequest) {
     let subscriber = await getSubscriberByEmail(normalizedEmail);
     let access = evaluateAccess(subscriber);
 
-    // subscribersに居ない場合の即時救済: Stripeで決済履歴を確認して、あれば自動追加
+    // subscribersに居ない場合の即時救済: Stripe → PayPal の順にチェック
     // MyASP webhook 失敗時のフォールバック。決済直後のログインでも漏れない。
     if (!access.allowed && access.reason === "no_subscriber") {
-      const rescued = await rescueFromStripe(normalizedEmail);
+      // 1. Stripe (分割/月額)
+      let rescued = await rescueFromStripe(normalizedEmail);
+
+      // 2. PayPal (一括)
+      if (!rescued) {
+        rescued = await rescueFromPayPal(normalizedEmail);
+      }
+
       if (rescued) {
         subscriber = rescued;
         access = evaluateAccess(subscriber);

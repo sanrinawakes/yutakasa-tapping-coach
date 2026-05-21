@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/sync-from-stripe",
+      "path": "/api/cron/sync-payments",
       "schedule": "0 0 * * *"
     }
   ]
