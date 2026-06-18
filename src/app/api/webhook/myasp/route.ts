@@ -71,8 +71,16 @@ export async function POST(request: NextRequest) {
         params.get("data[User][receiptstate]") || params.get("receiptstate");
     }
 
-    if (!email) {
-      return NextResponse.json({ error: "Email is required" }, { status: 400 });
+    // ガード: メールが取得できない・差し込みタグ未置換などの不正値は、
+    // ゴミ行を作らないよう登録せずスキップする（クラッシュもさせない）。
+    if (!email || !email.includes("@") || email.includes("%")) {
+      console.log(
+        `[myasp webhook] skipped invalid email: ${(email || "").slice(0, 40)}`
+      );
+      return NextResponse.json({
+        success: true,
+        action: "skipped_invalid_email",
+      });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
