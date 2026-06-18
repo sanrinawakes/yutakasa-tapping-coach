@@ -36,24 +36,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const contentType = request.headers.get("content-type") || "";
     let email: string | null = null;
     let name: string | null = null;
     let type: string | null = null;
     let scenarioId: string | null = null;
     let receiptState: string | null = null;
 
-    // MyASPの外部フォームPOSTは Content-Type が form 系で届かない場合があるため、
-    // Content-Type に依存せず本文を読み取る。JSON のときだけ JSON.parse し、
-    // それ以外は URLSearchParams で form-urlencoded として解析する。
+    // Content-Type が当てにならない（MyASPがフォーム本文を application/json として送る）ため、
+    // ヘッダーではなく本文の中身で判定する。{ や [ で始まる時だけ JSON として解析し、
+    // それ以外は form-urlencoded として URLSearchParams で解析する。
     const rawBody = await request.text();
-    if (contentType.includes("application/json")) {
-      const body = JSON.parse(rawBody);
-      email = body?.data?.User?.mail || body?.email;
-      name = body?.data?.User?.name1 || body?.name;
-      type = body?.Type || body?.type;
-      scenarioId = body?.data?.Scenario?.id || body?.scenario_id || null;
-      receiptState = body?.data?.User?.receiptstate || body?.receiptstate || null;
+    const trimmedBody = rawBody.trim();
+    let jsonBody: any = null;
+    if (trimmedBody.startsWith("{") || trimmedBody.startsWith("[")) {
+      try {
+        jsonBody = JSON.parse(rawBody);
+      } catch {
+        jsonBody = null;
+      }
+    }
+    if (jsonBody) {
+      email = jsonBody?.data?.User?.mail || jsonBody?.email;
+      name = jsonBody?.data?.User?.name1 || jsonBody?.name;
+      type = jsonBody?.Type || jsonBody?.type;
+      scenarioId = jsonBody?.data?.Scenario?.id || jsonBody?.scenario_id || null;
+      receiptState = jsonBody?.data?.User?.receiptstate || jsonBody?.receiptstate || null;
     } else {
       const params = new URLSearchParams(rawBody);
       email = params.get("data[User][mail]") || params.get("email");
