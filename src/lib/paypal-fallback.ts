@@ -1,5 +1,15 @@
 import { upsertSubscriber, Subscriber } from "./supabase";
 
+export interface PayPalPaymentMatch {
+  source: "paypal";
+  email: string;
+  name: string | null;
+  paidAt: string;
+  transactionId: string;
+  amount: number;
+  currency: string;
+}
+
 /**
  * PayPal Reporting APIを使った subscribers 漏れの即時救済。
  *
@@ -149,21 +159,46 @@ function isoNDaysAgo(n: number): string {
   return d.toISOString();
 }
 
-/**
- * subscribersに居ない人のログイン試行時に呼ばれる。
- * PayPalで該当emailの成功取引があれば、subscribersに追加して返す。
- */
-export async function rescueFromPayPal(email: string): Promise<Subscriber | null> {
+function transactionToPaymentMatch(tx: PayPalTransaction): PayPalPaymentMatch | null {
+  const email = tx.payer_info?.email_address?.toLowerCase().trim();
+  if (!email) return null;
+
+  const payerInfo = tx.payer_info;
+  const name =
+    payerInfo?.payer_name?.alternate_full_name ||
+    [payerInfo?.payer_name?.surname, payerInfo?.payer_name?.given_name]
+      .filter(Boolean)
+      .join(" ") ||
+    null;
+  const initiated = tx.transaction_info?.transaction_initiation_date || "";
+
+  return {
+    source: "paypal",
+    email,
+    name,
+    paidAt: initiated.split("T")[0],
+    transactionId: tx.transaction_info?.transaction_id || "",
+    amount: parseFloat(tx.transaction_info?.transaction_amount?.value || "0"),
+    currency: tx.transaction_info?.transaction_amount?.currency_code || "JPY",
+  };
+}
+
+export async function findPayPalPaymentForEmail(
+  email: string,
+  daysBack: number = 90
+): Promise<PayPalPaymentMatch | null> {
   const token = await getPayPalAccessToken();
   if (!token) return null;
 
   const normalized = email.toLowerCase().trim();
+  const boundedDays = Math.min(Math.max(Math.floor(daysBack), 1), 365);
 
   try {
-    // 過去90日を検索（PayPal Reporting APIは最大31日刻みなので3回に分割）
+    // PayPal Reporting APIは最大31日刻みなので分割検索する。
     let bestTx: PayPalTransaction | null = null;
-    for (let offset = 0; offset < 90; offset += 31) {
-      const start = isoNDaysAgo(offset + 31);
+    for (let offset = 0; offset < boundedDays; offset += 31) {
+      const startDaysAgo = Math.min(offset + 31, boundedDays);
+      const start = isoNDaysAgo(startDaysAgo);
       const end = isoNDaysAgo(offset);
       const txs = await searchTransactions(token, start, end, normalized);
       for (const tx of txs) {
@@ -174,41 +209,45 @@ export async function rescueFromPayPal(email: string): Promise<Subscriber | null
       }
     }
 
-    if (!bestTx) return null;
+    return bestTx ? transactionToPaymentMatch(bestTx) : null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[findPayPalPaymentForEmail] error for ${normalized}:`, msg);
+    return null;
+  }
+}
 
-    const initiated = bestTx.transaction_info?.transaction_initiation_date || "";
-    const paidAtDate = initiated.split("T")[0];
-    const payerInfo = bestTx.payer_info;
-    const name =
-      payerInfo?.payer_name?.alternate_full_name ||
-      [payerInfo?.payer_name?.surname, payerInfo?.payer_name?.given_name]
-        .filter(Boolean)
-        .join(" ") ||
-      null;
-    const amount = parseFloat(bestTx.transaction_info?.transaction_amount?.value || "0");
+/**
+ * subscribersに居ない人のログイン試行時に呼ばれる。
+ * PayPalで該当emailの成功取引があれば、subscribersに追加して返す。
+ */
+export async function rescueFromPayPal(email: string): Promise<Subscriber | null> {
+  const match = await findPayPalPaymentForEmail(email);
+  if (!match) return null;
 
-    const inserted = await upsertSubscriber(normalized, {
-      name: name || undefined,
+  try {
+    const inserted = await upsertSubscriber(match.email, {
+      name: match.name || undefined,
       status: "active",
-      first_payment_date: paidAtDate || null,
+      first_payment_date: match.paidAt || null,
       subscription_status: "none",
       myasp_data: {
         added_via: "send_otp_paypal_rescue",
-        paypal_transaction_id: bestTx.transaction_info?.transaction_id,
-        amount: amount,
-        currency: bestTx.transaction_info?.transaction_amount?.currency_code,
+        paypal_transaction_id: match.transactionId,
+        amount: match.amount,
+        currency: match.currency,
         rescued_at: new Date().toISOString(),
       },
     });
 
     console.log(
-      `[rescueFromPayPal] rescued ${normalized} (txId=${bestTx.transaction_info?.transaction_id}, paidAt=${paidAtDate})`
+      `[rescueFromPayPal] rescued ${match.email} (txId=${match.transactionId}, paidAt=${match.paidAt})`
     );
 
     return inserted;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[rescueFromPayPal] error for ${normalized}:`, msg);
+    console.error(`[rescueFromPayPal] error for ${match.email}:`, msg);
     return null;
   }
 }
@@ -217,38 +256,17 @@ export async function rescueFromPayPal(email: string): Promise<Subscriber | null
  * Cron用: 過去N日の全成功取引を取得（emailフィルタなし）
  */
 export async function listRecentPayPalPayments(daysBack: number = 2): Promise<
-  Array<{
-    email: string;
-    name: string | null;
-    paidAt: string;
-    transactionId: string;
-    amount: number;
-    currency: string;
-  }>
+  PayPalPaymentMatch[]
 > {
   const token = await getPayPalAccessToken();
   if (!token) return [];
 
-  const start = isoNDaysAgo(daysBack);
+  const boundedDays = Math.min(Math.max(Math.floor(daysBack), 1), 31);
+  const start = isoNDaysAgo(boundedDays);
   const end = new Date().toISOString();
   const txs = await searchTransactions(token, start, end);
 
   return txs
-    .filter((tx) => tx.payer_info?.email_address)
-    .map((tx) => {
-      const payerName = tx.payer_info?.payer_name;
-      const name =
-        payerName?.alternate_full_name ||
-        [payerName?.surname, payerName?.given_name].filter(Boolean).join(" ") ||
-        null;
-      const initiated = tx.transaction_info?.transaction_initiation_date || "";
-      return {
-        email: (tx.payer_info?.email_address || "").toLowerCase().trim(),
-        name,
-        paidAt: initiated.split("T")[0],
-        transactionId: tx.transaction_info?.transaction_id || "",
-        amount: parseFloat(tx.transaction_info?.transaction_amount?.value || "0"),
-        currency: tx.transaction_info?.transaction_amount?.currency_code || "JPY",
-      };
-    });
+    .map(transactionToPaymentMatch)
+    .filter((payment): payment is PayPalPaymentMatch => Boolean(payment));
 }

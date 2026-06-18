@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAdminAuthError } from "@/lib/admin-auth";
 import { clearTranscriptCache } from "@/lib/gemini";
-
-const adminSecret = process.env.JWT_SECRET;
 
 export async function POST(request: NextRequest) {
   try {
-    // Simple admin authentication using a header
-    const adminToken = request.headers.get("x-admin-token");
-
-    if (!adminToken || adminToken !== adminSecret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const authError = getAdminAuthError(request);
+    if (authError) return authError;
 
     // Clear the transcript cache
     await clearTranscriptCache();
