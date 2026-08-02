@@ -19,7 +19,7 @@ interface CacheEntry {
   timestamp: number;
 }
 
-let transcriptCache: Map<string, CacheEntry> = new Map();
+const transcriptCache: Map<string, CacheEntry> = new Map();
 
 async function fetchTranscript(docId: string): Promise<string> {
   const cached = transcriptCache.get(docId);

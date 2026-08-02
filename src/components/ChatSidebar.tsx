@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Menu, Pencil, X } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 
 interface ChatThread {
@@ -17,7 +18,10 @@ interface ChatSidebarProps {
   onSelectThread: (threadId: string) => void;
   onCreateThread: () => void;
   onDeleteThread: (threadId: string) => void;
+  onRenameThread: (threadId: string, title: string) => Promise<void> | void;
   onLogout: () => void;
+  currentUserEmail: string | null;
+  isCreatingThread?: boolean;
   isOpen: boolean;
   onToggle: () => void;
 }
@@ -28,12 +32,18 @@ export default function ChatSidebar({
   onSelectThread,
   onCreateThread,
   onDeleteThread,
+  onRenameThread,
   onLogout,
+  currentUserEmail,
+  isCreatingThread = false,
   isOpen,
   onToggle,
 }: ChatSidebarProps) {
   const { theme, toggleTheme } = useTheme();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const handleDelete = async (e: React.MouseEvent, threadId: string) => {
     e.stopPropagation();
@@ -46,24 +56,52 @@ export default function ChatSidebar({
     }
   };
 
+  const beginRename = (e: React.MouseEvent, thread: ChatThread) => {
+    e.stopPropagation();
+    setEditingId(thread.id);
+    setEditingTitle(thread.title);
+  };
+
+  const cancelRename = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setEditingId(null);
+    setEditingTitle("");
+  };
+
+  const saveRename = async (e?: React.MouseEvent | React.FormEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    const title = editingTitle.trim();
+    if (!editingId || !title || renamingId) return;
+
+    setRenamingId(editingId);
+    try {
+      await onRenameThread(editingId, title);
+      setEditingId(null);
+      setEditingTitle("");
+    } finally {
+      setRenamingId(null);
+    }
+  };
+
   return (
     <>
       {/* Mobile toggle */}
-      <button
-        onClick={onToggle}
-        className="md:hidden fixed top-4 left-4 z-30 p-3 rounded-xl transition-all duration-200"
-        style={{
-          backgroundColor: "var(--bg-secondary)",
-          border: "1px solid var(--border-secondary)",
-          color: "var(--text-primary)",
-          boxShadow: "var(--shadow-md)",
-        }}
-        aria-label="メニュー"
-      >
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-      </button>
+      {!isOpen && (
+        <button
+          onClick={onToggle}
+          className="md:hidden fixed top-4 left-4 z-30 p-3 rounded-xl transition-all duration-200"
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-secondary)",
+            color: "var(--text-primary)",
+            boxShadow: "var(--shadow-md)",
+          }}
+          aria-label="メニューを開く"
+        >
+          <Menu size={24} />
+        </button>
+      )}
 
       {/* Mobile overlay */}
       {isOpen && (
@@ -84,9 +122,20 @@ export default function ChatSidebar({
         }}
       >
         {/* Header */}
-        <div className="p-5 pb-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+        <div className="relative p-5 pb-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+          {isOpen && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="md:hidden absolute right-3 top-3 p-2 rounded-lg"
+              style={{ color: "var(--text-muted)" }}
+              aria-label="メニューを閉じる"
+            >
+              <X size={22} />
+            </button>
+          )}
           {/* Brand */}
-          <div className="flex items-center gap-3 mb-5">
+          <div className="flex items-center gap-3 mb-5 pr-10 md:pr-0">
             <div
               className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
               style={{ backgroundColor: "var(--bg-tertiary)" }}
@@ -104,6 +153,7 @@ export default function ChatSidebar({
           {/* New chat button */}
           <button
             onClick={onCreateThread}
+            disabled={isCreatingThread}
             className="w-full flex items-center justify-center gap-2.5 py-5 px-5 rounded-xl text-lg font-bold transition-all duration-200 text-white"
             style={{
               background: "linear-gradient(135deg, #166534, #15803d)",
@@ -118,7 +168,16 @@ export default function ChatSidebar({
         </div>
 
         {/* Thread list */}
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5">
+        <div className="flex-1 overflow-y-auto px-3 py-3">
+          <div className="flex items-center justify-between px-2 pb-2">
+            <h2 className="text-sm font-bold" style={{ color: "var(--text-secondary)" }}>
+              会話履歴
+            </h2>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {threads.length}件
+            </span>
+          </div>
+          <div className="space-y-1.5">
           {threads.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ backgroundColor: "var(--bg-tertiary)" }}>
@@ -133,6 +192,7 @@ export default function ChatSidebar({
           ) : (
             threads.map((thread) => {
               const isActive = currentThreadId === thread.id;
+              const isEditing = editingId === thread.id;
               return (
                 <div
                   key={thread.id}
@@ -160,8 +220,44 @@ export default function ChatSidebar({
                     />
                   )}
 
-                  <div className="flex-1 min-w-0 pr-8">
-                    <p className="text-base font-medium truncate" style={{ lineHeight: 1.5 }}>{thread.title}</p>
+                  <div className="flex-1 min-w-0 pr-16">
+                    {isEditing ? (
+                      <form onSubmit={saveRename} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+                        <input
+                          autoFocus
+                          aria-label="会話の題名"
+                          value={editingTitle}
+                          maxLength={60}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          className="min-w-0 flex-1 rounded-md border px-2 py-1 text-sm"
+                          style={{
+                            backgroundColor: "var(--bg-input)",
+                            borderColor: "var(--border-primary)",
+                            color: "var(--text-primary)",
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          aria-label="題名を保存"
+                          disabled={!editingTitle.trim() || renamingId === thread.id}
+                          className="p-1 rounded disabled:opacity-40"
+                          style={{ color: "var(--accent-green)" }}
+                        >
+                          <Check size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="題名の変更を中止"
+                          onClick={cancelRename}
+                          className="p-1 rounded"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          <X size={17} />
+                        </button>
+                      </form>
+                    ) : (
+                      <p className="text-base font-medium truncate" style={{ lineHeight: 1.5 }}>{thread.title}</p>
+                    )}
                     <p className="text-sm mt-1" style={{ color: "var(--text-muted)", lineHeight: 1.6, paddingBottom: 3 }}>
                       {new Date(thread.updated_at).toLocaleDateString("ja-JP", {
                         month: "short",
@@ -170,11 +266,24 @@ export default function ChatSidebar({
                     </p>
                   </div>
 
+                  {!isEditing && (
+                  <button
+                    onClick={(e) => beginRename(e, thread)}
+                    className="absolute right-10 top-1/2 -translate-y-1/2 p-2 rounded-lg opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-all duration-150"
+                    style={{ color: "var(--text-muted)" }}
+                    aria-label="題名を変更"
+                    title="題名を変更"
+                  >
+                    <Pencil size={17} />
+                  </button>
+                  )}
+
                   {/* Delete button */}
+                  {!isEditing && (
                   <button
                     onClick={(e) => handleDelete(e, thread.id)}
                     disabled={deletingId === thread.id}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-150"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-2 rounded-lg opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-all duration-150"
                     style={{ color: "var(--text-muted)" }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
@@ -184,20 +293,28 @@ export default function ChatSidebar({
                       e.currentTarget.style.backgroundColor = "transparent";
                       e.currentTarget.style.color = "var(--text-muted)";
                     }}
-                    aria-label="削除"
+                    aria-label="会話を削除"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </button>
+                  )}
                 </div>
               );
             })
           )}
+          </div>
         </div>
 
         {/* Footer */}
         <div className="p-4 space-y-1" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          {currentUserEmail && (
+            <p className="px-4 pb-2 text-xs truncate" style={{ color: "var(--text-muted)" }} title={currentUserEmail}>
+              <span>ログイン中: </span>
+              <span>{currentUserEmail}</span>
+            </p>
+          )}
           {/* Theme toggle */}
           <button
             onClick={toggleTheme}

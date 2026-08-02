@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 
 interface ChatInputProps {
-  onSendMessage: (message: string) => void;
+  onSendMessage: (message: string) => void | boolean | Promise<void | boolean>;
   disabled?: boolean;
   isStreaming?: boolean;
   remainingMessages?: number | null;
@@ -38,10 +38,13 @@ export default function ChatInput({
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isRecording, setIsRecording] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalTranscriptRef = useRef<string>("");
+  const isComposingRef = useRef(false);
+  const isSubmittingRef = useRef(false);
 
   // ブラウザがWeb Speech APIに対応してるか初期チェック
   useEffect(() => {
@@ -128,9 +131,12 @@ export default function ChatInput({
     };
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim() || disabled) return;
+    const submittedMessage = message.trim();
+    if (!submittedMessage || disabled || isSubmittingRef.current) return;
+
+    isSubmittingRef.current = true;
 
     // 録音中なら停止
     if (isRecording) {
@@ -138,16 +144,30 @@ export default function ChatInput({
       setIsRecording(false);
     }
 
-    onSendMessage(message.trim());
+    setIsSubmitting(true);
     setMessage("");
     finalTranscriptRef.current = "";
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
+
+    try {
+      const accepted = await onSendMessage(submittedMessage);
+      if (accepted === false) {
+        setMessage(submittedMessage);
+        finalTranscriptRef.current = submittedMessage;
+      }
+    } catch {
+      setMessage(submittedMessage);
+      finalTranscriptRef.current = submittedMessage;
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e as unknown as React.FormEvent);
@@ -213,8 +233,14 @@ export default function ChatInput({
               finalTranscriptRef.current = e.target.value; // 手入力時にbase更新
             }}
             onKeyDown={handleKeyDown}
-            placeholder={isRecording ? "聞き取り中..." : "メッセージを入力... (Shift+Enter で改行)"}
-            disabled={disabled}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+            }}
+            placeholder={isRecording ? "聞き取り中..." : "メッセージを入力..."}
+            disabled={disabled || isSubmitting}
             rows={1}
             className="flex-1 px-3 py-3 bg-transparent border-none resize-none text-base leading-relaxed placeholder:text-[var(--text-muted)] disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-0 focus:shadow-none"
             style={{
@@ -227,16 +253,16 @@ export default function ChatInput({
 
           <button
             type="submit"
-            disabled={disabled || !message.trim()}
+            disabled={disabled || isSubmitting || !message.trim()}
             className="flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
             style={{
               background:
-                !disabled && message.trim()
+                !disabled && !isSubmitting && message.trim()
                   ? "linear-gradient(135deg, #166534, #15803d)"
                   : "var(--bg-tertiary)",
-              color: !disabled && message.trim() ? "#ffffff" : "var(--text-muted)",
+              color: !disabled && !isSubmitting && message.trim() ? "#ffffff" : "var(--text-muted)",
               boxShadow:
-                !disabled && message.trim()
+                !disabled && !isSubmitting && message.trim()
                   ? "0 2px 8px rgba(22, 101, 52, 0.2)"
                   : "none",
             }}
@@ -255,13 +281,13 @@ export default function ChatInput({
           </button>
         </div>
 
-        <div className="flex items-center justify-between mt-3 px-1">
-          <p className="text-sm" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+        <div className="flex items-center justify-end sm:justify-between mt-2 sm:mt-3 px-1 min-h-5">
+          <p className="hidden sm:block text-sm" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
             {isRecording ? "🎤 音声入力中..." : "AIコーチは講座内容に基づいて回答します"}
           </p>
           {remainingMessages !== null && (
             <p
-              className="text-sm font-medium"
+              className="text-xs sm:text-sm font-medium whitespace-nowrap"
               style={{
                 color:
                   remainingMessages <= 3
@@ -271,13 +297,13 @@ export default function ChatInput({
                     : "var(--text-muted)",
               }}
             >
-              残り {remainingMessages}/{dailyLimit} 回
+              本日の残り利用回数: {remainingMessages}回（上限{dailyLimit}回）
             </p>
           )}
         </div>
       </form>
 
-      <style jsx>{`
+      <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.85; transform: scale(1.05); }
