@@ -12,6 +12,7 @@ build/
 .next/
 out/
 dist/
+src/generated/course-content.json
 
 # Misc
 .DS_Store

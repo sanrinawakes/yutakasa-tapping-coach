@@ -1,7 +1,9 @@
 import {
   DEFAULT_CHAT_TITLE,
   createChatTitle,
+  enforceOneSentenceResponse,
   hasChatMessages,
+  isOneSentenceRequest,
   sanitizeAssistantContent,
   sanitizeChatTitle,
 } from "./chat-thread";
@@ -37,6 +39,30 @@ describe("chat thread helpers", () => {
     expect(
       sanitizeAssistantContent("講座の該当箇所は【7ー4】です。")
     ).toBe("講座の該当箇所は【7ー4】です。");
+  });
+
+  it("detects an explicit one-sentence request", () => {
+    expect(isOneSentenceRequest("一文で教えてください")).toBe(true);
+    expect(isOneSentenceRequest("1文だけにしてください")).toBe(true);
+    expect(isOneSentenceRequest("具体的に教えてください")).toBe(false);
+  });
+
+  it("removes an extra acknowledgement from a one-sentence answer", () => {
+    expect(
+      enforceOneSentenceResponse(
+        "お金を受け取ることに罪悪感を感じているのですね。最初に、その感情の強さを1から10で数値化してください。"
+      )
+    ).toBe("最初に、その感情の強さを1から10で数値化してください。");
+  });
+
+  it("keeps only the most substantive sentence when the model returns several", () => {
+    expect(
+      enforceOneSentenceResponse(
+        "不安なのですね。理由を確認します。今夜は、返済額を見たときの不安を1から10で数値化してください。"
+      )
+    ).toBe(
+      "今夜は、返済額を見たときの不安を1から10で数値化してください。"
+    );
   });
 
   it("distinguishes saved conversations from empty placeholder threads", () => {

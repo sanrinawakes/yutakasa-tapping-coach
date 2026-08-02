@@ -1,0 +1,78 @@
+import {
+  parseStructuredCoachResponse,
+  renderStructuredCoachResponse,
+} from "./coach-response";
+
+describe("structured coaching responses", () => {
+  it("parses required fields and removes generic empathy", () => {
+    const parsed = parseStructuredCoachResponse(
+      JSON.stringify({
+        acknowledgement:
+          "借金の返済を考えると不安なのですね。そのお気持ち、よく分かります。",
+        explanation: "講座の第12回では、借金への感情を扱います。",
+        steps: [{ title: "確認", instruction: "感情を数値化してください。" }],
+        practicePhrases: [],
+        closing: "",
+      })
+    );
+
+    expect(parsed.acknowledgement).toBe("借金の返済を考えると不安なのですね。");
+  });
+
+  it("renders no more than three steps and two quoted phrases", () => {
+    const rendered = renderStructuredCoachResponse({
+      acknowledgement: "借金の返済を考えると不安なのですね。",
+      explanation:
+        "講座の第12回では、借金への不安を具体的に扱います。感情を確認してから進めることが大切です。",
+      steps: [
+        {
+          title: "感情を確認する",
+          instruction: "金額を見て、今の不安を1から10で数値化してください。",
+        },
+        {
+          title: "タッピングする",
+          instruction:
+            "「この不安を認めます」と唱えた後、「この借金への不安」「この怖さ」「この焦り」を使って各ポイントを叩いてください。",
+        },
+        {
+          title: "変化を確認する",
+          instruction: "もう一度、不安の数値を確認してください。",
+        },
+        { title: "余分な手順", instruction: "これは表示しません。" },
+      ],
+      practicePhrases: ["重複しない追加例", "さらに別の例"],
+      closing: "必要に応じて繰り返してください。",
+    });
+
+    expect(rendered.match(/(?:^|\n)\d\. /gu)).toHaveLength(3);
+    expect(rendered.match(/「[^」]+」/gu)).toHaveLength(2);
+    expect(rendered).not.toContain("この焦り");
+    expect(Array.from(rendered).length).toBeLessThanOrEqual(700);
+  });
+
+  it("reduces oversized fields while ending every visible line cleanly", () => {
+    const rendered = renderStructuredCoachResponse({
+      acknowledgement: `不安を感じているのですね。${"余分な説明です。".repeat(20)}`,
+      explanation: "背景の説明です。".repeat(50),
+      steps: Array.from({ length: 3 }, (_, index) => ({
+        title: `手順${index + 1}`,
+        instruction: `${"具体的に確認してください、".repeat(20)}最後に数値化してください。`,
+      })),
+      practicePhrases: ["例文1", "例文2"],
+      closing: "最後に確認してください。".repeat(20),
+    });
+
+    expect(Array.from(rendered).length).toBeLessThanOrEqual(700);
+    for (const line of rendered.split("\n").filter(Boolean)) {
+      expect(line).toMatch(/[。！？!?」*]$/u);
+    }
+  });
+
+  it("rejects incomplete JSON payloads", () => {
+    expect(() =>
+      parseStructuredCoachResponse(
+        JSON.stringify({ acknowledgement: "確認しました。", steps: [] })
+      )
+    ).toThrow("incomplete coaching response");
+  });
+});

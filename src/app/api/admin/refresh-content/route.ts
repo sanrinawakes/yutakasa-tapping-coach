@@ -7,12 +7,12 @@ export async function POST(request: NextRequest) {
     const authError = getAdminAuthError(request);
     if (authError) return authError;
 
-    // Clear the transcript cache
+    // Rebuild the in-process search index from the bundled course snapshot.
     await clearTranscriptCache();
 
     return NextResponse.json({
       success: true,
-      message: "Transcript cache cleared",
+      message: "Course search cache cleared",
     });
   } catch (error) {
     console.error("Refresh content error:", error);
