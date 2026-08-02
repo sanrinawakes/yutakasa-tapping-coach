@@ -33,14 +33,29 @@ describe("proxy authentication", () => {
     const response = await proxy(new NextRequest("https://example.com/chat"));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://example.com/login");
+    expect(response.headers.get("location")).toBe(
+      "https://example.com/login?next=%2Fchat"
+    );
   });
 
   it("protects the in-app support page with the same session", async () => {
     const response = await proxy(new NextRequest("https://example.com/support"));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://example.com/login");
+    expect(response.headers.get("location")).toBe(
+      "https://example.com/login?next=%2Fsupport"
+    );
+  });
+
+  it("protects every admin page with the signed-in session", async () => {
+    const response = await proxy(
+      new NextRequest("https://example.com/admin/support?status=open")
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(
+      "https://example.com/login?next=%2Fadmin%2Fsupport%3Fstatus%3Dopen"
+    );
   });
 
   it("allows a protected page with a valid session", async () => {
@@ -64,6 +79,8 @@ describe("proxy authentication", () => {
     const response = await proxy(request);
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://example.com/login");
+    expect(response.headers.get("location")).toBe(
+      "https://example.com/login?next=%2Fchat"
+    );
   });
 });

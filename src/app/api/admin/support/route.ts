@@ -5,7 +5,7 @@ import { supportApiError } from "@/lib/server/support-request";
 import { isSupportStatus } from "@/lib/support";
 
 export async function GET(request: NextRequest) {
-  const authError = getAdminAuthError(request);
+  const authError = await getAdminAuthError();
   if (authError) return authError;
 
   try {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -82,7 +82,6 @@ async function parseResponse(response: Response) {
 }
 
 export default function AdminSupportPage() {
-  const [token, setToken] = useState("");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -92,39 +91,24 @@ export default function AdminSupportPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replying, setReplying] = useState(false);
+  const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState("");
   const [replyBody, setReplyBody] = useState("");
   const [resolveWithReply, setResolveWithReply] = useState(true);
   const replyRequestId = useRef(crypto.randomUUID());
 
-  useEffect(() => {
-    setToken(window.localStorage.getItem("admin-login-support-token") ?? "");
-  }, []);
-
-  useEffect(() => {
-    if (token.trim()) {
-      window.localStorage.setItem("admin-login-support-token", token.trim());
-    }
-  }, [token]);
-
-  const headers = useMemo(
-    () => ({ "x-admin-token": token.trim() }),
-    [token]
-  );
-
   const loadTickets = useCallback(async (): Promise<Ticket[] | null> => {
-    if (!token.trim()) return null;
     setLoadingList(true);
     try {
       const search = new URLSearchParams();
       if (status) search.set("status", status);
       if (query.trim()) search.set("query", query.trim());
       const response = await fetch(`/api/admin/support?${search}`, {
-        headers: { "x-admin-token": token.trim() },
         cache: "no-store",
       });
       const data = await parseResponse(response);
       const loaded = (data.tickets ?? []) as Ticket[];
+      setAuthorized(true);
       setTickets(loaded);
       setSelectedId((current) =>
         current && loaded.some((ticket) => ticket.id === current)
@@ -134,20 +118,19 @@ export default function AdminSupportPage() {
       setError("");
       return loaded;
     } catch (caught) {
+      setAuthorized(false);
       setError(caught instanceof Error ? caught.message : String(caught));
       return null;
     } finally {
       setLoadingList(false);
     }
-  }, [query, status, token]);
+  }, [query, status]);
 
   const loadDetail = useCallback(
     async (ticketId: string) => {
-      if (!token.trim()) return;
       setLoadingDetail(true);
       try {
         const response = await fetch(`/api/admin/support/${ticketId}`, {
-          headers: { "x-admin-token": token.trim() },
           cache: "no-store",
         });
         const loaded = (await parseResponse(response)) as Detail;
@@ -166,7 +149,7 @@ export default function AdminSupportPage() {
         setLoadingDetail(false);
       }
     },
-    [token]
+    []
   );
 
   const refreshAll = useCallback(async () => {
@@ -195,7 +178,7 @@ export default function AdminSupportPage() {
     try {
       const response = await fetch(`/api/admin/support/${selectedId}`, {
         method: "PATCH",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       await parseResponse(response);
@@ -215,7 +198,7 @@ export default function AdminSupportPage() {
     try {
       const response = await fetch(`/api/admin/support/${selectedId}/messages`, {
         method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           body: replyBody,
           clientRequestId: replyRequestId.current,
@@ -251,19 +234,13 @@ export default function AdminSupportPage() {
 
       <section className={styles.authbar}>
         <LockKeyhole size={18} aria-hidden="true" />
-        <label>
-          管理トークン
-          <input
-            type="password"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            placeholder="管理トークンを入力"
-          />
-        </label>
+        <strong>
+          {authorized ? "本人確認済み" : error ? "アクセスできません" : "本人確認中"}
+        </strong>
         <button
           type="button"
           onClick={() => void refreshAll()}
-          disabled={!token.trim() || loadingList}
+          disabled={loadingList}
           title="再読み込み"
           aria-label="再読み込み"
         >

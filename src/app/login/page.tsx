@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
+import { safeLoginDestination } from "@/lib/login-destination";
 
 type LoginStep = "email" | "otp";
 
@@ -18,6 +19,7 @@ function LoginPageContent() {
   const [loading, setLoading] = useState(false);
 
   const isWelcome = searchParams.get("welcome") === "1";
+  const destination = safeLoginDestination(searchParams.get("next"));
 
   const handleSendOTP = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +74,7 @@ function LoginPageContent() {
         return;
       }
 
-      router.push("/chat");
+      router.push(destination);
     } catch {
       setError("エラーが発生しました");
     } finally {
