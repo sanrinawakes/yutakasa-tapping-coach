@@ -2,6 +2,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   DEFAULT_CHAT_TITLE,
   hasChatMessages,
+  sanitizeAssistantContent,
   sanitizeChatTitle,
 } from "@/lib/chat-thread";
 
@@ -332,7 +333,11 @@ export async function getChatMessages(threadId: string) {
     .order("created_at", { ascending: true });
 
   if (error) throw error;
-  return (data || []) as ChatMessage[];
+  return (data || []).map((message) =>
+    message.role === "assistant"
+      ? { ...message, content: sanitizeAssistantContent(message.content) }
+      : message
+  ) as ChatMessage[];
 }
 
 /**
