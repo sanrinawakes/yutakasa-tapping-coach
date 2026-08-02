@@ -35,10 +35,30 @@ describe("chat thread helpers", () => {
       .toBe("続けてみてください。");
   });
 
-  it("keeps meaningful course section references", () => {
+  it("turns internal course section markers into readable references", () => {
     expect(
       sanitizeAssistantContent("講座の該当箇所は【7ー4】です。")
-    ).toBe("講座の該当箇所は【7ー4】です。");
+    ).toBe("講座の該当箇所は第7回・4番です。");
+    expect(
+      sanitizeAssistantContent("第23回【23】豊かさの引き寄せ")
+    ).toBe("第23回 豊かさの引き寄せ");
+    expect(
+      sanitizeAssistantContent("第7回【7ー4】を参照してください。")
+    ).toBe("第7回・4番を参照してください。");
+    expect(
+      sanitizeAssistantContent(
+        "第1回「イントロダクション」の【1-7】「今週の課題」"
+      )
+    ).toBe("第1回「イントロダクション」の7番「今週の課題」");
+    expect(
+      sanitizeAssistantContent("幻のコンサル動画(3) 【3ー2】を参照")
+    ).toBe("幻のコンサル動画(3)・2番を参照");
+  });
+
+  it("does not change ordinary numbers written for the customer", () => {
+    expect(
+      sanitizeAssistantContent("感情の強さを1から10で確認し、第7回を見てください。")
+    ).toBe("感情の強さを1から10で確認し、第7回を見てください。");
   });
 
   it("detects an explicit one-sentence request", () => {
