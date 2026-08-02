@@ -27,6 +27,7 @@ const SUPPORT_APP_URL =
   process.env.BASE_URL ||
   "https://yutakasa-tapping-coach.vercel.app";
 const SUPPORT_AUTOMATION_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
+const SUPPORT_EMAIL_TIMEOUT_MS = 5_000;
 
 export type SupportAttachment = {
   id: string;
@@ -96,6 +97,7 @@ async function sendSupportEmail(params: {
   try {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
+      signal: AbortSignal.timeout(SUPPORT_EMAIL_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
@@ -196,6 +198,7 @@ async function uploadAttachments(
   await ensureSupportBucket();
 
   const emailHash = createHash("sha256").update(userEmail).digest("hex").slice(0, 24);
+  const uploadAttemptId = randomUUID();
   const attachments: UploadedAttachment[] = [];
   const newlyUploaded: string[] = [];
 
@@ -214,7 +217,7 @@ async function uploadAttachments(
       }
 
       const contentHash = createHash("sha256").update(bytes).digest("hex").slice(0, 20);
-      const storagePath = `${emailHash}/${requestId}/${index + 1}-${contentHash}.${detected.extension}`;
+      const storagePath = `${emailHash}/${requestId}/${uploadAttemptId}/${index + 1}-${contentHash}.${detected.extension}`;
       const filename = sanitizeSupportFilename(file.name, detected.extension);
       const result = await getSupabase().storage
         .from(SUPPORT_BUCKET)
@@ -247,7 +250,31 @@ async function uploadAttachments(
 
 async function removeNewUploads(paths: string[]) {
   if (paths.length === 0) return;
-  await getSupabase().storage.from(SUPPORT_BUCKET).remove(paths);
+  const { error } = await getSupabase().storage.from(SUPPORT_BUCKET).remove(paths);
+  if (error) {
+    console.error("Failed to remove uncommitted support attachments:", error);
+  }
+}
+
+async function removeUnreferencedUploads(paths: string[]) {
+  if (paths.length === 0) return;
+
+  const { data, error } = await getSupabase()
+    .from("support_attachments")
+    .select("storage_path")
+    .in("storage_path", paths);
+  if (error) {
+    console.error(
+      "Could not verify whether failed support uploads are referenced:",
+      error
+    );
+    return;
+  }
+
+  const referenced = new Set(
+    (data ?? []).map((attachment) => attachment.storage_path as string)
+  );
+  await removeNewUploads(paths.filter((storagePath) => !referenced.has(storagePath)));
 }
 
 async function signedAttachmentRows(
@@ -405,11 +432,14 @@ export async function createSupportTicket(params: {
     }
   );
   if (error) {
-    await removeNewUploads(uploaded.newlyUploaded);
+    await removeUnreferencedUploads(uploaded.newlyUploaded);
     throw error;
   }
 
   const result = Array.isArray(data) ? data[0] : data;
+  if (!result?.created) {
+    await removeNewUploads(uploaded.newlyUploaded);
+  }
   if (result?.created && !isTestAddress(params.userEmail)) {
     const notification = await sendSupportEmail({
       to: SUPPORT_NOTIFICATION_EMAIL,
@@ -450,10 +480,13 @@ export async function appendUserSupportMessage(params: {
     p_attachments: uploaded.attachments,
   });
   if (error) {
-    await removeNewUploads(uploaded.newlyUploaded);
+    await removeUnreferencedUploads(uploaded.newlyUploaded);
     throw error;
   }
   const result = Array.isArray(data) ? data[0] : data;
+  if (!result?.created) {
+    await removeNewUploads(uploaded.newlyUploaded);
+  }
   if (result?.created && !isTestAddress(params.userEmail)) {
     const { data: ticket } = await getSupabase()
       .from("support_tickets")
