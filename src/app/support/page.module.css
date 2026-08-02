@@ -219,6 +219,8 @@
 
 .conversation {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
