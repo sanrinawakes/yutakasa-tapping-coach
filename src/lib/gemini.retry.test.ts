@@ -227,4 +227,91 @@ describe("Gemini generation retry", () => {
       "まず、その感情の強さを1から10で数値化してください。"
     );
   });
+
+  it("retries when the model enumerates prior history for a current-turn question", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(
+        successfulStream(
+          JSON.stringify({
+            acknowledgement:
+              "娘さんの言葉にイラッとしたのですね。",
+            explanation:
+              "これまでのあなたの質問内容（「認めてもらえない」「孤独を感じる」「心が晴れない」）は、今回の怒りとつながっています。",
+            steps: [
+              {
+                title: "感情を確認する",
+                instruction:
+                  "娘さんの言葉を思い出し、今の怒りを1から10で数値化してください。",
+              },
+            ],
+            practicePhrases: [],
+            closing: "",
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        successfulStream(
+          validStructuredResponse(
+            "娘さんの言葉にイラッとしたのですね。",
+            "娘さんの言葉を思い出し、今の怒りを1から10で数値化してください。"
+          )
+        )
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "assistant",
+          content:
+            "前回は認めてもらえない苦しさを整理しました。今回も同じ背景があります。",
+        },
+        {
+          role: "user",
+          content:
+            "私がいただいたところてんを好きなだけ食べていいでしょと娘に言われちょっとイラッときた",
+        },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(output).not.toContain("これまでのあなたの質問内容");
+    expect(output).toContain("娘さんの言葉を思い出し");
+  });
+
+  it("sends only the latest turn plus minimal context to Gemini", async () => {
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(validStructuredResponse("今の不安を確認したいのですね。"))
+    );
+
+    await readText(
+      await streamChatCompletion([
+        { role: "user", content: "一つ前の相談です。" },
+        { role: "user", content: "二つ前の相談です。" },
+        { role: "assistant", content: "さらに古い回答です。" },
+        { role: "user", content: "三つ前の相談です。" },
+        {
+          role: "assistant",
+          content:
+            "前回の回答です。".repeat(80),
+        },
+        {
+          role: "user",
+          content:
+            "私がいただいたところてんを好きなだけ食べていいでしょと娘に言われちょっとイラッときた",
+        },
+      ])
+    );
+
+    const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
+      contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+    };
+    const assistantMessage = request.contents.find(
+      (message) => message.role === "model"
+    );
+
+    expect(request.contents).toHaveLength(4);
+    expect(request.contents.filter((message) => message.role === "model")).toHaveLength(1);
+    expect(request.contents.at(-1)?.parts[0]?.text).toContain("ところてん");
+    expect(assistantMessage?.parts[0]?.text.endsWith("…")).toBe(true);
+  });
 });

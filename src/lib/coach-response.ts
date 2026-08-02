@@ -126,11 +126,14 @@ function buildResponse(
 ): string {
   const keptPhrases: string[] = [];
   const acknowledgement = truncateComplete(
-    takeSentences(response.acknowledgement, 1),
+    limitQuotedPhrases(takeSentences(response.acknowledgement, 1), keptPhrases),
     90
   );
   const explanation = truncateComplete(
-    takeSentences(response.explanation, options.explanationSentences),
+    limitQuotedPhrases(
+      takeSentences(response.explanation, options.explanationSentences),
+      keptPhrases
+    ),
     options.explanationSentences === 1 ? 150 : 220
   );
   const steps = response.steps.slice(0, 3).map((step, index) => {
@@ -156,7 +159,10 @@ function buildResponse(
   }
 
   const closing = options.includeClosing
-    ? truncateComplete(takeSentences(response.closing, 1), 100)
+    ? truncateComplete(
+        limitQuotedPhrases(takeSentences(response.closing, 1), keptPhrases),
+        100
+      )
     : "";
   return [acknowledgement, explanation, ...steps, phraseLine, closing]
     .filter(Boolean)

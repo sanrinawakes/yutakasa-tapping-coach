@@ -68,6 +68,25 @@ describe("structured coaching responses", () => {
     }
   });
 
+  it("keeps quoted phrases to two across the whole rendered answer", () => {
+    const rendered = renderStructuredCoachResponse({
+      acknowledgement: "「認められない」と感じたのですね。",
+      explanation:
+        "「孤独だ」という思いが強いときは、「また無視される」が重なりやすいです。",
+      steps: [
+        {
+          title: "感情を確認する",
+          instruction:
+            "今の怒りを1から10で数値化し、「ここで止まる」を使わずに確認してください。",
+        },
+      ],
+      practicePhrases: ["追加の例文", "さらに別の例文"],
+      closing: "必要なら「もう一度確認する」を次回に使ってください。",
+    });
+
+    expect(rendered.match(/「[^」]+」/gu)).toHaveLength(2);
+  });
+
   it("rejects incomplete JSON payloads", () => {
     expect(() =>
       parseStructuredCoachResponse(
