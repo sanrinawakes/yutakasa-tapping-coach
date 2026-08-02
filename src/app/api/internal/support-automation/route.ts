@@ -5,8 +5,8 @@ import {
   appendAdminSupportMessage,
   claimSupportTicket,
   listPendingAutomatedSupportTickets,
+  renewSupportAutomationLock,
   updateAdminSupportTicket,
-  validateSupportAutomationLock,
 } from "@/lib/server/support-service";
 import { supportApiError, SupportRequestError } from "@/lib/server/support-request";
 import {
@@ -60,7 +60,7 @@ function readLockToken(value: unknown): string {
 }
 
 async function requireLock(ticketId: string, lockToken: string) {
-  const ticket = await validateSupportAutomationLock(ticketId, lockToken);
+  const ticket = await renewSupportAutomationLock(ticketId, lockToken);
   if (!ticket) {
     throw new SupportRequestError(
       "This ticket is not locked by the current automation run.",

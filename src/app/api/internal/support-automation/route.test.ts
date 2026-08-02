@@ -4,8 +4,8 @@ import {
   appendAdminSupportMessage,
   claimSupportTicket,
   listPendingAutomatedSupportTickets,
+  renewSupportAutomationLock,
   updateAdminSupportTicket,
-  validateSupportAutomationLock,
 } from "@/lib/server/support-service";
 import { GET, PATCH } from "./route";
 
@@ -14,16 +14,16 @@ vi.mock("@/lib/server/support-service", () => ({
   appendAdminSupportMessage: vi.fn(),
   claimSupportTicket: vi.fn(),
   listPendingAutomatedSupportTickets: vi.fn(),
+  renewSupportAutomationLock: vi.fn(),
   updateAdminSupportTicket: vi.fn(),
-  validateSupportAutomationLock: vi.fn(),
 }));
 
 const addLogMock = vi.mocked(addSupportWorkLog);
 const appendMock = vi.mocked(appendAdminSupportMessage);
 const claimMock = vi.mocked(claimSupportTicket);
 const listMock = vi.mocked(listPendingAutomatedSupportTickets);
+const renewLockMock = vi.mocked(renewSupportAutomationLock);
 const updateMock = vi.mocked(updateAdminSupportTicket);
-const validateLockMock = vi.mocked(validateSupportAutomationLock);
 const ticketId = "2e4710db-9274-4e4c-96c4-59dc97e21c8d";
 const lockToken = "09919e11-742a-41b4-b3f2-8cc3ff86b5cd";
 const messageId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
@@ -57,7 +57,7 @@ describe("support automation API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.CRON_SECRET = secret;
-    validateLockMock.mockResolvedValue(ticket);
+    renewLockMock.mockResolvedValue(ticket);
     addLogMock.mockResolvedValue(undefined);
   });
 
@@ -88,7 +88,7 @@ describe("support automation API", () => {
   });
 
   it("does not write progress without the matching lock", async () => {
-    validateLockMock.mockResolvedValue(null);
+    renewLockMock.mockResolvedValue(null);
     const response = await PATCH(
       request("PATCH", {
         action: "log",
@@ -99,6 +99,20 @@ describe("support automation API", () => {
     );
     expect(response.status).toBe(409);
     expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it("renews the lock before recording progress", async () => {
+    const response = await PATCH(
+      request("PATCH", {
+        action: "log",
+        ticketId,
+        lockToken,
+        summary: "調査を継続しています。",
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(renewLockMock).toHaveBeenCalledWith(ticketId, lockToken);
+    expect(addLogMock).toHaveBeenCalled();
   });
 
   it("sends a verified reply once and marks automation complete", async () => {
