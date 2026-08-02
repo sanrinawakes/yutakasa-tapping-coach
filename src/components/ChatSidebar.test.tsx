@@ -74,4 +74,27 @@ describe("ChatSidebar", () => {
       screen.queryByRole("button", { name: "メニューを閉じる" })
     ).not.toBeInTheDocument();
   });
+
+  it("does not show an empty history while conversations are still loading", () => {
+    render(
+      <ChatSidebar
+        threads={[]}
+        currentThreadId={null}
+        onSelectThread={vi.fn()}
+        onCreateThread={vi.fn()}
+        onDeleteThread={vi.fn()}
+        onRenameThread={vi.fn()}
+        onLogout={vi.fn()}
+        currentUserEmail={null}
+        isLoadingThreads
+        isOpen
+        onToggle={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("読込中")).toBeInTheDocument();
+    expect(screen.getByText("会話履歴を読み込んでいます")).toBeInTheDocument();
+    expect(screen.queryByText("0件")).not.toBeInTheDocument();
+    expect(screen.queryByText("チャットを始めましょう")).not.toBeInTheDocument();
+  });
 });

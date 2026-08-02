@@ -39,6 +39,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [threadsLoading, setThreadsLoading] = useState(true);
   const [creatingThread, setCreatingThread] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [streaming, setStreaming] = useState(false);
@@ -150,7 +151,11 @@ export default function ChatPage() {
     if (initializationStartedRef.current) return;
     initializationStartedRef.current = true;
 
-    Promise.all([loadThreads(), loadUsage()]).finally(() => {
+    const initialThreads = loadThreads().finally(() => {
+      setThreadsLoading(false);
+    });
+
+    Promise.all([initialThreads, loadUsage()]).finally(() => {
       setInitializing(false);
     });
   }, [loadThreads, loadUsage]);
@@ -419,6 +424,7 @@ export default function ChatPage() {
         onLogout={handleLogout}
         currentUserEmail={currentUserEmail}
         isCreatingThread={creatingThread}
+        isLoadingThreads={threadsLoading}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
