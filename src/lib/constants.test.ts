@@ -1,4 +1,4 @@
-import { SYSTEM_INSTRUCTION } from "./constants";
+import { responseTokenLimitFor, SYSTEM_INSTRUCTION } from "./constants";
 
 describe("AI response instructions", () => {
   it("gives the user's requested response length priority over the default detail level", () => {
@@ -11,5 +11,20 @@ describe("AI response instructions", () => {
     expect(SYSTEM_INSTRUCTION).toContain(
       "長さや形式の指定がない場合は"
     );
+  });
+
+  it("uses bounded generation limits for each requested level of detail", () => {
+    expect(responseTokenLimitFor("一文で教えてください")).toBe(160);
+    expect(responseTokenLimitFor("要点だけ短く教えてください")).toBe(360);
+    expect(responseTokenLimitFor("理由も含めて具体的に教えてください")).toBe(1200);
+    expect(responseTokenLimitFor("どうすればよいですか？")).toBe(800);
+  });
+
+  it("limits detailed answers to an actionable length and structure", () => {
+    expect(SYSTEM_INSTRUCTION).toContain(
+      "「詳しく」「具体的に」と指定された回答でも500〜900文字"
+    );
+    expect(SYSTEM_INSTRUCTION).toContain("手順は原則3段階以内");
+    expect(SYSTEM_INSTRUCTION).toContain("最大2か所まで");
   });
 });

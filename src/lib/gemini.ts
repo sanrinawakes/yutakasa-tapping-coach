@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GOOGLE_DOC_TRANSCRIPTS, getTranscriptUrl } from "./transcript-config";
 import {
   GEMINI_MODEL,
+  responseTokenLimitFor,
   SYSTEM_INSTRUCTION,
   TRANSCRIPT_CACHE_TTL,
 } from "./constants";
@@ -85,6 +86,9 @@ export async function streamChatCompletion(
   const client = getClient();
 
   const model = client.getGenerativeModel({ model: GEMINI_MODEL });
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user")?.content ?? "";
 
   const stream = await model.generateContentStream({
     contents: messages.map((msg) => ({
@@ -96,7 +100,7 @@ export async function streamChatCompletion(
       temperature: 0.7,
       topP: 0.9,
       topK: 40,
-      maxOutputTokens: 8192,
+      maxOutputTokens: responseTokenLimitFor(latestUserMessage),
     },
   });
 
