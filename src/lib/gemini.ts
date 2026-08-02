@@ -35,6 +35,11 @@ const GEMINI_MAX_ATTEMPTS = 3;
 const GEMINI_RETRY_DELAYS_MS = [400, 1_200] as const;
 const DEBT_QUERY_PATTERN = /借金|負債|ローン|返済/u;
 const INCOME_WORK_PHRASE = "これでは足りない";
+const OBVIOUS_JAPANESE_TYPO_PATTERN = /不不快感/u;
+const FIRST_ACTION_REQUEST_PATTERN =
+  /(?:最初に(?:する|やる|行う)こと|最初の一歩|まず(?:何|なに)を)/u;
+const MULTIPLE_ACTIONS_IN_ONE_SENTENCE_PATTERN =
+  /^(.+?(?:して|し|感じて|見て|振り返り))、(?:その|次|続いて|さらに)/u;
 const COACH_RESPONSE_SCHEMA: ResponseSchema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -137,6 +142,40 @@ function formatStructuredResponse(
   }
 }
 
+function formatOneSentenceResponse(
+  content: string,
+  latestUserMessage: string
+): string {
+  try {
+    let formatted = enforceOneSentenceResponse(content);
+    if (!formatted) {
+      throw new Error("One-sentence response was empty");
+    }
+    if (FIRST_ACTION_REQUEST_PATTERN.test(latestUserMessage)) {
+      const multipleActions = formatted.match(
+        MULTIPLE_ACTIONS_IN_ONE_SENTENCE_PATTERN
+      );
+      const firstAction = multipleActions?.[1]?.trim();
+      if (firstAction) {
+        formatted = firstAction
+          .replace(/して$/u, "してください。")
+          .replace(/し$/u, "してください。")
+          .replace(/感じて$/u, "感じてください。")
+          .replace(/見て$/u, "見てください。")
+          .replace(/振り返り$/u, "振り返ってください。");
+      }
+    }
+    if (OBVIOUS_JAPANESE_TYPO_PATTERN.test(formatted)) {
+      throw new Error("One-sentence response contained an obvious typo");
+    }
+    return formatted;
+  } catch (cause) {
+    const error = new Error("Gemini response validation failed", { cause });
+    error.name = "GeminiResponseValidationError";
+    throw error;
+  }
+}
+
 export async function getSystemPrompt(
   messages: ChatMessage[] = []
 ): Promise<string> {
@@ -145,7 +184,7 @@ export async function getSystemPrompt(
     .reverse()
     .find((message) => message.role === "user")?.content ?? "";
   const responseFormatInstruction = isOneSentenceRequest(latestUserMessage)
-    ? "\n\n今回の利用者は一文だけの回答を指定しています。相談を言い直す受け止め文は付けず、実質的な回答だけを書いてください。句点「。」は文末の1個だけにしてください。"
+    ? "\n\n今回の利用者は一文だけの回答を指定しています。相談を言い直す受け止め文は付けず、実質的な回答だけを書いてください。句点「。」は文末の1個だけにしてください。「最初にすること」「まず何をするか」と聞かれた場合は、最初の行動を1つだけ答え、複数の動作を「〜し、〜する」で連結しないでください。出力前に誤字と同じ文字の不自然な重複がないか確認してください。"
     : "";
   console.log("Course context selected:", {
     chunks: courseContext.chunkIds.length,
@@ -215,7 +254,7 @@ export async function streamChatCompletion(
           }
 
           const formatted = enforceOneSentence
-            ? enforceOneSentenceResponse(bufferedResponse)
+            ? formatOneSentenceResponse(bufferedResponse, latestUserMessage)
             : formatStructuredResponse(bufferedResponse, latestUserMessage);
           if (formatted) controller.enqueue(formatted);
           controller.close();

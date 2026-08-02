@@ -134,4 +134,53 @@ describe("Gemini generation retry", () => {
     expect(output).not.toContain("これでは足りない");
     expect(output).toContain("借金の総額を紙に書き");
   });
+
+  it("retries an obvious typo before returning a one-sentence answer", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(
+        successfulStream(
+          "今感じている不不快感を1から10で数値化してください。"
+        )
+      )
+      .mockResolvedValueOnce(
+        successfulStream("今感じている罪悪感を1から10で数値化してください。")
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "user",
+          content:
+            "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
+        },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(output).toBe(
+      "今感じている罪悪感を1から10で数値化してください。"
+    );
+    expect(output).not.toContain("不不快感");
+  });
+
+  it("keeps only the first action when the model combines multiple actions", async () => {
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(
+        "過去の記憶を思い出し、その時の不快感を数値化してください。"
+      )
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "user",
+          content:
+            "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
+        },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(output).toBe("過去の記憶を思い出してください。");
+  });
 });
