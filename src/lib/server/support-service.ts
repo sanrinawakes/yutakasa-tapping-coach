@@ -26,6 +26,7 @@ const SUPPORT_APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
   process.env.BASE_URL ||
   "https://yutakasa-tapping-coach.vercel.app";
+const SUPPORT_AUTOMATION_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 
 export type SupportAttachment = {
   id: string;
@@ -656,6 +657,7 @@ export async function addSupportWorkLog(params: {
 }
 
 export async function listPendingAutomatedSupportTickets(limit = 10) {
+  await recoverStaleSupportAutomationTickets();
   const { data, error } = await getSupabase()
     .from("support_tickets")
     .select("*")
@@ -674,8 +676,45 @@ export async function listPendingAutomatedSupportTickets(limit = 10) {
   return details.filter(Boolean);
 }
 
+export async function recoverStaleSupportAutomationTickets(): Promise<string[]> {
+  const now = new Date();
+  const staleBefore = new Date(
+    now.getTime() - SUPPORT_AUTOMATION_LOCK_TIMEOUT_MS
+  ).toISOString();
+  const { data, error } = await getSupabase()
+    .from("support_tickets")
+    .update({
+      automation_status: "failed",
+      automation_locked_at: null,
+      automation_lock_token: null,
+      updated_at: now.toISOString(),
+    })
+    .eq("decision_required", false)
+    .eq("automation_status", "investigating")
+    .in("status", ["open", "in_progress"])
+    .or(`automation_locked_at.is.null,automation_locked_at.lt.${staleBefore}`)
+    .select("id");
+  if (error) throw error;
+
+  const ticketIds = (data ?? []).map((ticket) => ticket.id as string);
+  if (ticketIds.length > 0) {
+    const { error: logError } = await getSupabase()
+      .from("support_work_logs")
+      .insert(
+        ticketIds.map((ticketId) => ({
+          ticket_id: ticketId,
+          event_type: "automation_lock_recovered",
+          summary:
+            "前回の自動対応が完了前に中断したため、再調査できる状態へ戻しました。",
+          metadata: {},
+        }))
+      );
+    if (logError) throw logError;
+  }
+  return ticketIds;
+}
+
 export async function claimSupportTicket(ticketId: string, lockToken: string) {
-  const staleBefore = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data, error } = await getSupabase()
     .from("support_tickets")
     .update({
@@ -689,23 +728,27 @@ export async function claimSupportTicket(ticketId: string, lockToken: string) {
     .eq("decision_required", false)
     .in("automation_status", ["queued", "failed"])
     .in("status", ["open", "in_progress"])
-    .or(`automation_locked_at.is.null,automation_locked_at.lt.${staleBefore}`)
+    .is("automation_locked_at", null)
     .select("*")
     .maybeSingle();
   if (error) throw error;
   return data as SupportTicket | null;
 }
 
-export async function validateSupportAutomationLock(
+export async function renewSupportAutomationLock(
   ticketId: string,
   lockToken: string
 ): Promise<SupportTicket | null> {
   const { data, error } = await getSupabase()
     .from("support_tickets")
-    .select("*")
+    .update({
+      automation_locked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", ticketId)
     .eq("automation_lock_token", lockToken)
     .eq("automation_status", "investigating")
+    .select("*")
     .maybeSingle();
   if (error) throw error;
   return data as SupportTicket | null;
