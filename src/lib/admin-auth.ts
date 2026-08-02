@@ -1,23 +1,33 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getSessionFromCookies } from "@/lib/auth";
 
-export function getAdminAuthError(request: NextRequest): NextResponse | null {
-  const adminSecret = process.env.JWT_SECRET;
-  const bearerToken = request.headers
-    .get("authorization")
-    ?.replace(/^Bearer\s+/i, "")
-    .trim();
-  const headerToken = request.headers.get("x-admin-token")?.trim();
-  const token = headerToken || bearerToken;
+function getOwnerEmail(): string | null {
+  const configured =
+    process.env.SUPPORT_ADMIN_EMAIL ||
+    process.env.SUPPORT_NOTIFICATION_EMAIL ||
+    "181wyc@gmail.com";
+  const ownerEmail = configured.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(ownerEmail) ? ownerEmail : null;
+}
 
-  if (!adminSecret || adminSecret.length < 32) {
+export async function getAdminAuthError(): Promise<NextResponse | null> {
+  const ownerEmail = getOwnerEmail();
+  if (!ownerEmail) {
     return NextResponse.json(
       { error: "Admin auth is not configured" },
       { status: 500 }
     );
   }
 
-  if (!token || token !== adminSecret) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const session = await getSessionFromCookies();
+  if (!session) {
+    return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
+  }
+  if (session.email.trim().toLowerCase() !== ownerEmail) {
+    return NextResponse.json(
+      { error: "この管理画面を利用できません。" },
+      { status: 403 }
+    );
   }
 
   return null;

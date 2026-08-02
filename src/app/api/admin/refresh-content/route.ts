@@ -1,10 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getAdminAuthError } from "@/lib/admin-auth";
 import { clearTranscriptCache } from "@/lib/gemini";
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   try {
-    const authError = getAdminAuthError(request);
+    const authError = await getAdminAuthError();
     if (authError) return authError;
 
     // Rebuild the in-process search index from the bundled course snapshot.

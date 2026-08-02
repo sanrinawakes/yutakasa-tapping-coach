@@ -25,7 +25,6 @@ describe("AdminSupportPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
-    window.localStorage.setItem("admin-login-support-token", "a".repeat(32));
   });
 
   it("refreshes the open ticket detail as well as the list", async () => {
@@ -68,6 +67,7 @@ describe("AdminSupportPage", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AdminSupportPage />);
+    expect(screen.queryByText("管理トークン")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "対応状態" })).toHaveValue(
         "open"

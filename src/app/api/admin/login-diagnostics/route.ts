@@ -105,7 +105,7 @@ async function rescueProviderPayment(
 }
 
 export async function POST(request: NextRequest) {
-  const authError = getAdminAuthError(request);
+  const authError = await getAdminAuthError();
   if (authError) return authError;
 
   const body = (await request.json().catch(() => ({}))) as DiagnosticRequest;

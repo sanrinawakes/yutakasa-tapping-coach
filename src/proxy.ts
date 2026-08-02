@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const protectedPaths = ["/chat", "/support"];
+const protectedPaths = ["/chat", "/support", "/admin"];
+
+function loginRedirect(request: NextRequest) {
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set(
+    "next",
+    `${request.nextUrl.pathname}${request.nextUrl.search}`
+  );
+  return NextResponse.redirect(loginUrl);
+}
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -17,13 +26,13 @@ export async function proxy(request: NextRequest) {
   const token = request.cookies.get("session")?.value;
 
   if (!token) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return loginRedirect(request);
   }
 
   const jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret) {
     console.error("JWT_SECRET is not set");
-    return NextResponse.redirect(new URL("/login", request.url));
+    return loginRedirect(request);
   }
 
   try {
@@ -31,7 +40,7 @@ export async function proxy(request: NextRequest) {
     await jwtVerify(token, secretKey);
     return NextResponse.next();
   } catch {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return loginRedirect(request);
   }
 }
 

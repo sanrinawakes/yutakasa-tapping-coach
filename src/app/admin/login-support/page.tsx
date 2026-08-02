@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import styles from "./page.module.css";
 
@@ -50,7 +50,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export default function LoginSupportPage() {
-  const [token, setToken] = useState("");
   const [emails, setEmails] = useState("");
   const [rescueProviderPayment, setRescueProviderPayment] = useState(false);
   const [lookbackDays, setLookbackDays] = useState(14);
@@ -66,23 +65,11 @@ export default function LoginSupportPage() {
     note: "",
   });
 
-  useEffect(() => {
-    const savedToken = window.localStorage.getItem("admin-login-support-token");
-    if (savedToken) setToken(savedToken);
-  }, []);
-
-  useEffect(() => {
-    if (token) {
-      window.localStorage.setItem("admin-login-support-token", token);
-    }
-  }, [token]);
-
   async function postJson(path: string, body: unknown) {
     const response = await fetch(path, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-admin-token": token.trim(),
       },
       body: JSON.stringify(body),
     });
@@ -166,19 +153,6 @@ export default function LoginSupportPage() {
               問い合わせ管理を開く
             </Link>
           </div>
-          <label className={`${styles.field} ${styles.tokenField}`}>
-            管理トークン
-            <input
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              style={{
-                backgroundColor: "var(--bg-input)",
-                borderColor: "var(--border-primary)",
-                color: "var(--text-primary)",
-              }}
-            />
-          </label>
         </header>
 
         <section className={styles.panel}>
@@ -210,7 +184,7 @@ export default function LoginSupportPage() {
               <button
                 type="button"
                 onClick={runDiagnostics}
-                disabled={diagnostics.loading || !token || !emails.trim()}
+                disabled={diagnostics.loading || !emails.trim()}
                 className={styles.button}
                 style={{ backgroundColor: "#166534" }}
               >
@@ -292,7 +266,7 @@ export default function LoginSupportPage() {
               <button
                 type="button"
                 onClick={() => runSync(false)}
-                disabled={syncResult.loading || !token}
+                disabled={syncResult.loading}
                 className={styles.secondaryButton}
                 style={{ borderColor: "var(--border-primary)", color: "var(--text-primary)" }}
               >
@@ -301,7 +275,7 @@ export default function LoginSupportPage() {
               <button
                 type="button"
                 onClick={() => runSync(true)}
-                disabled={syncResult.loading || !token}
+                disabled={syncResult.loading}
                 className={styles.button}
                 style={{ backgroundColor: "#166534" }}
               >
@@ -359,7 +333,7 @@ export default function LoginSupportPage() {
             </div>
             <button
               type="submit"
-              disabled={manualResult.loading || !token}
+              disabled={manualResult.loading}
               className={`${styles.button} ${styles.fullButton}`}
               style={{ backgroundColor: "#166534" }}
             >

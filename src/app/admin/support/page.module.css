@@ -61,18 +61,11 @@
   gap: 12px;
 }
 
-.authbar label {
+.authbar strong {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
-}
-
-.authbar input {
-  width: min(480px, 100%);
 }
 
 .authbar button,
@@ -97,7 +90,6 @@
   cursor: pointer;
 }
 
-.authbar input,
 .filters input,
 .replyForm textarea {
   min-height: 40px;
@@ -540,16 +532,6 @@
     align-items: flex-end;
     flex-direction: column;
     gap: 6px;
-  }
-
-  .authbar label {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .authbar input {
-    width: 100%;
   }
 
   .filters {
