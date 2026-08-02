@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "pretest": "npm run sync:course-content",
     "test": "vitest run",
+    "test:support-db": "bash scripts/test-support-migration.sh",
     "test:watch": "vitest"
   },
   "keywords": [],
@@ -37,6 +38,7 @@
     "react-dom": "^19.2.4",
     "react-markdown": "^9.1.0",
     "resend": "^6.18.1",
+    "server-only": "^0.0.1",
     "stripe": "^18.0.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2"

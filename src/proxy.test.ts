@@ -36,6 +36,13 @@ describe("proxy authentication", () => {
     expect(response.headers.get("location")).toBe("https://example.com/login");
   });
 
+  it("protects the in-app support page with the same session", async () => {
+    const response = await proxy(new NextRequest("https://example.com/support"));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://example.com/login");
+  });
+
   it("allows a protected page with a valid session", async () => {
     jwtVerifyMock.mockResolvedValue({} as Awaited<ReturnType<typeof jwtVerify>>);
     const request = new NextRequest("https://example.com/chat", {

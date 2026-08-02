@@ -8,7 +8,7 @@ import {
 
 let supabaseInstance: SupabaseClient | null = null;
 
-function getSupabase(): SupabaseClient {
+export function getSupabase(): SupabaseClient {
   if (supabaseInstance) return supabaseInstance;
 
   const supabaseUrl = process.env.SUPABASE_URL;

@@ -36,6 +36,14 @@
   font-weight: 800;
 }
 
+.adminLink {
+  display: inline-block;
+  margin-top: 7px;
+  color: #166534;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .tokenField {
   width: min(384px, 100%);
 }

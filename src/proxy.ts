@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const protectedPaths = ["/chat"];
+const protectedPaths = ["/chat", "/support"];
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
