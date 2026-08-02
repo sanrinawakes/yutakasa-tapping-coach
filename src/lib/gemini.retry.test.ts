@@ -34,14 +34,17 @@ function interruptedStream(content: string, error: unknown) {
   };
 }
 
-function validStructuredResponse(acknowledgement: string) {
+function validStructuredResponse(
+  acknowledgement: string,
+  instruction = "今の感情を1から10で数値化してください。"
+) {
   return JSON.stringify({
     acknowledgement,
     explanation: "講座に基づいて、感情を確認してから進めます。",
     steps: [
       {
         title: "感情を確認する",
-        instruction: "今の感情を1から10で数値化してください。",
+        instruction,
       },
     ],
     practicePhrases: [],
@@ -100,5 +103,35 @@ describe("Gemini generation retry", () => {
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("再試行後の回答です。");
     expect(output).not.toContain("途中");
+  });
+
+  it("retries when an income exercise is misapplied to a debt question", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(
+        successfulStream(
+          validStructuredResponse(
+            "借金額を見ることに不安があるのですね。",
+            "借金の総額を見て「これでは足りない」と声に出してください。"
+          )
+        )
+      )
+      .mockResolvedValueOnce(
+        successfulStream(
+          validStructuredResponse(
+            "借金額を見ることに不安があるのですね。",
+            "借金の総額を紙に書き、その時に出る感情を数値化してください。"
+          )
+        )
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "借金の返済が不安です。" },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(output).not.toContain("これでは足りない");
+    expect(output).toContain("借金の総額を紙に書き");
   });
 });

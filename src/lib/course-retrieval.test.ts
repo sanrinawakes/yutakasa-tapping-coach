@@ -61,5 +61,9 @@ describe("course content retrieval", () => {
 
     expect(context.titles[0]).toMatch(/第12回/u);
     expect(context.titles.some((title) => /第1回/u.test(title))).toBe(true);
+    expect(context.titles.some((title) => /第3回/u.test(title))).toBe(false);
+    expect(context.content).not.toContain(
+      "あなたの今の収入を見て、これでは足りない"
+    );
   });
 });
