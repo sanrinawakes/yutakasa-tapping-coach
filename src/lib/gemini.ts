@@ -30,12 +30,22 @@ export interface ChatMessage {
   content: string;
 }
 
-const MAX_CONVERSATION_MESSAGES = 12;
 const GEMINI_MAX_ATTEMPTS = 3;
 const GEMINI_RETRY_DELAYS_MS = [400, 1_200] as const;
+const MAX_CONTEXT_USER_MESSAGES = 3;
+const MAX_CONTEXT_ASSISTANT_MESSAGES = 1;
+const MAX_CONTEXT_TOTAL_CHARS = 2_400;
+const MAX_CONTEXT_LATEST_USER_CHARS = 700;
+const MAX_CONTEXT_PREVIOUS_USER_CHARS = 240;
+const MAX_CONTEXT_ASSISTANT_CHARS = 320;
 const DEBT_QUERY_PATTERN = /借金|負債|ローン|返済/u;
 const INCOME_WORK_PHRASE = "これでは足りない";
 const OBVIOUS_JAPANESE_TYPO_PATTERN = /不不快感/u;
+const QUOTED_PHRASE_PATTERN = /「[^」]{1,80}」/gu;
+const HISTORY_ENUMERATION_PATTERN =
+  /(?:これまでの(?:あなたの)?(?:質問|相談|やり取り|会話)内容|以前の(?:ご)?質問|過去の(?:相談|やり取り))/u;
+const HISTORY_REQUEST_PATTERN =
+  /(?:以前|過去|前回|さっき|先ほど|続き|その件|今まで|これまで)/u;
 const FIRST_ACTION_REQUEST_PATTERN =
   /(?:最初に(?:する|やる|行う)こと|最初の一歩|まず(?:何|なに)を)/u;
 const FIRST_ACTION_CONTEXT_PATTERN =
@@ -143,6 +153,16 @@ function formatStructuredResponse(
     const formatted = renderStructuredCoachResponse(
       parseStructuredCoachResponse(content)
     );
+    const quotedPhrases = formatted.match(QUOTED_PHRASE_PATTERN) ?? [];
+    if (quotedPhrases.length > 2) {
+      throw new Error("Structured response quoted too many phrases");
+    }
+    if (
+      HISTORY_ENUMERATION_PATTERN.test(formatted) &&
+      !HISTORY_REQUEST_PATTERN.test(latestUserMessage)
+    ) {
+      throw new Error("Structured response over-relied on prior history");
+    }
     if (
       DEBT_QUERY_PATTERN.test(latestUserMessage) &&
       formatted.includes(INCOME_WORK_PHRASE)
@@ -220,6 +240,72 @@ export async function clearTranscriptCache() {
   resetCourseSearchIndex();
 }
 
+function truncateForModel(content: string, maxChars: number): string {
+  const normalized = content.replace(/\s+/gu, " ").trim();
+  const characters = Array.from(normalized);
+  if (characters.length <= maxChars) return normalized;
+
+  return `${characters.slice(0, maxChars - 1).join("")}…`;
+}
+
+function buildModelMessages(messages: ChatMessage[]): ChatMessage[] {
+  const trimmedMessages = messages
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim(),
+    }))
+    .filter((message) => message.content.length > 0);
+
+  if (trimmedMessages.length === 0) return [];
+
+  const latestUserIndex = trimmedMessages.findLastIndex(
+    (message) => message.role === "user"
+  );
+  if (latestUserIndex === -1) return trimmedMessages.slice(-4);
+
+  const selected: ChatMessage[] = [];
+  let userCount = 0;
+  let assistantCount = 0;
+  let totalChars = 0;
+
+  for (let index = latestUserIndex; index >= 0; index -= 1) {
+    const message = trimmedMessages[index];
+    const isLatestUserMessage = index === latestUserIndex;
+
+    if (message.role === "user") {
+      if (!isLatestUserMessage && userCount >= MAX_CONTEXT_USER_MESSAGES) {
+        continue;
+      }
+    } else if (assistantCount >= MAX_CONTEXT_ASSISTANT_MESSAGES) {
+      continue;
+    }
+
+    const maxChars =
+      message.role === "assistant"
+        ? MAX_CONTEXT_ASSISTANT_CHARS
+        : isLatestUserMessage
+          ? MAX_CONTEXT_LATEST_USER_CHARS
+          : MAX_CONTEXT_PREVIOUS_USER_CHARS;
+    const truncatedContent = truncateForModel(message.content, maxChars);
+    const nextTotalChars = totalChars + Array.from(truncatedContent).length;
+
+    if (!isLatestUserMessage && nextTotalChars > MAX_CONTEXT_TOTAL_CHARS) {
+      continue;
+    }
+
+    selected.unshift({ role: message.role, content: truncatedContent });
+    totalChars = nextTotalChars;
+
+    if (message.role === "user") {
+      userCount += 1;
+    } else {
+      assistantCount += 1;
+    }
+  }
+
+  return selected;
+}
+
 export async function streamChatCompletion(
   messages: ChatMessage[]
 ): Promise<ReadableStream<string>> {
@@ -227,7 +313,7 @@ export async function streamChatCompletion(
   const client = getClient();
 
   const model = client.getGenerativeModel({ model: GEMINI_MODEL });
-  const boundedMessages = messages.slice(-MAX_CONVERSATION_MESSAGES);
+  const boundedMessages = buildModelMessages(messages);
   const latestUserMessage = [...boundedMessages]
     .reverse()
     .find((message) => message.role === "user")?.content ?? "";
