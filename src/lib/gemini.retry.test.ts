@@ -183,4 +183,48 @@ describe("Gemini generation retry", () => {
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
     expect(output).toBe("過去の記憶を思い出してください。");
   });
+
+  it("keeps only the first action from the observed production answer", async () => {
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(
+        "お金を受け取る罪悪感が出たときは、その感情を認め、講座の第19回で紹介されているタッピングエクササイズを始めてください。"
+      )
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "user",
+          content:
+            "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
+        },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(output).toBe("その感情を認めてください。");
+  });
+
+  it("keeps an introductory comma when the answer contains one action", async () => {
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(
+        "まず、その感情の強さを1から10で数値化してください。"
+      )
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "user",
+          content:
+            "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
+        },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(output).toBe(
+      "まず、その感情の強さを1から10で数値化してください。"
+    );
+  });
 });
