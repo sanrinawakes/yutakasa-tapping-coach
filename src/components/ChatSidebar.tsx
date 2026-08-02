@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Check, LoaderCircle, Menu, Pencil, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Check, HelpCircle, LoaderCircle, Menu, Pencil, X } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 
 interface ChatThread {
@@ -46,6 +47,25 @@ export default function ChatSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [supportUnreadCount, setSupportUnreadCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/support/unread-count", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { count?: unknown };
+      })
+      .then((data) => {
+        if (active && typeof data?.count === "number") {
+          setSupportUnreadCount(Math.max(0, data.count));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleDelete = async (e: React.MouseEvent, threadId: string) => {
     e.stopPropagation();
@@ -332,6 +352,26 @@ export default function ChatSidebar({
               <span>{currentUserEmail}</span>
             </p>
           )}
+          <Link
+            href="/support"
+            className="relative w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-base transition-all duration-150"
+            style={{ color: "var(--text-secondary)" }}
+            onClick={() => {
+              if (window.innerWidth < 768) onToggle();
+            }}
+          >
+            <HelpCircle size={20} aria-hidden="true" />
+            <span>お問い合わせ</span>
+            {supportUnreadCount > 0 && (
+              <span
+                className="ml-auto min-w-6 h-6 px-1.5 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                style={{ backgroundColor: "#dc2626" }}
+                aria-label={`未読の返信${supportUnreadCount}件`}
+              >
+                {supportUnreadCount > 99 ? "99+" : supportUnreadCount}
+              </span>
+            )}
+          </Link>
           {/* Theme toggle */}
           <button
             onClick={toggleTheme}

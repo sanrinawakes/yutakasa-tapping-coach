@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import styles from "./page.module.css";
 
 type DiagnosticRow = {
@@ -161,6 +162,9 @@ export default function LoginSupportPage() {
               Admin
             </p>
             <h1 className={styles.title}>ログイン救済</h1>
+            <Link className={styles.adminLink} href="/admin/support">
+              問い合わせ管理を開く
+            </Link>
           </div>
           <label className={`${styles.field} ${styles.tokenField}`}>
             管理トークン
