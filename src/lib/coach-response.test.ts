@@ -87,6 +87,38 @@ describe("structured coaching responses", () => {
     expect(rendered.match(/「[^」]+」/gu)).toHaveLength(2);
   });
 
+  it("removes dangling artifacts when extra quoted examples are trimmed", () => {
+    const rendered = renderStructuredCoachResponse({
+      acknowledgement: "娘さんの言葉にイラッとしたのですね。",
+      explanation:
+        "境界線が曖昧になると、受け取る価値まで揺らぎやすくなります。",
+      steps: [
+        {
+          title: "感情の明確化",
+          instruction:
+            "娘さんの言葉を聞いて感じた感情（例：「軽視された」「尊重されていない」「自分のものが奪われる」）を紙に書き出してください。",
+        },
+        {
+          title: "タッピングの準備",
+          instruction:
+            "最も強い感情を選び、「私はこの怒りを感じている」のように、セットアップフレーズを心の中で準備してください。",
+        },
+        {
+          title: "タッピングの実践",
+          instruction:
+            "眉頭から頭頂までを軽く叩きながら、準備したフレーズ、心に浮かぶ感情（例：「悔しい」「腹が立つ」）を声に出して繰り返してください。",
+        },
+      ],
+      practicePhrases: [],
+      closing: "",
+    });
+
+    expect(rendered).not.toContain("のように、");
+    expect(rendered).not.toContain("（例：）");
+    expect(rendered).not.toContain("例：）");
+    expect(rendered).not.toContain("「」");
+  });
+
   it("rejects incomplete JSON payloads", () => {
     expect(() =>
       parseStructuredCoachResponse(

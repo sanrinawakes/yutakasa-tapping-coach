@@ -109,7 +109,13 @@ function limitQuotedPhrases(
       return match;
     })
     .replace(/「」/gu, "")
+    .replace(/（例：\s*）/gu, "")
+    .replace(/例：\s*(?=[、。）])/gu, "")
+    .replace(/、\s*のように、/gu, "、")
+    .replace(/、\s*心に浮かぶ感情(?:（\s*）)?を/gu, "や心に浮かぶ感情を")
+    .replace(/（\s*）/gu, "")
     .replace(/(?:、\s*){2,}/gu, "、")
+    .replace(/、。/gu, "。")
     .replace(/(?:や|または)\s*(?=[、。])/gu, "")
     .replace(/\s+([、。])/gu, "$1")
     .trim();
