@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Menu, Pencil, X } from "lucide-react";
+import { Check, LoaderCircle, Menu, Pencil, X } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 
 interface ChatThread {
@@ -22,6 +22,7 @@ interface ChatSidebarProps {
   onLogout: () => void;
   currentUserEmail: string | null;
   isCreatingThread?: boolean;
+  isLoadingThreads?: boolean;
   isOpen: boolean;
   onToggle: () => void;
 }
@@ -36,6 +37,7 @@ export default function ChatSidebar({
   onLogout,
   currentUserEmail,
   isCreatingThread = false,
+  isLoadingThreads = false,
   isOpen,
   onToggle,
 }: ChatSidebarProps) {
@@ -174,11 +176,26 @@ export default function ChatSidebar({
               会話履歴
             </h2>
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {threads.length}件
+              {isLoadingThreads ? "読込中" : `${threads.length}件`}
             </span>
           </div>
           <div className="space-y-1.5">
-          {threads.length === 0 ? (
+          {isLoadingThreads ? (
+            <div
+              className="flex flex-col items-center justify-center gap-3 py-16 px-4"
+              role="status"
+              aria-live="polite"
+            >
+              <LoaderCircle
+                className="h-7 w-7 animate-spin"
+                style={{ color: "var(--text-muted)" }}
+                aria-hidden="true"
+              />
+              <p className="text-sm text-center" style={{ color: "var(--text-muted)" }}>
+                会話履歴を読み込んでいます
+              </p>
+            </div>
+          ) : threads.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ backgroundColor: "var(--bg-tertiary)" }}>
                 <svg className="w-8 h-8" style={{ color: "var(--text-muted)" }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
