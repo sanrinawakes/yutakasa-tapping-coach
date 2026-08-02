@@ -7,6 +7,7 @@ import {
   MAX_SUPPORT_ATTACHMENTS,
   MAX_SUPPORT_MESSAGE_LENGTH,
   MAX_SUPPORT_SUBJECT_LENGTH,
+  MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES,
   normalizeSupportText,
   parseClientRequestId,
   type SupportCategory,
@@ -30,7 +31,7 @@ type SupportRequestPayload = {
   files: File[];
 };
 
-function validateFiles(values: FormDataEntryValue[]): File[] {
+export function validateSupportFiles(values: FormDataEntryValue[]): File[] {
   const files = values.filter(
     (value): value is File => value instanceof File && value.size > 0
   );
@@ -40,7 +41,13 @@ function validateFiles(values: FormDataEntryValue[]): File[] {
     );
   }
   if (files.some((file) => file.size > MAX_SUPPORT_ATTACHMENT_BYTES)) {
-    throw new SupportRequestError("画像は1枚5MB以下にしてください。");
+    throw new SupportRequestError("画像は1枚4MB以下にしてください。");
+  }
+  if (
+    files.reduce((totalBytes, file) => totalBytes + file.size, 0) >
+    MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES
+  ) {
+    throw new SupportRequestError("画像は合計4MB以下にしてください。");
   }
   return files;
 }
@@ -77,7 +84,7 @@ async function readRequestValues(request: NextRequest) {
       subject: form.get("subject"),
       body: form.get("body"),
       clientRequestId: form.get("clientRequestId"),
-      files: validateFiles(form.getAll("attachments")),
+      files: validateSupportFiles(form.getAll("attachments")),
     };
   }
 

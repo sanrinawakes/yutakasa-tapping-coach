@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import {
   MAX_SUPPORT_ATTACHMENTS,
+  MAX_SUPPORT_ATTACHMENT_BYTES,
+  MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES,
   SUPPORT_CATEGORY_LABELS,
   SUPPORT_CATEGORIES,
   SUPPORT_STATUS_LABELS,
@@ -187,13 +189,33 @@ export default function SupportPage() {
 
   function pickFiles(
     event: React.ChangeEvent<HTMLInputElement>,
-    setter: React.Dispatch<React.SetStateAction<File[]>>
+    setter: React.Dispatch<React.SetStateAction<File[]>>,
+    errorSetter: React.Dispatch<React.SetStateAction<string>>
   ) {
-    const selected = Array.from(event.target.files ?? []).slice(
-      0,
-      MAX_SUPPORT_ATTACHMENTS
-    );
+    const selected = Array.from(event.target.files ?? []);
+    if (selected.length > MAX_SUPPORT_ATTACHMENTS) {
+      setter([]);
+      errorSetter(`画像は${MAX_SUPPORT_ATTACHMENTS}枚まで添付できます。`);
+      event.target.value = "";
+      return;
+    }
+    if (selected.some((file) => file.size > MAX_SUPPORT_ATTACHMENT_BYTES)) {
+      setter([]);
+      errorSetter("画像は1枚4MB以下にしてください。");
+      event.target.value = "";
+      return;
+    }
+    if (
+      selected.reduce((totalBytes, file) => totalBytes + file.size, 0) >
+      MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES
+    ) {
+      setter([]);
+      errorSetter("画像は合計4MB以下にしてください。");
+      event.target.value = "";
+      return;
+    }
     setter(selected);
+    errorSetter("");
     event.target.value = "";
   }
 
@@ -455,7 +477,9 @@ export default function SupportPage() {
                       type="file"
                       accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
                       multiple
-                      onChange={(event) => pickFiles(event, setReplyFiles)}
+                      onChange={(event) =>
+                        pickFiles(event, setReplyFiles, setReplyError)
+                      }
                     />
                   </label>
                   <button
@@ -488,7 +512,7 @@ export default function SupportPage() {
             <div className={styles.modalHeader}>
               <div>
                 <h2 id="new-ticket-title">新規問い合わせ</h2>
-                <p>状況が分かる画像を3枚まで添付できます</p>
+                <p>状況が分かる画像を3枚・合計4MBまで添付できます</p>
               </div>
               <button
                 type="button"
@@ -544,7 +568,7 @@ export default function SupportPage() {
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
                   multiple
-                  onChange={(event) => pickFiles(event, setFiles)}
+                  onChange={(event) => pickFiles(event, setFiles, setFormError)}
                 />
               </label>
               {files.length > 0 && (

@@ -115,4 +115,56 @@ describe("SupportPage", () => {
     render(<SupportPage />);
     await waitFor(() => expect(push).toHaveBeenCalledWith("/login"));
   });
+
+  it("shows a clear error instead of silently dropping a fourth image", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/support/tickets") {
+        return Response.json({ tickets: [] });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SupportPage />);
+    expect(await screen.findByText("問い合わせはまだありません")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "新規問い合わせ" }));
+    const images = Array.from({ length: 4 }, (_, index) =>
+      new File([new Uint8Array([0xff, 0xd8, 0xff])], `screen-${index}.jpg`, {
+        type: "image/jpeg",
+      })
+    );
+    await user.upload(screen.getByLabelText("画像を選択"), images);
+
+    expect(screen.getByText("画像は3枚まで添付できます。")).toBeInTheDocument();
+    expect(screen.queryByText("screen-0.jpg")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/support/tickets",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("blocks attachments whose combined size would exceed Vercel's body limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ tickets: [] }))
+    );
+
+    render(<SupportPage />);
+    expect(await screen.findByText("問い合わせはまだありません")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "新規問い合わせ" }));
+    const files = ["one.jpg", "two.jpg"].map(
+      (name) =>
+        new File([new Uint8Array(2 * 1024 * 1024 + 1)], name, {
+          type: "image/jpeg",
+        })
+    );
+    await user.upload(screen.getByLabelText("画像を選択"), files);
+
+    expect(screen.getByText("画像は合計4MB以下にしてください。")).toBeInTheDocument();
+    expect(screen.queryByText("one.jpg")).not.toBeInTheDocument();
+  });
 });

@@ -4,6 +4,14 @@ import {
   createSupportTicket,
   listUserSupportTickets,
 } from "@/lib/server/support-service";
+import {
+  SupportRequestError,
+  validateSupportFiles,
+} from "@/lib/server/support-request";
+import {
+  MAX_SUPPORT_ATTACHMENT_BYTES,
+  MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES,
+} from "@/lib/support";
 import { GET, POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({ getSessionFromCookies: vi.fn() }));
@@ -126,5 +134,51 @@ describe("user support tickets API", () => {
     );
     expect(response.status).toBe(400);
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an attachment larger than 4MB before writing", async () => {
+    const largeFile = new File(
+      [new Uint8Array(MAX_SUPPORT_ATTACHMENT_BYTES + 1)],
+      "large.jpg",
+      {
+        type: "image/jpeg",
+      }
+    );
+    expect(() => validateSupportFiles([largeFile])).toThrow(
+      "画像は1枚4MB以下にしてください。"
+    );
+  });
+
+  it("rejects attachments whose combined size exceeds 4MB", async () => {
+    const halfPlusOne = Math.floor(MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES / 2) + 1;
+    const files = Array.from({ length: 2 }, (_, index) =>
+      new File([new Uint8Array(halfPlusOne)], `${index}.jpg`, {
+        type: "image/jpeg",
+      })
+    );
+    expect(() => validateSupportFiles(files)).toThrow(
+      "画像は合計4MB以下にしてください。"
+    );
+  });
+
+  it("returns a specific 400 error for an invalid image detected by storage", async () => {
+    createMock.mockRejectedValue(
+      new SupportRequestError(
+        "PNG、JPEG、WebP、HEIC形式の画像を添付してください。"
+      )
+    );
+
+    const response = await POST(
+      jsonRequest({
+        category: "technical",
+        subject: "画像確認",
+        body: "画像を添付しました。",
+        clientRequestId: requestId,
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "PNG、JPEG、WebP、HEIC形式の画像を添付してください。",
+    });
   });
 });

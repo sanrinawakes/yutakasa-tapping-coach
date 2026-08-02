@@ -8,6 +8,7 @@ import {
   MAX_SUPPORT_ATTACHMENTS,
   MAX_SUPPORT_MESSAGE_LENGTH,
   MAX_SUPPORT_SUBJECT_LENGTH,
+  MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES,
   normalizeSupportText,
   requiresOwnerDecision,
   sanitizeSupportFilename,
@@ -15,6 +16,7 @@ import {
   type SupportCategory,
   type SupportStatus,
 } from "@/lib/support";
+import { SupportRequestError } from "@/lib/server/support-request";
 
 const SUPPORT_BUCKET = "yutakasa-support";
 const SUPPORT_NOTIFICATION_EMAIL =
@@ -178,7 +180,15 @@ async function uploadAttachments(
   files: File[]
 ): Promise<{ attachments: UploadedAttachment[]; newlyUploaded: string[] }> {
   if (files.length > MAX_SUPPORT_ATTACHMENTS) {
-    throw new Error(`画像は${MAX_SUPPORT_ATTACHMENTS}枚まで添付できます。`);
+    throw new SupportRequestError(
+      `画像は${MAX_SUPPORT_ATTACHMENTS}枚まで添付できます。`
+    );
+  }
+  if (
+    files.reduce((totalBytes, file) => totalBytes + file.size, 0) >
+    MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES
+  ) {
+    throw new SupportRequestError("画像は合計4MB以下にしてください。");
   }
   if (files.length === 0) return { attachments: [], newlyUploaded: [] };
 
@@ -191,13 +201,15 @@ async function uploadAttachments(
   try {
     for (const [index, file] of files.entries()) {
       if (file.size <= 0 || file.size > MAX_SUPPORT_ATTACHMENT_BYTES) {
-        throw new Error("画像は1枚5MB以下にしてください。");
+        throw new SupportRequestError("画像は1枚4MB以下にしてください。");
       }
 
       const bytes = new Uint8Array(await file.arrayBuffer());
       const detected = detectSupportFileType(bytes);
       if (!detected) {
-        throw new Error("PNG、JPEG、WebP、HEIC形式の画像を添付してください。");
+        throw new SupportRequestError(
+          "PNG、JPEG、WebP、HEIC形式の画像を添付してください。"
+        );
       }
 
       const contentHash = createHash("sha256").update(bytes).digest("hex").slice(0, 20);

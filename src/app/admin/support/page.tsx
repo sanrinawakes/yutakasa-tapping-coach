@@ -112,8 +112,8 @@ export default function AdminSupportPage() {
     [token]
   );
 
-  const loadTickets = useCallback(async () => {
-    if (!token.trim()) return;
+  const loadTickets = useCallback(async (): Promise<Ticket[] | null> => {
+    if (!token.trim()) return null;
     setLoadingList(true);
     try {
       const search = new URLSearchParams();
@@ -132,8 +132,10 @@ export default function AdminSupportPage() {
           : loaded[0]?.id ?? null
       );
       setError("");
+      return loaded;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return null;
     } finally {
       setLoadingList(false);
     }
@@ -166,6 +168,16 @@ export default function AdminSupportPage() {
     },
     [token]
   );
+
+  const refreshAll = useCallback(async () => {
+    const loaded = await loadTickets();
+    if (!loaded) return;
+    if (selectedId && loaded.some((ticket) => ticket.id === selectedId)) {
+      await loadDetail(selectedId);
+    } else if (loaded.length === 0) {
+      setDetail(null);
+    }
+  }, [loadDetail, loadTickets, selectedId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadTickets(), 250);
@@ -250,7 +262,7 @@ export default function AdminSupportPage() {
         </label>
         <button
           type="button"
-          onClick={() => void loadTickets()}
+          onClick={() => void refreshAll()}
           disabled={!token.trim() || loadingList}
           title="再読み込み"
           aria-label="再読み込み"

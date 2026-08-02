@@ -127,7 +127,7 @@ BEGIN
     SELECT 1 FROM storage.buckets
     WHERE id = 'yutakasa-support'
       AND public = FALSE
-      AND file_size_limit = 5242880
+      AND file_size_limit = 4194304
       AND allowed_mime_types @> ARRAY['image/png', 'image/jpeg']
   ) THEN
     RAISE EXCEPTION 'private attachment bucket configuration is incorrect';

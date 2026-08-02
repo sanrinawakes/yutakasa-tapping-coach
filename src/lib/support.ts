@@ -49,7 +49,8 @@ export const SUPPORT_AUTOMATION_LABELS: Record<SupportAutomationStatus, string> 
 export const MAX_SUPPORT_SUBJECT_LENGTH = 120;
 export const MAX_SUPPORT_MESSAGE_LENGTH = 10_000;
 export const MAX_SUPPORT_ATTACHMENTS = 3;
-export const MAX_SUPPORT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_SUPPORT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+export const MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 const OWNER_DECISION_PATTERN =
   /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)/u;

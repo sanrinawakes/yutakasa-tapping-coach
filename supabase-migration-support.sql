@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS support_attachments (
   storage_path TEXT NOT NULL UNIQUE,
   filename TEXT NOT NULL,
   content_type TEXT NOT NULL,
-  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 5242880),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 4194304),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -89,13 +89,19 @@ VALUES (
   'yutakasa-support',
   'yutakasa-support',
   false,
-  5242880,
+  4194304,
   ARRAY['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']
 )
 ON CONFLICT (id) DO UPDATE SET
   public = EXCLUDED.public,
   file_size_limit = EXCLUDED.file_size_limit,
   allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+ALTER TABLE support_attachments
+  DROP CONSTRAINT IF EXISTS support_attachments_size_bytes_check;
+ALTER TABLE support_attachments
+  ADD CONSTRAINT support_attachments_size_bytes_check
+  CHECK (size_bytes BETWEEN 1 AND 4194304);
 
 CREATE OR REPLACE FUNCTION create_support_ticket_with_message(
   p_user_email TEXT,
