@@ -99,12 +99,22 @@ function limitQuotedPhrases(
   value: string,
   keptPhrases: string[]
 ): string {
-  return value
+  const normalizedExamples = value.replace(/例：([^）\n]+)/gu, (_, segment: string) => {
+    const cleanedSegment = segment
+      .replace(/」(?=「)/gu, "」／")
+      .replace(/「([^」]+)」/gu, "$1")
+      .replace(/[、,]\s*(?=[^、,。]+$)/gu, "／")
+      .replace(/／{2,}/gu, "／")
+      .trim();
+    return `例：${cleanedSegment}`;
+  });
+
+  return normalizedExamples
     .replace(/「([^」]+)」/gu, (match, phrase: string) => {
       const normalized = phrase.trim();
       if (!normalized) return "";
-      if (keptPhrases.includes(normalized)) return match;
-      if (keptPhrases.length >= 2) return "";
+      if (keptPhrases.includes(normalized)) return normalized;
+      if (keptPhrases.length >= 2) return normalized;
       keptPhrases.push(normalized);
       return match;
     })
@@ -113,12 +123,17 @@ function limitQuotedPhrases(
     .replace(/例：\s*(?=[、。）])/gu, "")
     .replace(/、\s*のように、/gu, "、")
     .replace(/、\s*心に浮かぶ感情(?:（\s*）)?を/gu, "や心に浮かぶ感情を")
+    .replace(/」(?=「)/gu, "」／")
     .replace(/（\s*）/gu, "")
     .replace(/(?:、\s*){2,}/gu, "、")
     .replace(/、。/gu, "。")
     .replace(/(?:や|または)\s*(?=[、。])/gu, "")
     .replace(/\s+([、。])/gu, "$1")
     .trim();
+}
+
+function unquotePhrases(value: string): string {
+  return value.replace(/「([^」]+)」/gu, "$1");
 }
 
 function buildResponse(
@@ -132,13 +147,12 @@ function buildResponse(
 ): string {
   const keptPhrases: string[] = [];
   const acknowledgement = truncateComplete(
-    limitQuotedPhrases(takeSentences(response.acknowledgement, 1), keptPhrases),
+    unquotePhrases(takeSentences(response.acknowledgement, 1)),
     90
   );
   const explanation = truncateComplete(
-    limitQuotedPhrases(
-      takeSentences(response.explanation, options.explanationSentences),
-      keptPhrases
+    unquotePhrases(
+      takeSentences(response.explanation, options.explanationSentences)
     ),
     options.explanationSentences === 1 ? 150 : 220
   );
@@ -166,7 +180,7 @@ function buildResponse(
 
   const closing = options.includeClosing
     ? truncateComplete(
-        limitQuotedPhrases(takeSentences(response.closing, 1), keptPhrases),
+        unquotePhrases(takeSentences(response.closing, 1)),
         100
       )
     : "";

@@ -46,7 +46,7 @@ describe("structured coaching responses", () => {
 
     expect(rendered.match(/(?:^|\n)\d\. /gu)).toHaveLength(3);
     expect(rendered.match(/「[^」]+」/gu)).toHaveLength(2);
-    expect(rendered).not.toContain("この焦り");
+    expect(rendered).toContain("この焦り");
     expect(Array.from(rendered).length).toBeLessThanOrEqual(700);
   });
 
@@ -113,10 +113,35 @@ describe("structured coaching responses", () => {
       closing: "",
     });
 
-    expect(rendered).not.toContain("のように、");
+    expect(rendered).not.toContain("私はこの怒りを感じているのように");
     expect(rendered).not.toContain("（例：）");
     expect(rendered).not.toContain("例：）");
     expect(rendered).not.toContain("「」");
+    expect(rendered).toContain("「私はこの怒りを感じている」");
+    expect(rendered).toContain("例：軽視された／尊重されていない／自分のものが奪われる");
+  });
+
+  it("preserves the phrase text even when quote marks exceed the limit", () => {
+    const rendered = renderStructuredCoachResponse({
+      acknowledgement:
+        "娘さんの好きなだけ食べていいでしょという言葉に反応したのですね。",
+      explanation:
+        "境界線が揺らぐと怒りが強まりやすくなります。",
+      steps: [
+        {
+          title: "感情の認識",
+          instruction:
+            "娘さんの言葉で感じた「軽視された」「尊重されていない」「奪われた」を紙に書き出してください。",
+        },
+      ],
+      practicePhrases: [],
+      closing: "",
+    });
+
+    expect(rendered).toContain("「軽視された」");
+    expect(rendered).toContain("「尊重されていない」");
+    expect(rendered).toContain("奪われた");
+    expect(rendered).not.toContain("「奪われた」");
   });
 
   it("rejects incomplete JSON payloads", () => {
