@@ -33,6 +33,9 @@ describe("AI response instructions", () => {
     expect(SYSTEM_INSTRUCTION).toContain(
       "抜粋に根拠がないことを講座の教えとして断定せず"
     );
+    expect(SYSTEM_INSTRUCTION).toContain(
+      "収入額を見るワークを借金額や貯金額を見るワークとして案内してはいけません"
+    );
   });
 });
 

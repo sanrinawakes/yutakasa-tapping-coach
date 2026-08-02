@@ -227,6 +227,7 @@ export function selectCourseContext(
   const selected: CourseChunk[] = [];
   const selectedIds = new Set<string>();
   const perDocumentCount = new Map<string, number>();
+  const prioritizedDocumentIds = new Set<string>();
 
   const addChunk = (chunk: CourseChunk | undefined) => {
     if (!chunk || selectedIds.has(chunk.id) || selected.length >= maxChunks) {
@@ -244,21 +245,24 @@ export function selectCourseContext(
     perDocumentCount.set(chunk.documentId, documentCount + 1);
   };
 
+  const addPrioritizedDocument = (titlePattern: RegExp) => {
+    const matchingChunks = Array.from(chunks.values()).filter((chunk) =>
+      titlePattern.test(chunk.title)
+    );
+    const documentId = matchingChunks[0]?.documentId;
+    if (!documentId) return;
+
+    prioritizedDocumentIds.add(documentId);
+    addChunk(matchingChunks[0]);
+  };
+
   const courseNumber = requestedCourseNumber(query);
   if (courseNumber !== null) {
-    for (const chunk of chunks.values()) {
-      if (new RegExp(`第${courseNumber}回(?:\\D|$)`, "u").test(chunk.title)) {
-        addChunk(chunk);
-      }
-    }
+    addPrioritizedDocument(new RegExp(`第${courseNumber}回(?:\\D|$)`, "u"));
   }
 
   for (const titlePattern of priorityCourseTitles(query)) {
-    addChunk(
-      Array.from(chunks.values()).find((chunk) =>
-        titlePattern.test(chunk.title)
-      )
-    );
+    addPrioritizedDocument(titlePattern);
   }
 
   if (isTappingProcedureQuestion(query)) {
@@ -270,7 +274,15 @@ export function selectCourseContext(
 
   if (query) {
     for (const result of index.search(query).slice(0, SEARCH_RESULT_LIMIT)) {
-      addChunk(chunks.get(String(result.id)));
+      const chunk = chunks.get(String(result.id));
+      if (
+        chunk &&
+        prioritizedDocumentIds.size > 0 &&
+        !prioritizedDocumentIds.has(chunk.documentId)
+      ) {
+        continue;
+      }
+      addChunk(chunk);
     }
   }
 

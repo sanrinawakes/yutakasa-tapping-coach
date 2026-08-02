@@ -33,6 +33,8 @@ export interface ChatMessage {
 const MAX_CONVERSATION_MESSAGES = 12;
 const GEMINI_MAX_ATTEMPTS = 3;
 const GEMINI_RETRY_DELAYS_MS = [400, 1_200] as const;
+const DEBT_QUERY_PATTERN = /借金|負債|ローン|返済/u;
+const INCOME_WORK_PHRASE = "これでは足りない";
 const COACH_RESPONSE_SCHEMA: ResponseSchema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -113,11 +115,21 @@ function isResponseValidationError(error: unknown): boolean {
   );
 }
 
-function formatStructuredResponse(content: string): string {
+function formatStructuredResponse(
+  content: string,
+  latestUserMessage: string
+): string {
   try {
-    return renderStructuredCoachResponse(
+    const formatted = renderStructuredCoachResponse(
       parseStructuredCoachResponse(content)
     );
+    if (
+      DEBT_QUERY_PATTERN.test(latestUserMessage) &&
+      formatted.includes(INCOME_WORK_PHRASE)
+    ) {
+      throw new Error("Income exercise was misapplied to a debt question");
+    }
+    return formatted;
   } catch (cause) {
     const error = new Error("Gemini response validation failed", { cause });
     error.name = "GeminiResponseValidationError";
@@ -204,7 +216,7 @@ export async function streamChatCompletion(
 
           const formatted = enforceOneSentence
             ? enforceOneSentenceResponse(bufferedResponse)
-            : formatStructuredResponse(bufferedResponse);
+            : formatStructuredResponse(bufferedResponse, latestUserMessage);
           if (formatted) controller.enqueue(formatted);
           controller.close();
           return;
