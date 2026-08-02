@@ -1,4 +1,9 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import {
+  DEFAULT_CHAT_TITLE,
+  hasChatMessages,
+  sanitizeChatTitle,
+} from "@/lib/chat-thread";
 
 let supabaseInstance: SupabaseClient | null = null;
 
@@ -105,15 +110,13 @@ export async function createOTPCode(email: string) {
     .padStart(6, "0");
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("otp_codes")
     .insert({
       email,
       code,
       expires_at: expiresAt.toISOString(),
-    })
-    .select()
-    .single();
+    });
 
   if (error) throw error;
   return { code, expiresAt } as { code: string; expiresAt: Date };
@@ -155,7 +158,7 @@ export async function createChatThread(userEmail: string, title?: string) {
     .from("chat_threads")
     .insert({
       user_email: userEmail,
-      title: title || "新しいチャット",
+      title: sanitizeChatTitle(title ?? DEFAULT_CHAT_TITLE),
     })
     .select()
     .single();
@@ -183,25 +186,65 @@ export async function getUserChatThreads(userEmail: string) {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("chat_threads")
-    .select("*")
+    .select("*, chat_messages(count)")
     .eq("user_email", userEmail)
     .order("updated_at", { ascending: false });
 
   if (error) throw error;
-  return (data || []) as ChatThread[];
+
+  return (data || [])
+    .filter(hasChatMessages)
+    .map(({ id, user_email, title, created_at, updated_at }) => ({
+      id,
+      user_email,
+      title,
+      created_at,
+      updated_at,
+    })) as ChatThread[];
 }
 
-export async function updateChatThreadTitle(threadId: string, title: string) {
+export async function updateChatThreadTitle(
+  threadId: string,
+  userEmail: string,
+  title: string
+) {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("chat_threads")
-    .update({ title, updated_at: new Date().toISOString() })
+    .update({
+      title: sanitizeChatTitle(title),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", threadId)
+    .eq("user_email", userEmail)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
+  if (!data) throw new Error("Chat thread not found");
   return data as ChatThread;
+}
+
+export async function titleChatThreadFromFirstMessage(
+  threadId: string,
+  userEmail: string,
+  title: string
+) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("chat_threads")
+    .update({
+      title: sanitizeChatTitle(title),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", threadId)
+    .eq("user_email", userEmail)
+    .eq("title", DEFAULT_CHAT_TITLE)
+    .select()
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as ChatThread | null;
 }
 
 export async function deleteChatThread(threadId: string) {
@@ -218,26 +261,32 @@ export async function deleteChatThread(threadId: string) {
 export async function addChatMessage(
   threadId: string,
   role: "user" | "assistant",
-  content: string
+  content: string,
+  messageId: string = crypto.randomUUID()
 ) {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("chat_messages")
-    .insert({
+    .upsert({
+      id: messageId,
       thread_id: threadId,
       role,
       content,
-    })
+    }, { onConflict: "id" })
     .select()
     .single();
 
   if (error) throw error;
 
   // Update thread's updated_at
-  await supabase
+  const { error: threadUpdateError } = await supabase
     .from("chat_threads")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", threadId);
+
+  if (threadUpdateError) {
+    console.error("Failed to update chat thread timestamp:", threadUpdateError);
+  }
 
   return data as ChatMessage;
 }
@@ -377,4 +426,3 @@ export async function setSubscriptionState(
   if (error) throw error;
   return result as Subscriber;
 }
-

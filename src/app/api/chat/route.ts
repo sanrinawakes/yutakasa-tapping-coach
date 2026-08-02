@@ -1,11 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
-import { getChatMessages, addChatMessage, getChatThread, getDailyUserMessageCount, getSubscriberByEmail } from "@/lib/supabase";
+import {
+  getChatMessages,
+  addChatMessage,
+  getChatThread,
+  getDailyUserMessageCount,
+  getSubscriberByEmail,
+  titleChatThreadFromFirstMessage,
+} from "@/lib/supabase";
 import { evaluateAccess, accessReasonToMessage } from "@/lib/access-control";
 import { streamChatCompletion, ChatMessage as GeminiMessage } from "@/lib/gemini";
 import { DAILY_MESSAGE_LIMIT } from "@/lib/constants";
+import {
+  createChatTitle,
+  sanitizeAssistantContent,
+} from "@/lib/chat-thread";
+
+const MAX_MESSAGE_LENGTH = 20_000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const PARTIAL_RESPONSE_NOTICE =
+  "\n\n※通信が途中で中断されたため、ここまでの回答を履歴へ保存しました。続きが必要な場合は、そのままお知らせください。";
+
+async function saveMessageWithRetry(
+  threadId: string,
+  role: "user" | "assistant",
+  content: string,
+  messageId: string
+) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await addChatMessage(threadId, role, content, messageId);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+  }
+  throw lastError;
+}
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     // Verify session
     const session = await getSessionFromCookies();
@@ -27,12 +65,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { threadId, message } = await request.json();
+    const body = await request.json().catch(() => null);
+    const threadId =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { threadId?: unknown }).threadId
+        : null;
+    const rawMessage =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { message?: unknown }).message
+        : null;
+    const clientMessageId =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { clientMessageId?: unknown }).clientMessageId
+        : null;
 
-    if (!threadId || !message) {
+    if (
+      typeof threadId !== "string" ||
+      typeof rawMessage !== "string" ||
+      !rawMessage.trim()
+    ) {
       return NextResponse.json(
         { error: "Thread ID and message are required" },
         { status: 400 }
+      );
+    }
+
+    const message = rawMessage.trim();
+    if (
+      clientMessageId !== null &&
+      (typeof clientMessageId !== "string" || !UUID_PATTERN.test(clientMessageId))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid client message ID" },
+        { status: 400 }
+      );
+    }
+    if (message.length > MAX_MESSAGE_LENGTH) {
+      return NextResponse.json(
+        { error: "メッセージが長すぎます。20,000文字以内で送信してください。" },
+        { status: 413 }
       );
     }
 
@@ -52,7 +123,22 @@ export async function POST(request: NextRequest) {
     }
 
     // Add user message to database
-    await addChatMessage(threadId, "user", message);
+    await saveMessageWithRetry(
+      threadId,
+      "user",
+      message,
+      clientMessageId || crypto.randomUUID()
+    );
+
+    try {
+      await titleChatThreadFromFirstMessage(
+        threadId,
+        session.email,
+        createChatTitle(message)
+      );
+    } catch (error) {
+      console.error("Failed to title chat thread:", { requestId, error });
+    }
 
     // Get conversation history
     const messages = await getChatMessages(threadId);
@@ -71,6 +157,21 @@ export async function POST(request: NextRequest) {
     const textEncoder = new TextEncoder();
 
     let fullResponse = "";
+    const assistantMessageId = crypto.randomUUID();
+    let responseSaved = false;
+
+    const saveAssistantResponse = async (content: string) => {
+      if (responseSaved) return;
+      const sanitized = sanitizeAssistantContent(content);
+      if (!sanitized) return;
+      await saveMessageWithRetry(
+        threadId,
+        "assistant",
+        sanitized,
+        assistantMessageId
+      );
+      responseSaved = true;
+    };
 
     const customStream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -79,10 +180,7 @@ export async function POST(request: NextRequest) {
             const { done, value } = await reader.read();
 
             if (done) {
-              // Save the full assistant response to database
-              if (fullResponse) {
-                await addChatMessage(threadId, "assistant", fullResponse);
-              }
+              await saveAssistantResponse(fullResponse);
               controller.close();
               break;
             }
@@ -93,7 +191,22 @@ export async function POST(request: NextRequest) {
             }
           }
         } catch (error) {
-          console.error("Streaming error:", error);
+          console.error("Streaming error:", { requestId, error });
+          const partialResponse = sanitizeAssistantContent(fullResponse);
+          if (partialResponse && !responseSaved) {
+            const recoveredResponse = `${partialResponse}${PARTIAL_RESPONSE_NOTICE}`;
+            try {
+              await saveAssistantResponse(recoveredResponse);
+              controller.enqueue(textEncoder.encode(PARTIAL_RESPONSE_NOTICE));
+              controller.close();
+              return;
+            } catch (saveError) {
+              console.error("Failed to save interrupted response:", {
+                requestId,
+                saveError,
+              });
+            }
+          }
           controller.error(error);
         }
       },
@@ -101,13 +214,14 @@ export async function POST(request: NextRequest) {
 
     return new NextResponse(customStream, {
       headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Content-Type-Options": "nosniff",
+        "X-Request-Id": requestId,
       },
     });
   } catch (error) {
-    console.error("Chat error:", error);
+    console.error("Chat error:", { requestId, error });
     return NextResponse.json(
       { error: "チャット処理に失敗しました" },
       { status: 500 }

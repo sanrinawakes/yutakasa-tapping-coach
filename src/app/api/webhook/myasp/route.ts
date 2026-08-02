@@ -5,6 +5,28 @@ const PAID_STATES = ["受領済み", "received", "paid"];
 const UNPAID_STATES = ["未受領", "申込時（支払前）", "申込時(支払前)", "unpaid", "申込時"];
 const CANCEL_INDICATORS = ["cancel", "退会", "解約", "解除", "中止"];
 
+interface MyAspWebhookBody {
+  data?: {
+    User?: {
+      mail?: unknown;
+      name1?: unknown;
+      receiptstate?: unknown;
+    };
+    Scenario?: { id?: unknown };
+  };
+  email?: unknown;
+  name?: unknown;
+  Type?: unknown;
+  type?: unknown;
+  scenario_id?: unknown;
+  receiptstate?: unknown;
+}
+
+function firstString(...values: unknown[]): string | null {
+  const value = values.find((item) => typeof item === "string");
+  return typeof value === "string" ? value : null;
+}
+
 function classifyReceipt(state: string | null | undefined): "paid" | "unpaid" | "unknown" {
   if (!state) return "unknown";
   const s = state.trim();
@@ -47,20 +69,26 @@ export async function POST(request: NextRequest) {
     // それ以外は form-urlencoded として URLSearchParams で解析する。
     const rawBody = await request.text();
     const trimmedBody = rawBody.trim();
-    let jsonBody: any = null;
+    let jsonBody: MyAspWebhookBody | null = null;
     if (trimmedBody.startsWith("{") || trimmedBody.startsWith("[")) {
       try {
-        jsonBody = JSON.parse(rawBody);
+        const parsed: unknown = JSON.parse(rawBody);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          jsonBody = parsed as MyAspWebhookBody;
+        }
       } catch {
         jsonBody = null;
       }
     }
     if (jsonBody) {
-      email = jsonBody?.data?.User?.mail || jsonBody?.email;
-      name = jsonBody?.data?.User?.name1 || jsonBody?.name;
-      type = jsonBody?.Type || jsonBody?.type;
-      scenarioId = jsonBody?.data?.Scenario?.id || jsonBody?.scenario_id || null;
-      receiptState = jsonBody?.data?.User?.receiptstate || jsonBody?.receiptstate || null;
+      email = firstString(jsonBody.data?.User?.mail, jsonBody.email);
+      name = firstString(jsonBody.data?.User?.name1, jsonBody.name);
+      type = firstString(jsonBody.Type, jsonBody.type);
+      scenarioId = firstString(jsonBody.data?.Scenario?.id, jsonBody.scenario_id);
+      receiptState = firstString(
+        jsonBody.data?.User?.receiptstate,
+        jsonBody.receiptstate
+      );
     } else {
       const params = new URLSearchParams(rawBody);
       email = params.get("data[User][mail]") || params.get("email");

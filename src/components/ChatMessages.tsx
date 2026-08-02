@@ -1,6 +1,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { sanitizeAssistantContent } from "@/lib/chat-thread";
 
 interface Message {
   id: string;
@@ -147,7 +148,7 @@ export default function ChatMessages({
                         em: ({ children }) => <em className="italic">{children}</em>,
                       }}
                     >
-                      {message.content}
+                      {sanitizeAssistantContent(message.content)}
                     </ReactMarkdown>
                   </div>
                 ) : (

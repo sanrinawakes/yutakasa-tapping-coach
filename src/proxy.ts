@@ -3,10 +3,9 @@ import { jwtVerify } from "jose";
 
 const protectedPaths = ["/chat"];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  // Check if the path is protected
   const isProtectedPath = protectedPaths.some((path) =>
     pathname.startsWith(path)
   );
@@ -15,7 +14,6 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Get the session token from cookies
   const token = request.cookies.get("session")?.value;
 
   if (!token) {
@@ -32,13 +30,11 @@ export async function middleware(request: NextRequest) {
     const secretKey = new TextEncoder().encode(jwtSecret);
     await jwtVerify(token, secretKey);
     return NextResponse.next();
-  } catch (error) {
+  } catch {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 }
 
 export const config = {
-  matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|public).*)",
-  ],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|public).*)"],
 };

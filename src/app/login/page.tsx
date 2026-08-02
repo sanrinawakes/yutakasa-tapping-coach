@@ -43,7 +43,7 @@ function LoginPageContent() {
       setErrorReason(null);
       setStep("otp");
       setCode("");
-    } catch (err) {
+    } catch {
       setError("エラーが発生しました");
     } finally {
       setLoading(false);
@@ -73,7 +73,7 @@ function LoginPageContent() {
       }
 
       router.push("/chat");
-    } catch (err) {
+    } catch {
       setError("エラーが発生しました");
     } finally {
       setLoading(false);

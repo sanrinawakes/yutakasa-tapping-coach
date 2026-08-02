@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import ChatSidebar from "@/components/ChatSidebar";
 import ChatMessages from "@/components/ChatMessages";
@@ -22,20 +22,39 @@ interface ChatMessage {
   created_at: string;
 }
 
+async function responseErrorMessage(response: Response, fallback: string) {
+  try {
+    const data = await response.json();
+    return typeof data?.error === "string" ? data.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initializing, setInitializing] = useState(true);
+  const [creatingThread, setCreatingThread] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const [remainingMessages, setRemainingMessages] = useState<number | null>(null);
   const [dailyLimit, setDailyLimit] = useState(15);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [threadError, setThreadError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const initializationStartedRef = useRef(false);
+  const createThreadPromiseRef = useRef<Promise<string | null> | null>(null);
+  const messageLoadVersionRef = useRef(0);
+  const skipNextMessageLoadRef = useRef<string | null>(null);
 
-  const loadUsage = async () => {
+  const loadUsage = useCallback(async () => {
     try {
       const response = await fetch("/api/chat/usage");
       if (response.ok) {
@@ -46,95 +65,182 @@ export default function ChatPage() {
     } catch (error) {
       console.error("Failed to load usage:", error);
     }
-  };
-
-  // Load threads and usage on mount
-  useEffect(() => {
-    loadThreads();
-    loadUsage();
   }, []);
 
-  // Load messages when thread changes
-  useEffect(() => {
-    if (currentThreadId) {
-      loadThreadMessages();
+  const loadThreads = useCallback(async () => {
+    try {
+      const response = await fetch("/api/threads");
+      if (response.status === 401) {
+        router.push("/login");
+        return [];
+      }
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "会話履歴を読み込めませんでした。")
+        );
+      }
+
+      const data = await response.json();
+      const loadedThreads = (data.threads || []) as ChatThread[];
+      setThreads(loadedThreads);
+      setCurrentUserEmail(typeof data.email === "string" ? data.email : null);
+      setThreadError(null);
+      setCurrentThreadId((current) => {
+        if (current && loadedThreads.some((thread) => thread.id === current)) {
+          return current;
+        }
+        return loadedThreads[0]?.id ?? null;
+      });
+
+      if (
+        loadedThreads.length === 0 &&
+        typeof window !== "undefined" &&
+        !localStorage.getItem("yutakasa_welcome_seen")
+      ) {
+        setShowWelcome(true);
+      }
+      return loadedThreads;
+    } catch (error) {
+      console.error("Failed to load threads:", error);
+      setThreadError(
+        error instanceof Error
+          ? error.message
+          : "会話履歴を読み込めませんでした。画面を更新してください。"
+      );
+      return null;
     }
-  }, [currentThreadId]);
+  }, [router]);
+
+  const loadThreadMessages = useCallback(async (threadId: string) => {
+    const loadVersion = ++messageLoadVersionRef.current;
+    try {
+      const response = await fetch(`/api/threads/${threadId}`);
+      if (response.status === 401) {
+        router.push("/login");
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "この会話を読み込めませんでした。")
+        );
+      }
+
+      const data = await response.json();
+      const loadedMessages = (data.messages || []) as ChatMessage[];
+      if (loadVersion === messageLoadVersionRef.current) {
+        setMessages(loadedMessages);
+        setHistoryError(null);
+      }
+      return loadedMessages;
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+      if (loadVersion === messageLoadVersionRef.current) {
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "会話を読み込めませんでした。もう一度選び直してください。"
+        );
+      }
+      return null;
+    }
+  }, [router]);
+
+  // Load threads and usage once. Strict Mode runs effects twice in development.
+  useEffect(() => {
+    if (initializationStartedRef.current) return;
+    initializationStartedRef.current = true;
+
+    Promise.all([loadThreads(), loadUsage()]).finally(() => {
+      setInitializing(false);
+    });
+  }, [loadThreads, loadUsage]);
+
+  // Load messages when thread changes.
+  useEffect(() => {
+    if (!currentThreadId) {
+      messageLoadVersionRef.current += 1;
+      setMessages([]);
+      return;
+    }
+
+    if (skipNextMessageLoadRef.current === currentThreadId) {
+      skipNextMessageLoadRef.current = null;
+      return;
+    }
+
+    void loadThreadMessages(currentThreadId);
+  }, [currentThreadId, loadThreadMessages]);
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const loadThreads = async () => {
-    try {
-      const response = await fetch("/api/threads");
-      if (response.ok) {
-        const data = await response.json();
-        setThreads(data.threads || []);
-        if (data.threads?.length > 0 && !currentThreadId) {
-          setCurrentThreadId(data.threads[0].id);
-        } else if (!currentThreadId) {
-          // 初回ログイン判定: threadsが0件 かつ welcome未表示
-          if (typeof window !== "undefined" && !localStorage.getItem("yutakasa_welcome_seen")) {
-            setShowWelcome(true);
-          }
-          createNewThread();
+  const createNewThread = async (): Promise<string | null> => {
+    if (createThreadPromiseRef.current) {
+      return createThreadPromiseRef.current;
+    }
+
+    setCreatingThread(true);
+    setThreadError(null);
+    const creation = (async () => {
+      try {
+        const response = await fetch("/api/threads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "新しいチャット" }),
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            await responseErrorMessage(response, "新しい会話を作成できませんでした。")
+          );
         }
-      } else if (response.status === 401) {
-        router.push("/login");
-      }
-    } catch (error) {
-      console.error("Failed to load threads:", error);
-    }
-  };
 
-  const loadThreadMessages = async () => {
-    if (!currentThreadId) return;
-
-    try {
-      const response = await fetch(`/api/threads/${currentThreadId}`);
-      if (response.ok) {
         const data = await response.json();
-        setMessages(data.messages || []);
-      }
-    } catch (error) {
-      console.error("Failed to load messages:", error);
-    }
-  };
-
-  const createNewThread = async () => {
-    try {
-      const response = await fetch("/api/threads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "新しいチャット" }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setThreads((prev) => [data.thread, ...prev]);
+        const thread = data.thread as ChatThread;
+        setThreads((previous) =>
+          previous.some((item) => item.id === thread.id)
+            ? previous
+            : [thread, ...previous]
+        );
+        skipNextMessageLoadRef.current = thread.id;
         setCurrentThreadId(data.thread.id);
         setMessages([]);
+        return thread.id;
+      } catch (error) {
+        console.error("Failed to create thread:", error);
+        setThreadError(
+          error instanceof Error
+            ? error.message
+            : "新しい会話を作成できませんでした。"
+        );
+        return null;
+      } finally {
+        setCreatingThread(false);
+        createThreadPromiseRef.current = null;
       }
-    } catch (error) {
-      console.error("Failed to create thread:", error);
-    }
+    })();
+
+    createThreadPromiseRef.current = creation;
+    return creation;
   };
 
   const handleSendMessage = async (message: string) => {
-    if (!currentThreadId) {
-      await createNewThread();
-      return;
+    setSendError(null);
+    const threadId = currentThreadId ?? (await createNewThread());
+    if (!threadId) {
+      return false;
     }
 
     setLoading(true);
     setStreaming(true);
+    const clientMessageId = crypto.randomUUID();
 
     try {
       const userMessage: ChatMessage = {
-        id: Date.now().toString(),
-        thread_id: currentThreadId,
+        id: clientMessageId,
+        thread_id: threadId,
         role: "user",
         content: message,
         created_at: new Date().toISOString(),
@@ -145,31 +251,37 @@ export default function ChatPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          threadId: currentThreadId,
+          threadId,
           message,
+          clientMessageId,
         }),
       });
 
       if (response.status === 429) {
         const errorData = await response.json();
+        setMessages((previous) =>
+          previous.filter((item) => item.id !== clientMessageId)
+        );
         const limitMessage: ChatMessage = {
           id: (Date.now() + 1).toString(),
-          thread_id: currentThreadId,
+          thread_id: threadId,
           role: "assistant",
           content: errorData.error || "本日の利用回数に達しました。明日またご利用ください。",
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, limitMessage]);
-        loadUsage();
-        return;
+        void loadUsage();
+        return true;
       }
 
       if (!response.ok) {
-        throw new Error("Failed to send message");
+        throw new Error(
+          await responseErrorMessage(response, "メッセージを送信できませんでした。")
+        );
       }
 
       let assistantMessage = "";
-      const assistantId = (Date.now() + 1).toString();
+      const assistantId = crypto.randomUUID();
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No response body");
@@ -181,7 +293,7 @@ export default function ChatPage() {
 
         if (done) break;
 
-        const text = decoder.decode(value);
+        const text = decoder.decode(value, { stream: true });
         assistantMessage += text;
 
         setMessages((prev) => {
@@ -195,7 +307,7 @@ export default function ChatPage() {
               ...prev,
               {
                 id: assistantId,
-                thread_id: currentThreadId,
+                thread_id: threadId,
                 role: "assistant" as const,
                 content: assistantMessage,
                 created_at: new Date().toISOString(),
@@ -205,14 +317,60 @@ export default function ChatPage() {
         });
       }
 
-      loadThreads();
-      loadUsage();
+      assistantMessage += decoder.decode();
+      if (!assistantMessage.trim()) {
+        throw new Error("AIから回答を受信できませんでした。もう一度お試しください。");
+      }
+
+      await loadThreadMessages(threadId);
+      await Promise.all([loadThreads(), loadUsage()]);
+      return true;
     } catch (error) {
       console.error("Failed to send message:", error);
+      setSendError(
+        error instanceof Error
+          ? error.message
+          : "メッセージを送信できませんでした。"
+      );
+      const persistedMessages = await loadThreadMessages(threadId);
+      const userMessageWasSaved =
+        persistedMessages?.some((item) => item.id === clientMessageId) ?? false;
+      if (!userMessageWasSaved) {
+        setMessages((previous) =>
+          previous.filter((item) => item.id !== clientMessageId)
+        );
+      }
+      return userMessageWasSaved;
     } finally {
       setLoading(false);
       setStreaming(false);
     }
+  };
+
+  const handleRenameThread = async (threadId: string, title: string) => {
+    const response = await fetch("/api/threads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId, title }),
+    });
+
+    if (!response.ok) {
+      const message = await responseErrorMessage(
+        response,
+        "会話の題名を変更できませんでした。"
+      );
+      setThreadError(message);
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+    const updatedThread = data.thread as ChatThread;
+    setThreads((previous) =>
+      previous.map((thread) =>
+        thread.id === updatedThread.id ? updatedThread : thread
+      )
+    );
+    setThreadError(null);
   };
 
   const handleDeleteThread = async (threadId: string) => {
@@ -257,16 +415,44 @@ export default function ChatPage() {
         onSelectThread={setCurrentThreadId}
         onCreateThread={createNewThread}
         onDeleteThread={handleDeleteThread}
+        onRenameThread={handleRenameThread}
         onLogout={handleLogout}
+        currentUserEmail={currentUserEmail}
+        isCreatingThread={creatingThread}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {(threadError || historyError || sendError) && (
+          <div
+            role="alert"
+            className="flex items-start justify-between gap-4 px-5 py-3 text-sm"
+            style={{
+              backgroundColor: "rgba(220, 38, 38, 0.08)",
+              borderBottom: "1px solid rgba(220, 38, 38, 0.2)",
+              color: "var(--text-primary)",
+            }}
+          >
+            <p>{sendError || historyError || threadError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setThreadError(null);
+                setHistoryError(null);
+                setSendError(null);
+              }}
+              className="flex-shrink-0 font-bold"
+              aria-label="エラー表示を閉じる"
+            >
+              閉じる
+            </button>
+          </div>
+        )}
         <ChatMessages messages={messages} messagesEndRef={messagesEndRef} />
         <ChatInput
           onSendMessage={handleSendMessage}
-          disabled={loading}
+          disabled={loading || initializing || creatingThread}
           isStreaming={streaming}
           remainingMessages={remainingMessages}
           dailyLimit={dailyLimit}
