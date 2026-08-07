@@ -278,6 +278,36 @@ describe("Gemini generation retry", () => {
     expect(output).toContain("娘さんの言葉を思い出し");
   });
 
+  it("falls back to plain text after repeated structured validation failures", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(successfulStream('{"acknowledgement":"","steps":[]}'))
+      .mockResolvedValueOnce(successfulStream('{"acknowledgement":"","steps":[]}'))
+      .mockResolvedValueOnce(successfulStream('{"acknowledgement":"","steps":[]}'))
+      .mockResolvedValueOnce(
+        successfulStream(
+          "借金額を見た瞬間に出る不安を1から10で数値化し、その数値が下がるまで講座の第12回の手順でタッピングしてください。"
+        )
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "借金の返済が不安です。" },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(4);
+    expect(output).toContain("借金額を見た瞬間に出る不安を1から10で数値化");
+    const fallbackRequest = mocks.generateContentStream.mock.calls[3]?.[0] as {
+      generationConfig?: { responseSchema?: unknown; responseMimeType?: unknown };
+      systemInstruction?: string;
+    };
+    expect(fallbackRequest.generationConfig?.responseSchema).toBeUndefined();
+    expect(fallbackRequest.generationConfig?.responseMimeType).toBeUndefined();
+    expect(fallbackRequest.systemInstruction).toContain(
+      "構造化JSONの代わりに"
+    );
+  });
+
   it("sends only the latest turn plus minimal context to Gemini", async () => {
     mocks.generateContentStream.mockResolvedValueOnce(
       successfulStream(validStructuredResponse("今の不安を確認したいのですね。"))

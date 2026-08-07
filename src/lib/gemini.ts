@@ -11,6 +11,7 @@ import {
 import {
   enforceOneSentenceResponse,
   isOneSentenceRequest,
+  sanitizeAssistantContent,
 } from "./chat-thread";
 import {
   parseStructuredCoachResponse,
@@ -120,6 +121,9 @@ const COACH_RESPONSE_SCHEMA: ResponseSchema = {
   ],
 };
 
+const PLAIN_TEXT_FALLBACK_INSTRUCTION =
+  "\n\n構造化JSONの代わりに、利用者へそのまま表示できる本文だけを日本語で返してください。JSON、コードブロック、見出し名のラベル、補足メモは出さないでください。";
+
 export function isRetryableGeminiError(error: unknown): boolean {
   const status =
     typeof error === "object" && error !== null && "status" in error
@@ -212,6 +216,16 @@ function formatOneSentenceResponse(
     error.name = "GeminiResponseValidationError";
     throw error;
   }
+}
+
+function formatPlainTextFallbackResponse(content: string): string {
+  const formatted = sanitizeAssistantContent(content)
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+  if (!formatted) {
+    throw new Error("Plain-text fallback response was empty");
+  }
+  return formatted;
 }
 
 export async function getSystemPrompt(
@@ -325,7 +339,6 @@ export async function streamChatCompletion(
       role: msg.role === "user" ? "user" : "model",
       parts: [{ text: msg.content }],
     })),
-    systemInstruction: systemPrompt,
     generationConfig: {
       temperature: 0.35,
       topP: 0.85,
@@ -334,22 +347,36 @@ export async function streamChatCompletion(
       // can cut Japanese output mid-sentence, so length is controlled by the
       // system instruction instead of a small hard cap.
       maxOutputTokens: 8192,
-      ...(useStructuredResponse
-        ? {
-            responseMimeType: "application/json",
-            responseSchema: COACH_RESPONSE_SCHEMA,
-          }
-        : {}),
     },
+  };
+  const structuredRequest = {
+    contents: boundedMessages.map((msg) => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.content }],
+    })),
+    systemInstruction: systemPrompt,
+    generationConfig: useStructuredResponse
+      ? {
+          ...request.generationConfig,
+          responseMimeType: "application/json",
+          responseSchema: COACH_RESPONSE_SCHEMA,
+        }
+      : request.generationConfig,
+  };
+  const plainTextFallbackRequest = {
+    ...request,
+    systemInstruction: `${systemPrompt}${PLAIN_TEXT_FALLBACK_INSTRUCTION}`,
   };
 
   return new ReadableStream<string>({
     async start(controller) {
-      let bufferedResponse = "";
+      let lastError: unknown = null;
+      let lastValidationError: unknown = null;
 
       for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
+        let bufferedResponse = "";
         try {
-          const stream = await model.generateContentStream(request);
+          const stream = await model.generateContentStream(structuredRequest);
           for await (const chunk of stream.stream) {
             const text = chunk.text();
             if (text) {
@@ -364,17 +391,18 @@ export async function streamChatCompletion(
           controller.close();
           return;
         } catch (error) {
+          lastError = error;
+          if (isResponseValidationError(error)) {
+            lastValidationError = error;
+          }
           const canRetry =
             (isRetryableGeminiError(error) ||
               isResponseValidationError(error)) &&
             attempt < GEMINI_MAX_ATTEMPTS;
           if (!canRetry) {
-            console.error("Gemini streaming error:", error);
-            controller.error(error);
-            return;
+            break;
           }
 
-          bufferedResponse = "";
           const delayMs = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 1_200;
           console.warn("Retrying Gemini generation before response started:", {
             attempt,
@@ -384,6 +412,36 @@ export async function streamChatCompletion(
           await wait(delayMs);
         }
       }
+
+      if (useStructuredResponse && lastValidationError) {
+        try {
+          let fallbackResponse = "";
+          const fallbackStream =
+            await model.generateContentStream(plainTextFallbackRequest);
+          for await (const chunk of fallbackStream.stream) {
+            const text = chunk.text();
+            if (text) {
+              fallbackResponse += text;
+            }
+          }
+
+          const formatted = formatPlainTextFallbackResponse(fallbackResponse);
+          controller.enqueue(formatted);
+          controller.close();
+          console.warn(
+            "Recovered Gemini response with plain-text fallback after validation failures."
+          );
+          return;
+        } catch (fallbackError) {
+          console.error("Gemini plain-text fallback failed:", fallbackError);
+          console.error("Gemini streaming error:", lastValidationError);
+          controller.error(lastValidationError);
+          return;
+        }
+      }
+
+      console.error("Gemini streaming error:", lastError);
+      controller.error(lastError);
     },
   });
 }
