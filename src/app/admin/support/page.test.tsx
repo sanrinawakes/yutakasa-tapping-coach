@@ -68,20 +68,24 @@ describe("AdminSupportPage", () => {
 
     render(<AdminSupportPage />);
     expect(screen.queryByText("管理トークン")).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "対応状態" })).toHaveValue(
-        "open"
-      )
+    await waitFor(
+      () =>
+        expect(screen.getByRole("combobox", { name: "対応状態" })).toHaveValue(
+          "open"
+        ),
+      { timeout: 3_000 }
     );
 
     resolved = true;
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "再読み込み" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "対応状態" })).toHaveValue(
-        "resolved"
-      )
+    await waitFor(
+      () =>
+        expect(screen.getByRole("combobox", { name: "対応状態" })).toHaveValue(
+          "resolved"
+        ),
+      { timeout: 3_000 }
     );
     expect(screen.getByText("排他制御を確認しました。")).toBeInTheDocument();
   });

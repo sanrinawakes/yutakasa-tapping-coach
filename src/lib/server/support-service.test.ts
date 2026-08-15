@@ -1,5 +1,6 @@
 import { getSupabase } from "@/lib/supabase";
 import {
+  appendAdminSupportMessage,
   appendUserSupportMessage,
   claimSupportTicket,
   createSupportTicket,
@@ -274,6 +275,7 @@ describe("support attachment delivery", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: "email-id" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -295,5 +297,158 @@ describe("support attachment delivery", () => {
       "https://api.resend.com/emails",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload).toMatchObject({
+      to: ["support@example.com"],
+      reply_to: "member@example.com",
+    });
+    expect(payload.text).toContain("アプリ内履歴には追加されません");
+  });
+
+  it("sets the user as reply-to on follow-up notifications to the admin", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: "email-id" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ticketQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { subject: "追加確認" },
+        error: null,
+      }),
+    };
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({
+        data: [{ message_id: ticketId, created: true }],
+        error: null,
+      }),
+      from: vi.fn().mockReturnValue(ticketQuery),
+    } as never);
+
+    await appendUserSupportMessage({
+      userEmail: "member@example.com",
+      ticketId,
+      body: "追加情報です。",
+      clientRequestId: "74e6508f-c0ff-4689-ab68-dac8fe324ac9",
+      files: [],
+    });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload).toMatchObject({
+      to: ["support@example.com"],
+      reply_to: "member@example.com",
+    });
+    expect(payload.text).toContain("アプリ内履歴には追加されません");
+  });
+
+  it.each([
+    "invalid\n@example.com",
+    "member@example.com,copy@example.com",
+    "member@example.com;copy@example.com",
+    "Name<member@example.com>",
+    '"Member" <member@example.com>',
+    "member\u0000@example.com",
+  ])("records invalid reply-to %j without calling Resend", async (userEmail) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const workLogInsert = vi.fn().mockResolvedValue({ error: null });
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({
+        data: [{ ticket_id: ticketId, message_id: ticketId, created: true }],
+        error: null,
+      }),
+      from: vi.fn().mockReturnValue({ insert: workLogInsert }),
+    } as never);
+
+    await createSupportTicket({
+      ...newTicketInput(),
+      userEmail,
+      files: [],
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(workLogInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: "notification_failed" })
+    );
+  });
+
+  it("fails closed and preserves the ticket when the notification recipient is missing", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const workLogInsert = vi.fn().mockResolvedValue({ error: null });
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({
+        data: [{ ticket_id: ticketId, message_id: ticketId, created: true }],
+        error: null,
+      }),
+      from: vi.fn().mockReturnValue({ insert: workLogInsert }),
+    } as never);
+
+    await expect(
+      createSupportTicket({
+        ...newTicketInput(),
+        userEmail: "member@example.com",
+        files: [],
+      })
+    ).resolves.toMatchObject({ ticket_id: ticketId, created: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(workLogInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticket_id: ticketId,
+        event_type: "notification_failed",
+        metadata: expect.objectContaining({
+          recipient_type: "admin",
+          error: "Invalid notification recipient address",
+        }),
+      })
+    );
+  });
+
+  it("does not set the user as reply-to on admin reply notifications", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: "email-id" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ticketQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { user_email: "member@example.com", subject: "回答確認" },
+        error: null,
+      }),
+    };
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({
+        data: [{ message_id: ticketId, created: true }],
+        error: null,
+      }),
+      from: vi.fn().mockReturnValue(ticketQuery),
+    } as never);
+
+    await appendAdminSupportMessage({
+      ticketId,
+      body: "確認結果です。",
+      clientRequestId: "74e6508f-c0ff-4689-ab68-dac8fe324ac9",
+    });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload).toMatchObject({ to: ["member@example.com"] });
+    expect(payload).not.toHaveProperty("reply_to");
   });
 });

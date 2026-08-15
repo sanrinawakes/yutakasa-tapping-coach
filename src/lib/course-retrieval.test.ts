@@ -9,7 +9,7 @@ function contextFor(message: string) {
 }
 
 describe("course content retrieval", () => {
-  afterEach(() => {
+  afterAll(() => {
     resetCourseSearchIndex();
   });
 

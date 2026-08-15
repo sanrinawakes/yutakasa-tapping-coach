@@ -19,8 +19,6 @@ import {
 import { SupportRequestError } from "@/lib/server/support-request";
 
 const SUPPORT_BUCKET = "yutakasa-support";
-const SUPPORT_NOTIFICATION_EMAIL =
-  process.env.SUPPORT_NOTIFICATION_EMAIL || "181wyc@gmail.com";
 const SUPPORT_FROM_EMAIL = process.env.FROM_EMAIL || "noreply@silversense.cc";
 const SUPPORT_APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
@@ -28,6 +26,10 @@ const SUPPORT_APP_URL =
   "https://yutakasa-tapping-coach.vercel.app";
 const SUPPORT_AUTOMATION_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 const SUPPORT_EMAIL_TIMEOUT_MS = 5_000;
+
+function supportNotificationEmail(): string {
+  return process.env.SUPPORT_NOTIFICATION_EMAIL?.trim() || "";
+}
 
 export type SupportAttachment = {
   id: string;
@@ -84,14 +86,33 @@ function shouldSendEmail(email: string): boolean {
   return process.env.VERCEL_ENV !== "preview";
 }
 
+function validEmailHeaderAddress(value: string): string | null {
+  const normalized = value.trim();
+  if (/[\u0000-\u001f\u007f,;<>"]/u.test(normalized)) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)
+    ? normalized
+    : null;
+}
+
 async function sendSupportEmail(params: {
   to: string;
   subject: string;
   text: string;
+  replyTo?: string;
 }): Promise<{ sent: boolean; error: string | null }> {
-  if (!shouldSendEmail(params.to)) return { sent: false, error: null };
+  const recipient = validEmailHeaderAddress(params.to);
+  if (!recipient) {
+    return { sent: false, error: "Invalid notification recipient address" };
+  }
+  if (!shouldSendEmail(recipient)) return { sent: false, error: null };
   if (!process.env.RESEND_API_KEY) {
     return { sent: false, error: "RESEND_API_KEY is not configured" };
+  }
+  const replyTo = params.replyTo
+    ? validEmailHeaderAddress(params.replyTo)
+    : null;
+  if (params.replyTo && !replyTo) {
+    return { sent: false, error: "Invalid reply-to address" };
   }
 
   try {
@@ -104,9 +125,10 @@ async function sendSupportEmail(params: {
       },
       body: JSON.stringify({
         from: `豊かさAI サポート <${SUPPORT_FROM_EMAIL}>`,
-        to: [params.to],
+        to: [recipient],
         subject: params.subject,
         text: params.text,
+        ...(replyTo ? { reply_to: replyTo } : {}),
       }),
     });
 
@@ -442,7 +464,8 @@ export async function createSupportTicket(params: {
   }
   if (result?.created && !isTestAddress(params.userEmail)) {
     const notification = await sendSupportEmail({
-      to: SUPPORT_NOTIFICATION_EMAIL,
+      to: supportNotificationEmail(),
+      replyTo: params.userEmail,
       subject: `【豊かさAI サポート】${subject}`,
       text:
         `豊かさAIの問い合わせフォームから連絡が届きました。\n\n` +
@@ -450,6 +473,7 @@ export async function createSupportTicket(params: {
         `分類: ${params.category}\n` +
         `件名: ${subject}\n\n` +
         `${body}\n\n` +
+        `このメールに返信すると、利用者へ直接メールで返信できます。メールでの返信内容はアプリ内履歴には追加されません。\n\n` +
         `管理画面: ${SUPPORT_APP_URL}/admin/support`,
     });
     await recordNotificationResult(result.ticket_id, "admin", notification);
@@ -494,11 +518,13 @@ export async function appendUserSupportMessage(params: {
       .eq("id", params.ticketId)
       .maybeSingle();
     const notification = await sendSupportEmail({
-      to: SUPPORT_NOTIFICATION_EMAIL,
+      to: supportNotificationEmail(),
+      replyTo: params.userEmail,
       subject: `【豊かさAI サポート追記】${ticket?.subject ?? "問い合わせ"}`,
       text:
         `利用者から追加メッセージが届きました。\n\n` +
         `利用者: ${params.userEmail}\n\n${body}\n\n` +
+        `このメールに返信すると、利用者へ直接メールで返信できます。メールでの返信内容はアプリ内履歴には追加されません。\n\n` +
         `管理画面: ${SUPPORT_APP_URL}/admin/support`,
     });
     await recordNotificationResult(params.ticketId, "admin", notification);

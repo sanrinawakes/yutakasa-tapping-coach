@@ -55,6 +55,36 @@ describe("getAdminAuthError", () => {
     expect(await getAdminAuthError()).toBeNull();
   });
 
+  it("keeps admin access separate from the notification recipient", async () => {
+    process.env.SUPPORT_NOTIFICATION_EMAIL = "support@example.com";
+    getSessionMock.mockResolvedValue({
+      email: "owner@example.com",
+      iat: 1,
+      exp: 2,
+    });
+
+    expect(await getAdminAuthError()).toBeNull();
+
+    getSessionMock.mockResolvedValue({
+      email: "support@example.com",
+      iat: 1,
+      exp: 2,
+    });
+    expect((await getAdminAuthError())?.status).toBe(403);
+  });
+
+  it("fails closed when only the notification recipient is configured", async () => {
+    delete process.env.SUPPORT_ADMIN_EMAIL;
+    process.env.SUPPORT_NOTIFICATION_EMAIL = "support@example.com";
+    getSessionMock.mockResolvedValue({
+      email: "support@example.com",
+      iat: 1,
+      exp: 2,
+    });
+
+    expect((await getAdminAuthError())?.status).toBe(500);
+  });
+
   it("fails closed when the owner email is invalid", async () => {
     process.env.SUPPORT_ADMIN_EMAIL = "not-an-email";
     getSessionMock.mockResolvedValue({
