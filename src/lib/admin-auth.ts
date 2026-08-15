@@ -2,10 +2,8 @@ import { NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
 
 function getOwnerEmail(): string | null {
-  const configured =
-    process.env.SUPPORT_ADMIN_EMAIL ||
-    process.env.SUPPORT_NOTIFICATION_EMAIL ||
-    "181wyc@gmail.com";
+  const configured = process.env.SUPPORT_ADMIN_EMAIL;
+  if (!configured) return null;
   const ownerEmail = configured.trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(ownerEmail) ? ownerEmail : null;
 }
