@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "pretest": "npm run sync:course-content",
     "test": "vitest run",
+    "test:conversation-live": "tsx scripts/verify-conversation-quality.ts",
     "test:support-db": "bash scripts/test-support-migration.sh",
     "test:watch": "vitest"
   },

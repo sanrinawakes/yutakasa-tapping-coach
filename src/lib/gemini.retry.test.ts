@@ -52,6 +52,18 @@ function validStructuredResponse(
   });
 }
 
+const draftQuestion = `受講者から届いた次の質問への返信文を考えてください。
+タッピング中に別の相手への怒りが強く出てきました。
+① 今いちばん強く出ている相手へ対象を変える進め方で大丈夫ですか？
+② 最初の相手への怒りは全くなくなり、その怒りがあったことも忘れていました。十分に感情を扱えたと考えてよいですか？
+連絡に気づくのが1ヶ月以上遅れたので、申し訳ないという謝罪も入れてください。`;
+
+const validDraftReply = `ご連絡に気づくのが1ヶ月以上遅くなってしまい、申し訳ありません。
+
+① はい、その時点でいちばん強く出ている相手への感情に対象を変える進め方で大丈夫です。
+
+② はい。今その出来事を思い浮かべた時の感情の強度を数値で確認し、3以下なら十分に扱えたものとして一区切りにしてください。`;
+
 async function readText(stream: ReadableStream<string>) {
   const reader = stream.getReader();
   let output = "";
@@ -305,6 +317,86 @@ describe("Gemini generation retry", () => {
     expect(fallbackRequest.generationConfig?.responseMimeType).toBeUndefined();
     expect(fallbackRequest.systemInstruction).toContain(
       "構造化JSONの代わりに"
+    );
+  });
+
+  it("uses draft-reply mode for an operator writing to a customer", async () => {
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(validDraftReply)
+    );
+
+    const output = await readText(
+      await streamChatCompletion([{ role: "user", content: draftQuestion }])
+    );
+
+    expect(output).toBe(validDraftReply);
+    const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
+      generationConfig?: { responseSchema?: unknown; responseMimeType?: unknown };
+      systemInstruction?: string;
+    };
+    expect(request.generationConfig?.responseSchema).toBeUndefined();
+    expect(request.generationConfig?.responseMimeType).toBeUndefined();
+    expect(request.systemInstruction).toContain("運営者の返信文作成担当");
+    expect(request.systemInstruction).toContain("①・②を本文に残し");
+    expect(request.systemInstruction).toContain("明確な謝罪");
+  });
+
+  it("retries draft replies that omit questions or invent guarantees", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(
+        successfulStream(
+          "怒りには複数の層があります。タッピングを続けてください。"
+        )
+      )
+      .mockResolvedValueOnce(
+        successfulStream(`確認が1ヶ月以上遅くなり、申し訳ありません。
+① はい、このままで大丈夫です。
+② はい、続ければ確実に外れていきます。`)
+      )
+      .mockResolvedValueOnce(successfulStream(validDraftReply));
+
+    const output = await readText(
+      await streamChatCompletion([{ role: "user", content: draftQuestion }])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(3);
+    expect(output).toBe(validDraftReply);
+    expect(output).not.toContain("確実に外れ");
+  });
+
+  it("keeps the original numbered question through repeated correction turns", async () => {
+    const longAnchor = `${draftQuestion}\n${"補足情報です。".repeat(1_300)}\n① 進め方は合っていますか？\n② 感情を十分に扱えていますか？`;
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(validDraftReply)
+    );
+
+    await readText(
+      await streamChatCompletion([
+        { role: "user", content: longAnchor },
+        { role: "assistant", content: "一般的な説明だけを返しました。" },
+        { role: "user", content: "1ヶ月以上遅れた謝罪を入れて。" },
+        { role: "assistant", content: "謝罪だけを返しました。" },
+        { role: "user", content: "①と②に答えてないやん。" },
+        { role: "assistant", content: "質問をもう一度送ってください。" },
+        {
+          role: "user",
+          content: "イエスかノーか、①と②に真面目に答えて。",
+        },
+      ])
+    );
+
+    const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
+      contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+    };
+    const anchor = request.contents.find(
+      (message) =>
+        message.role === "user" &&
+        message.parts[0]?.text.includes("受講者から届いた")
+    );
+    expect(anchor?.parts[0]?.text).toContain("① 進め方は合っていますか？");
+    expect(anchor?.parts[0]?.text).toContain("② 感情を十分に扱えていますか？");
+    expect(request.contents.at(-1)?.parts[0]?.text).toContain(
+      "①と②に真面目に答えて"
     );
   });
 

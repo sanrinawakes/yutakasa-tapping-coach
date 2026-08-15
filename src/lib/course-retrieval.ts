@@ -269,6 +269,9 @@ export function selectCourseContext(
     const basicChunk = Array.from(chunks.values()).find((chunk) =>
       /第1回[：:]/u.test(chunk.title)
     );
+    if (basicChunk) {
+      prioritizedDocumentIds.add(basicChunk.documentId);
+    }
     addChunk(basicChunk);
   }
 
