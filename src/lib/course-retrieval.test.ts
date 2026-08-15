@@ -66,4 +66,14 @@ describe("course content retrieval", () => {
       "あなたの今の収入を見て、これでは足りない"
     );
   });
+
+  it("keeps a generic tapping procedure question within the basic lesson", () => {
+    const context = contextFor(
+      "怒りをタッピング中に別の相手への怒りが出ました。この場合の進め方と終了の判断方法を教えてください。"
+    );
+
+    expect(context.titles.length).toBeGreaterThan(0);
+    expect(context.titles.every((title) => /第1回/u.test(title))).toBe(true);
+    expect(context.titles.some((title) => /第20回/u.test(title))).toBe(false);
+  });
 });
