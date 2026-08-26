@@ -14,6 +14,11 @@ export interface ChatThreadMessageCount {
   chat_messages?: Array<{ count: number }> | null;
 }
 
+export interface EmptyChatThreadCandidate extends ChatThreadMessageCount {
+  id: string;
+  title: string;
+}
+
 function normalizeSingleLine(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
@@ -127,4 +132,16 @@ export function enforceOneSentenceResponse(content: string): string {
 
 export function hasChatMessages(thread: ChatThreadMessageCount): boolean {
   return (thread.chat_messages?.[0]?.count ?? 0) > 0;
+}
+
+export function pickReusableEmptyChatThread<T extends EmptyChatThreadCandidate>(
+  threads: T[]
+): T | null {
+  return (
+    threads.find(
+      (thread) =>
+        sanitizeChatTitle(thread.title) === DEFAULT_CHAT_TITLE &&
+        !hasChatMessages(thread)
+    ) ?? null
+  );
 }

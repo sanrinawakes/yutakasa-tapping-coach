@@ -2,6 +2,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   DEFAULT_CHAT_TITLE,
   hasChatMessages,
+  pickReusableEmptyChatThread,
   sanitizeAssistantContent,
   sanitizeChatTitle,
 } from "@/lib/chat-thread";
@@ -63,6 +64,49 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+}
+
+type ChatThreadWithMessageCount = ChatThread & {
+  chat_messages?: Array<{ count: number }> | null;
+};
+
+async function listReusableEmptyChatThreads(
+  userEmail: string
+): Promise<ChatThreadWithMessageCount[]> {
+  const { data, error } = await getSupabase()
+    .from("chat_threads")
+    .select("*, chat_messages(count)")
+    .eq("user_email", userEmail)
+    .eq("title", DEFAULT_CHAT_TITLE)
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (error) throw error;
+
+  return ((data || []) as ChatThreadWithMessageCount[]).filter(
+    (thread) => !hasChatMessages(thread)
+  );
+}
+
+async function removeDuplicateEmptyChatThreads(
+  userEmail: string,
+  keepThreadId: string
+) {
+  const emptyThreads = await listReusableEmptyChatThreads(userEmail);
+  const deleteIds = emptyThreads
+    .filter((thread) => thread.id !== keepThreadId)
+    .map((thread) => thread.id);
+
+  if (deleteIds.length === 0) return;
+
+  const { error } = await getSupabase()
+    .from("chat_threads")
+    .delete()
+    .in("id", deleteIds)
+    .eq("user_email", userEmail)
+    .eq("title", DEFAULT_CHAT_TITLE);
+
+  if (error) throw error;
 }
 
 // Subscriber functions
@@ -155,16 +199,38 @@ export async function verifyOTPCode(email: string, code: string) {
 // Chat thread functions
 export async function createChatThread(userEmail: string, title?: string) {
   const supabase = getSupabase();
+  const sanitizedTitle = sanitizeChatTitle(title ?? DEFAULT_CHAT_TITLE);
+
+  if (sanitizedTitle === DEFAULT_CHAT_TITLE) {
+    const reusableThread = pickReusableEmptyChatThread(
+      await listReusableEmptyChatThreads(userEmail)
+    );
+    if (reusableThread) {
+      await removeDuplicateEmptyChatThreads(userEmail, reusableThread.id);
+      const thread = {
+        id: reusableThread.id,
+        user_email: reusableThread.user_email,
+        title: reusableThread.title,
+        created_at: reusableThread.created_at,
+        updated_at: reusableThread.updated_at,
+      };
+      return thread as ChatThread;
+    }
+  }
+
   const { data, error } = await supabase
     .from("chat_threads")
     .insert({
       user_email: userEmail,
-      title: sanitizeChatTitle(title ?? DEFAULT_CHAT_TITLE),
+      title: sanitizedTitle,
     })
     .select()
     .single();
 
   if (error) throw error;
+  if (sanitizedTitle === DEFAULT_CHAT_TITLE) {
+    await removeDuplicateEmptyChatThreads(userEmail, data.id);
+  }
   return data as ChatThread;
 }
 

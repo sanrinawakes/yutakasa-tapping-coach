@@ -4,6 +4,7 @@ import {
   enforceOneSentenceResponse,
   hasChatMessages,
   isOneSentenceRequest,
+  pickReusableEmptyChatThread,
   sanitizeAssistantContent,
   sanitizeChatTitle,
 } from "./chat-thread";
@@ -89,5 +90,38 @@ describe("chat thread helpers", () => {
     expect(hasChatMessages({ chat_messages: [{ count: 2 }] })).toBe(true);
     expect(hasChatMessages({ chat_messages: [{ count: 0 }] })).toBe(false);
     expect(hasChatMessages({})).toBe(false);
+  });
+
+  it("reuses the first empty default-title thread", () => {
+    expect(
+      pickReusableEmptyChatThread([
+        {
+          id: "thread-1",
+          title: "新しいチャット",
+          chat_messages: [{ count: 0 }],
+        },
+        {
+          id: "thread-2",
+          title: "相談メモ",
+          chat_messages: [{ count: 0 }],
+        },
+      ])
+    ).toEqual({
+      id: "thread-1",
+      title: "新しいチャット",
+      chat_messages: [{ count: 0 }],
+    });
+  });
+
+  it("does not reuse threads that already have messages", () => {
+    expect(
+      pickReusableEmptyChatThread([
+        {
+          id: "thread-1",
+          title: "新しいチャット",
+          chat_messages: [{ count: 1 }],
+        },
+      ])
+    ).toBeNull();
   });
 });
