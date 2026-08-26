@@ -42,6 +42,12 @@ function classifyType(type: string | null | undefined): "cancel" | "normal" {
   return "normal";
 }
 
+function hasUnresolvedTemplateValue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  return trimmed.includes("%") || trimmed.includes("{{") || trimmed.includes("}}");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const webhookSecret = process.env.MYASP_WEBHOOK_SECRET;
@@ -133,6 +139,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         action: "cancelled",
+        email: normalizedEmail,
+      });
+    }
+
+    if (hasUnresolvedTemplateValue(receiptState)) {
+      console.log(
+        `[myasp webhook] skipped unresolved receipt state: ${normalizedEmail} (scenario: ${scenarioId || "n/a"})`
+      );
+      return NextResponse.json({
+        success: true,
+        action: "skipped_unresolved_receipt_state",
         email: normalizedEmail,
       });
     }
