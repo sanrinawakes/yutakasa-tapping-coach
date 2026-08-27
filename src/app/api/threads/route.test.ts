@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { GET, PATCH, POST } from "./route";
 import { getSessionFromCookies } from "@/lib/auth";
+import { getSubscriberByEmail } from "@/lib/supabase";
 import {
   createChatThread,
   getChatThread,
@@ -15,6 +16,7 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/supabase", () => ({
   createChatThread: vi.fn(),
   getChatThread: vi.fn(),
+  getSubscriberByEmail: vi.fn(),
   getUserChatThreads: vi.fn(),
   updateChatThreadTitle: vi.fn(),
 }));
@@ -22,6 +24,7 @@ vi.mock("@/lib/supabase", () => ({
 const sessionMock = vi.mocked(getSessionFromCookies);
 const createThreadMock = vi.mocked(createChatThread);
 const getThreadMock = vi.mocked(getChatThread);
+const getSubscriberByEmailMock = vi.mocked(getSubscriberByEmail);
 const getThreadsMock = vi.mocked(getUserChatThreads);
 const updateTitleMock = vi.mocked(updateChatThreadTitle);
 
@@ -48,6 +51,14 @@ describe("threads API", () => {
       email: "member@example.com",
       iat: 0,
       exp: 4_102_444_800,
+    });
+    getSubscriberByEmailMock.mockResolvedValue({
+      id: "subscriber-1",
+      email: "member@example.com",
+      status: "active",
+      subscription_status: "active",
+      created_at: "2026-08-02T00:00:00.000Z",
+      updated_at: "2026-08-02T00:00:00.000Z",
     });
   });
 
@@ -106,5 +117,18 @@ describe("threads API", () => {
       "member@example.com",
       "新しいチャット"
     );
+  });
+
+  it("returns access denied instead of raising a server error when the subscriber record is missing", async () => {
+    getSubscriberByEmailMock.mockResolvedValue(null);
+
+    const response = await POST(request("POST", {}));
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      code: "ACCESS_DENIED",
+      reason: "no_subscriber",
+    });
+    expect(createThreadMock).not.toHaveBeenCalled();
   });
 });

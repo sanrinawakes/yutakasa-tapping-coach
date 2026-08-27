@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
+import { accessReasonToMessage, evaluateAccess } from "@/lib/access-control";
 import {
   createChatThread,
   getChatThread,
+  getSubscriberByEmail,
   getUserChatThreads,
   updateChatThreadTitle,
 } from "@/lib/supabase";
@@ -32,6 +34,19 @@ export async function POST(request: NextRequest) {
     const session = await getSessionFromCookies();
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const subscriber = await getSubscriberByEmail(session.email);
+    const access = evaluateAccess(subscriber);
+    if (!access.allowed) {
+      return NextResponse.json(
+        {
+          error: accessReasonToMessage(access.reason),
+          reason: access.reason,
+          code: "ACCESS_DENIED",
+        },
+        { status: 403 }
+      );
     }
 
     const body = await request.json().catch(() => null);
