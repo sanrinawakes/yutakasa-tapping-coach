@@ -16,12 +16,14 @@ jobs:
       - name: Record non-AI PR as outside the AI repair review scope
         if: >-
           github.event.pull_request.head.repo.full_name != github.repository ||
-          !startsWith(github.head_ref, 'codex/yutakasa-ai-repair-')
+          (!startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') &&
+           !startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
         run: echo '{"ok":true,"code":"not_ai_repair"}'
       - uses: actions/checkout@v4
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
-          startsWith(github.head_ref, 'codex/yutakasa-ai-repair-')
+          (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
+           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
         with:
           ref: main
           fetch-depth: 0
@@ -29,7 +31,8 @@ jobs:
       - name: Prepare a private diff without executing PR code
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
-          startsWith(github.head_ref, 'codex/yutakasa-ai-repair-')
+          (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
+           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -43,7 +46,8 @@ jobs:
       - name: Review the exact PR head independently
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
-          startsWith(github.head_ref, 'codex/yutakasa-ai-repair-')
+          (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
+           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
         env:
           AI_REPAIR_DIFF_PATH: ai-repair-review.diff
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

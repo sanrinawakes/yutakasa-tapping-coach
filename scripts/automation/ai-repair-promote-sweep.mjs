@@ -6,7 +6,7 @@ import { AiRepairPromoteError, promoteAiRepair } from "./ai-repair-promote.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
-const BRANCH = /^codex\/yutakasa-ai-repair-[a-f0-9]{16}$/u;
+const BRANCH = /^codex\/yutakasa-(?:ai|ticket)-repair-[a-f0-9]{16}$/u;
 
 export class PromoteSweepError extends Error {
   constructor(code) { super(code); this.name="PromoteSweepError"; this.code=code; }

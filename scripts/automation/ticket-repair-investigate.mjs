@@ -111,7 +111,7 @@ async function supabaseRpc(env, fetchImpl, name, body) {
 }
 
 async function findExistingPr(env, fetchImpl, id) {
-  const branch = `codex/yutakasa-ai-repair-${id}`;
+  const branch = `codex/yutakasa-ticket-repair-${id}`;
   const url = new URL(`https://api.github.com/repos/${REPO}/pulls`);
   url.searchParams.set("state", "all");
   url.searchParams.set("head", `sanrinawakes:${branch}`);

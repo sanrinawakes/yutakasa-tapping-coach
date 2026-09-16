@@ -18,7 +18,8 @@ jobs:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
       github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-ai-repair-') &&
+      (startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-ai-repair-') ||
+       startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-ticket-repair-')) &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10

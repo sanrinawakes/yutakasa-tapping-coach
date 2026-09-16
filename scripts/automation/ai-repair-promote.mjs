@@ -6,7 +6,8 @@ import crypto from "node:crypto";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
-const BRANCH = /^codex\/yutakasa-ai-repair-[a-f0-9]{16}$/u;
+const ANOMALY_BRANCH = /^codex\/yutakasa-ai-repair-[a-f0-9]{16}$/u;
+const TICKET_BRANCH = /^codex\/yutakasa-ticket-repair-[a-f0-9]{16}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 const SOURCES = new Set([
   "src/lib/gemini.ts", "src/lib/chat-thread.ts", "src/app/chat/page.tsx",
@@ -58,7 +59,8 @@ function checkCandidate({ pr, files, runsByWorkflow, vercelStatus, expectedSha, 
     !Number.isSafeInteger(pr?.number) || pr.number < 1 ||
     pr?.state !== "open" || typeof pr?.draft !== "boolean" ||
     pr?.base?.ref !== "main" || pr.base.sha !== mainSha || pr?.head?.sha !== expectedSha ||
-    pr?.head?.repo?.full_name !== REPO || !BRANCH.test(pr?.head?.ref ?? "") ||
+    pr?.head?.repo?.full_name !== REPO ||
+    !(ANOMALY_BRANCH.test(pr?.head?.ref ?? "") || TICKET_BRANCH.test(pr?.head?.ref ?? "")) ||
     pr?.mergeable !== true || !["clean", "draft"].includes(pr?.mergeable_state) ||
     (pr.draft && pr.mergeable_state !== "draft") ||
     (!pr.draft && pr.mergeable_state !== "clean") ||
@@ -200,22 +202,44 @@ async function prepareReleaseLedger(env, fetchImpl, number, sha) {
 }
 
 export async function verifyTicketPromotionLink(pr, env, fetchImpl) {
-  const id=pr?.head?.ref?.slice(-16);
+  const branch=pr?.head?.ref??"";
+  const id=branch.slice(-16);
   if (!/^[a-f0-9]{16}$/u.test(id??"")) fail("repair_pr_type_invalid");
+  if (typeof env.SUPABASE_URL!=="string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
+      typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" ||
+      env.SUPABASE_SERVICE_ROLE_KEY.length<20) fail("ticket_pr_private_check_unavailable");
+  const rowsResponse=await fetchImpl(`${env.SUPABASE_URL}/rest/v1/yutakasa_ticket_repair_jobs?pr_number=eq.${pr.number}&select=work_id,head_sha,status&limit=2`,{
+    headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,Accept:"application/json"},
+    redirect:"error",signal:AbortSignal.timeout(15_000),
+  }).catch(()=>fail("ticket_pr_private_check_unavailable"));
+  if(rowsResponse.status!==200)fail("ticket_pr_private_check_unavailable");
+  const rowsRaw=await rowsResponse.text();
+  if(Buffer.byteLength(rowsRaw)>4096)fail("ticket_pr_private_check_invalid");
+  let linkedRows;
+  try{linkedRows=JSON.parse(rowsRaw);}catch{fail("ticket_pr_private_check_invalid");}
+  if(!Array.isArray(linkedRows)||linkedRows.length>1||
+      linkedRows.some((row)=>!UUID.test(row?.work_id??"") ||
+        !SHA.test(row?.head_sha??"") || row.status!=="pr_open")) {
+    fail("ticket_pr_private_check_invalid");
+  }
   const ticketTitle=`Yutakasa support repair ${id}`;
   const anomalyTitle=`Yutakasa anomaly ${id}:`;
-  if (pr.title!==ticketTitle) {
+  if (ANOMALY_BRANCH.test(branch)) {
+    if(linkedRows.length!==0)fail("ticket_pr_branch_mismatch");
     if (!pr.title?.startsWith(anomalyTitle) ||
         !pr.body?.startsWith("Production deployment:")) fail("repair_pr_type_invalid");
     return {ticketMode:false};
   }
+  if (!TICKET_BRANCH.test(branch)) fail("repair_pr_type_invalid");
+  if(linkedRows.length!==1||linkedRows[0].head_sha!==pr?.head?.sha) {
+    fail("ticket_pr_private_check_invalid");
+  }
+  if (pr.title!==ticketTitle) fail("ticket_pr_public_metadata_invalid");
   if (typeof pr.body!=="string" ||
       !pr.body.startsWith(`Private support reference: ${id}\n`)) {
     fail("ticket_pr_public_metadata_invalid");
   }
-  if (typeof env.SUPABASE_URL!=="string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
-      typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" ||
-      env.SUPABASE_SERVICE_ROLE_KEY.length<20) fail("ticket_pr_private_check_unavailable");
   const response=await fetchImpl(`${env.SUPABASE_URL}/rest/v1/rpc/verify_yutakasa_ticket_repair_pr`,{
     method:"POST",headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,
       Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
@@ -229,6 +253,7 @@ export async function verifyTicketPromotionLink(pr, env, fetchImpl) {
   let rows;
   try{rows=JSON.parse(raw);}catch{fail("ticket_pr_private_check_invalid");}
   if(!Array.isArray(rows)||rows.length!==1||!UUID.test(rows[0]?.work_id??"")||
+      rows[0].work_id!==linkedRows[0].work_id||
       crypto.createHash("sha256").update(rows[0].work_id).digest("hex").slice(0,16)!==id) {
     fail("ticket_pr_private_check_invalid");
   }

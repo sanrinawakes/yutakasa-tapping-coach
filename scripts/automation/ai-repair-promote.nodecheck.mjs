@@ -96,14 +96,25 @@ test("ticket PR requires an exact private live link immediately before merge",as
   const id=crypto.createHash("sha256").update(workId).digest("hex").slice(0,16);
   const pr={...PR,title:`Yutakasa support repair ${id}`,
     body:`Private support reference: ${id}\nCustomer content stays private.`,
-    head:{...PR.head,ref:`codex/yutakasa-ai-repair-${id}`}};
+    head:{...PR.head,ref:`codex/yutakasa-ticket-repair-${id}`}};
   const env={SUPABASE_URL:"https://example.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"s".repeat(40)};
-  assert.deepEqual(await verifyTicketPromotionLink(pr,env,async()=>
-    new Response(JSON.stringify([{work_id:workId}]),{status:200})),{ticketMode:true});
+  assert.deepEqual(checkCandidate({pr,files:FILES,
+    runsByWorkflow:Object.fromEntries(Object.entries(RUNS).map(([name,runs])=>
+      [name,runs.map((run)=>({...run,head_branch:pr.head.ref}))])),
+    vercelStatus:VERCEL,expectedSha:SHA,mainSha:"b".repeat(40)}),
+  {prNumber:42,headSha:SHA});
+  const linked=async(url)=>new Response(JSON.stringify(String(url).includes("/rpc/")
+    ? [{work_id:workId}]
+    : [{work_id:workId,head_sha:SHA,status:"pr_open"}]),{status:200});
+  assert.deepEqual(await verifyTicketPromotionLink(pr,env,linked),{ticketMode:true});
   await assert.rejects(()=>verifyTicketPromotionLink(pr,env,async()=>
     new Response(JSON.stringify([]),{status:200})),AiRepairPromoteError);
   await assert.rejects(()=>verifyTicketPromotionLink({...pr,head:{...pr.head,sha:"b".repeat(40)}},env,
-    async()=>new Response(null,{status:409})),AiRepairPromoteError);
-  await assert.rejects(()=>verifyTicketPromotionLink({...pr,title:`Yutakasa anomaly ${id}: fake`},env,
-    async()=>{throw new Error("should not call");}),AiRepairPromoteError);
+    linked),AiRepairPromoteError);
+  await assert.rejects(()=>verifyTicketPromotionLink({...pr,
+    title:`Yutakasa anomaly ${id}: fake`,body:"Production deployment: dpl_fake"},env,
+    linked),AiRepairPromoteError);
+  await assert.rejects(()=>verifyTicketPromotionLink({...pr,
+    title:`Yutakasa anomaly ${id}: fake`,body:"Production deployment: dpl_fake",
+    head:{...pr.head,ref:`codex/yutakasa-ai-repair-${id}`}},env,linked),AiRepairPromoteError);
 });
