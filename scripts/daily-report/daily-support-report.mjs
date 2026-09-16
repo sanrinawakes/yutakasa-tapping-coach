@@ -3,6 +3,12 @@
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import {
+  FIRST_REPORT_DATE_JST,
+  PROVIDER_EVENTS,
+  reportDatesToRun,
+  workEventLabel,
+} from "./daily-report-reliability.mjs";
 
 const DEFAULT_FROM = "noreply@silversense.cc";
 const APP_SUPPORT_URL = "https://yutakasa-tapping-coach.vercel.app/admin/support";
@@ -12,6 +18,8 @@ const MAX_LISTED_TICKETS = 50;
 const MAX_LISTED_EVENTS = 100;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
+const PROVIDER_CHECK_BATCH = 4;
+const PROVIDER_RECHECK_MS = 12 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const CATEGORY = new Set(["technical", "login", "quality", "how_to", "feature", "billing", "other"]);
@@ -256,7 +264,8 @@ export function validateSource(source, window) {
   }
   const logIds = new Set();
   for (const row of source.workLogs) {
-    if (!UUID.test(row?.id) || logIds.has(row.id) || !UUID.test(row.ticket_id)) fail("source_log_invalid");
+    if (!UUID.test(row?.id) || logIds.has(row.id) || !UUID.test(row.ticket_id) ||
+        typeof row.event_type !== "string" || row.event_type.length < 1) fail("source_log_invalid");
     assertInWindow(row.created_at, window);
     logIds.add(row.id); touched.add(row.ticket_id);
   }
@@ -287,7 +296,7 @@ export async function collectReportSource(config, window, fetchImpl = globalThis
     listByWindow(config, "support_tickets", "id,created_at,updated_at", "created_at", window, fetchImpl),
     listByWindow(config, "support_tickets", "id,created_at,updated_at", "updated_at", window, fetchImpl),
     listByWindow(config, "support_messages", "id,ticket_id,sender_type,created_at", "created_at", window, fetchImpl),
-    listByWindow(config, "support_work_logs", "id,ticket_id,created_at", "created_at", window, fetchImpl),
+    listByWindow(config, "support_work_logs", "id,ticket_id,event_type,created_at", "created_at", window, fetchImpl),
     listCurrentOpenTickets(config, fetchImpl),
   ]);
   const ids = new Set([
@@ -416,7 +425,7 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
   const senderLabels = { user: "利用者投稿", admin: "運営返信", system: "システム投稿" };
   const events = [
     ...source.messages.map((row) => ({ id: row.id, ticketId: row.ticket_id, at: row.created_at, label: senderLabels[row.sender_type] })),
-    ...source.workLogs.map((row) => ({ id: row.id, ticketId: row.ticket_id, at: row.created_at, label: "作業記録" })),
+    ...source.workLogs.map((row) => ({ id: row.id, ticketId: row.ticket_id, at: row.created_at, label: workEventLabel(row.event_type) })),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id));
   const categoryLabels = {
     technical: "技術", login: "ログイン", quality: "回答品質", how_to: "使い方",
@@ -496,6 +505,60 @@ async function readExistingDeliveries(config, date, fetchImpl) {
   return statuses;
 }
 
+async function expireStaleLeases(config, fetchImpl) {
+  const count = await supabaseRequest(config, "rest/v1/rpc/expire_yutakasa_daily_report_leases", {
+    method: "POST", body: {}, fetchImpl,
+  });
+  if (!Number.isSafeInteger(count) || count < 0 || count > 100) fail("ledger_lease_expiry_invalid");
+  return count;
+}
+
+async function readReportCursor(config, fetchImpl) {
+  const rows = await supabaseRequest(config,
+    "rest/v1/yutakasa_daily_report_state?select=next_report_date_jst&id=eq.1&limit=1",
+    { fetchImpl });
+  if (!Array.isArray(rows) || rows.length !== 1 ||
+      !validDate(rows[0]?.next_report_date_jst) ||
+      rows[0].next_report_date_jst < FIRST_REPORT_DATE_JST) fail("report_cursor_invalid");
+  return rows[0].next_report_date_jst;
+}
+
+async function earliestFailedDate(config, cursorDate, fetchImpl) {
+  const query = new URLSearchParams({
+    select: "report_date_jst,recipient,status",
+    report_date_jst: `lt.${cursorDate}`,
+    recipient: `in.(${config.recipients.join(",")})`,
+    status: "eq.failed",
+    order: "report_date_jst.asc,recipient.asc",
+    limit: "1",
+  });
+  const rows = await supabaseRequest(config,
+    `rest/v1/yutakasa_daily_report_deliveries?${query}`, { fetchImpl });
+  if (!Array.isArray(rows) || rows.length > 1) fail("report_retry_queue_invalid");
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  if (!validDate(row?.report_date_jst) || row.report_date_jst >= cursorDate ||
+      row.report_date_jst < FIRST_REPORT_DATE_JST ||
+      !config.recipients.includes(row.recipient) || row.status !== "failed") {
+    fail("report_retry_queue_invalid");
+  }
+  return row.report_date_jst;
+}
+
+async function advanceReportCursor(config, date, fetchImpl) {
+  const payload = await supabaseRequest(config,
+    "rest/v1/rpc/advance_yutakasa_daily_report_cursor", {
+      method: "POST", fetchImpl,
+      body: { p_report_date_jst: date,
+        p_recipient_1: config.recipients[0], p_recipient_2: config.recipients[1] },
+    });
+  const row = oneRpcRow(payload, "report_cursor_advance_invalid");
+  if (!validDate(row.next_report_date_jst) || typeof row.advanced !== "boolean") {
+    fail("report_cursor_advance_invalid");
+  }
+  return row;
+}
+
 async function reserveDelivery(config, date, recipient, report, fetchImpl) {
   const payload = await supabaseRequest(config, "rest/v1/rpc/reserve_yutakasa_daily_report_delivery", {
     method: "POST", fetchImpl,
@@ -566,12 +629,125 @@ async function sendViaResend(config, recipient, reserved, fetchImpl) {
   return { status: "accepted", providerEmailId: result.id, errorCode: null };
 }
 
-export async function runDailySupportReport({ env = process.env, now = new Date(), fetchImpl = globalThis.fetch } = {}) {
-  const date = reportingDate(now);
-  if (date === null) return { ok: true, skipped: "before_09_jst" };
-  const config = validateEnvironment(env);
+async function providerLedgerRows(config, query, fetchImpl) {
+  const rows = await supabaseRequest(config,
+    `rest/v1/yutakasa_daily_report_deliveries?${query}`, { fetchImpl });
+  if (!Array.isArray(rows) || rows.length > 14) fail("provider_ledger_invalid");
+  for (const row of rows) {
+    if (!validDate(row?.report_date_jst) || !config.recipients.includes(row.recipient) ||
+        row.status !== "accepted" || !UUID.test(row.provider_email_id) ||
+        (row.provider_checked_at !== null && !validTimestamp(row.provider_checked_at)) ||
+        (row.provider_last_event !== null && !PROVIDER_EVENTS.has(row.provider_last_event))) {
+      fail("provider_ledger_invalid");
+    }
+  }
+  return rows;
+}
+
+async function providerCandidates(config, latestDate, now, fetchImpl) {
+  const select = "report_date_jst,recipient,status,provider_email_id,provider_last_event,provider_checked_at";
+  const earliestRecent = new Date(Date.parse(`${latestDate}T00:00:00.000Z`) - 6 * 86_400_000)
+    .toISOString().slice(0, 10);
+  const recentQuery = new URLSearchParams({
+    select, report_date_jst: `gte.${earliestRecent}`,
+    recipient: `in.(${config.recipients.join(",")})`, status: "eq.accepted",
+    order: "provider_checked_at.asc.nullsfirst,report_date_jst.asc,recipient.asc",
+    limit: "14",
+  });
+  const uncheckedQuery = new URLSearchParams({
+    select, recipient: `in.(${config.recipients.join(",")})`, status: "eq.accepted",
+    provider_checked_at: "is.null", order: "report_date_jst.asc,recipient.asc",
+    limit: String(PROVIDER_CHECK_BATCH),
+  });
+  const recent = await providerLedgerRows(config, recentQuery, fetchImpl);
+  const unchecked = await providerLedgerRows(config, uncheckedQuery, fetchImpl);
+  const seen = new Set();
+  const due = [];
+  for (const row of [...recent, ...unchecked]) {
+    const key = `${row.report_date_jst}:${row.recipient}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (row.provider_checked_at !== null &&
+        Date.parse(row.provider_checked_at) > now.getTime() - PROVIDER_RECHECK_MS) continue;
+    if (due.length < PROVIDER_CHECK_BATCH) due.push(row);
+  }
+  return due;
+}
+
+async function retrieveProviderEvent(config, row, fetchImpl) {
+  let response;
+  try {
+    response = await fetchImpl(`https://api.resend.com/emails/${row.provider_email_id}`, {
+      method: "GET", redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${config.resendKey}`, Accept: "application/json" },
+    });
+  } catch { fail("provider_request_failed"); }
+  if (!response.ok) fail(`provider_http_${response.status}`);
+  const result = await boundedJson(response, "provider_response");
+  if (result?.object !== "email" || result.id !== row.provider_email_id ||
+      !Array.isArray(result.to) || result.to.length !== 1 ||
+      result.to[0]?.toLowerCase() !== row.recipient ||
+      !PROVIDER_EVENTS.has(result.last_event)) fail("provider_receipt_invalid");
+  return result.last_event;
+}
+
+async function recordProviderEvent(config, row, event, fetchImpl) {
+  const payload = await supabaseRequest(config,
+    "rest/v1/rpc/record_yutakasa_daily_report_provider_event", {
+      method: "POST", fetchImpl,
+      body: {
+        p_report_date_jst: row.report_date_jst,
+        p_recipient: row.recipient,
+        p_provider_email_id: row.provider_email_id,
+        p_last_event: event,
+      },
+    });
+  const recorded = oneRpcRow(payload, "provider_record_invalid");
+  if (recorded.provider_last_event !== event || !validTimestamp(recorded.provider_checked_at)) {
+    fail("provider_record_invalid");
+  }
+}
+
+async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
+  const due = await providerCandidates(config, latestDate, now, fetchImpl);
+  const checks = [];
+  for (const row of due) {
+    try {
+      const event = await retrieveProviderEvent(config, row, fetchImpl);
+      await recordProviderEvent(config, row, event, fetchImpl);
+      checks.push({ reportDateJst: row.report_date_jst,
+        recipientNumber: config.recipients.indexOf(row.recipient) + 1, event });
+    } catch (error) {
+      checks.push({ reportDateJst: row.report_date_jst,
+        recipientNumber: config.recipients.indexOf(row.recipient) + 1,
+        errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" });
+    }
+  }
+  return checks;
+}
+
+async function auditDeliveryHealth(config, fetchImpl) {
+  const payload = await supabaseRequest(config,
+    "rest/v1/rpc/get_yutakasa_daily_report_health", {
+      method: "POST", fetchImpl,
+      body: { p_recipient_1: config.recipients[0], p_recipient_2: config.recipients[1] },
+    });
+  const row = oneRpcRow(payload, "delivery_health_invalid");
+  for (const key of ["uncertain_count", "failed_count", "provider_adverse_count", "pending_overdue_count"]) {
+    if (!Number.isSafeInteger(row[key]) || row[key] < 0) fail("delivery_health_invalid");
+  }
+  return {
+    uncertainCount: row.uncertain_count,
+    failedCount: row.failed_count,
+    providerAdverseCount: row.provider_adverse_count,
+    pendingOverdueCount: row.pending_overdue_count,
+  };
+}
+
+async function runReportDate(config, date, now, fetchImpl) {
   const existing = await readExistingDeliveries(config, date, fetchImpl);
-  if (config.recipients.every((recipient) => existing.has(recipient) && existing.get(recipient) !== "failed")) {
+  if (config.recipients.every((recipient) =>
+    existing.get(recipient) === "accepted" || existing.get(recipient) === "uncertain")) {
     const deliveries = config.recipients.map((recipient, index) => ({
       recipientNumber: index + 1,
       status: existing.get(recipient),
@@ -607,6 +783,67 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
     monitorState: monitorSummary.state,
     monitorCompletedCount: monitorSummary.completedCount ?? null,
     deliveries,
+  };
+}
+
+export async function runDailySupportReport({ env = process.env, now = new Date(), fetchImpl = globalThis.fetch } = {}) {
+  const latestDate = reportingDate(now);
+  if (latestDate === null) return { ok: true, skipped: "before_09_jst" };
+  if (latestDate < FIRST_REPORT_DATE_JST) return { ok: true, skipped: "before_first_report_date" };
+  const config = validateEnvironment(env);
+  const expiredLeaseCount = await expireStaleLeases(config, fetchImpl);
+  const cursorDate = await readReportCursor(config, fetchImpl);
+  const retryDate = await earliestFailedDate(config, cursorDate, fetchImpl);
+  let dates;
+  try { dates = reportDatesToRun({ latestDate, cursorDate, retryDate }); }
+  catch { fail("report_cursor_invalid"); }
+  const results = [];
+  for (const date of dates) {
+    let result;
+    try {
+      result = await runReportDate(config, date, now, fetchImpl);
+    } catch (error) {
+      result = {
+        ok: false,
+        reportDateJst: date,
+        errorCode: error instanceof DailyReportError ? error.code : "daily_report_unexpected_failure",
+        deliveries: [],
+      };
+    }
+    results.push(result);
+    if (date === cursorDate && !result.errorCode) {
+      await advanceReportCursor(config, date, fetchImpl);
+    }
+  }
+  const latest = results[0];
+  let provider;
+  try { provider = { checks: await reconcileProviderDeliveries(config, latestDate, now, fetchImpl) }; }
+  catch (error) {
+    provider = { checks: [],
+      errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" };
+  }
+  let health;
+  try { health = await auditDeliveryHealth(config, fetchImpl); }
+  catch (error) {
+    health = { uncertainCount: null, failedCount: null, providerAdverseCount: null, pendingOverdueCount: null,
+      errorCode: error instanceof DailyReportError ? error.code : "delivery_health_unexpected_failure" };
+  }
+  const unresolved = health.uncertainCount > 0 || health.failedCount > 0 ||
+    health.providerAdverseCount > 0 || health.pendingOverdueCount > 0;
+  return {
+    ...latest,
+    ok: results.every((result) => result.ok) && !provider.errorCode &&
+      !health.errorCode && !unresolved && provider.checks.every((check) => !check.errorCode),
+    expiredLeaseCount,
+    recoveredReportDatesJst: results.slice(1).map((result) => result.reportDateJst),
+    providerChecks: provider.checks,
+    unresolvedUncertainCount: health.uncertainCount,
+    pendingFailedCount: health.failedCount,
+    providerAdverseCount: health.providerAdverseCount,
+    pendingOverdueCount: health.pendingOverdueCount,
+    ...(unresolved ? { unresolvedDeliveryCode: "daily_report_delivery_unresolved" } : {}),
+    ...(provider.errorCode ? { providerErrorCode: provider.errorCode } : {}),
+    ...(health.errorCode ? { healthErrorCode: health.errorCode } : {}),
   };
 }
 

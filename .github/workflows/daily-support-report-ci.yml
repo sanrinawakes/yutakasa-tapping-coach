@@ -34,6 +34,8 @@ jobs:
         run: npm test -- --maxWorkers=2
       - name: Daily report tests
         run: node --test scripts/daily-report/*.nodecheck.mjs
+      - name: Daily report SQL ledger test
+        run: sh scripts/daily-report/test-ledger-sql.sh
       - name: Production build
         run: npm run build
       - name: Docker build
