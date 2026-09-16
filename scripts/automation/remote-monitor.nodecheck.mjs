@@ -206,6 +206,45 @@ test("scheduled run processes private ticket context before its final snapshot a
   }
 });
 
+test("technical and owner-decision handoffs have distinct metadata-only reasons", async () => {
+  const root = tempRoot();
+  try {
+    const result = await runRemoteMonitorWithTickets({
+      secrets: SECRETS,
+      tempRoot: root,
+      snapshotImpl: async () => snapshot(1),
+      fetchImpl: async () => new Response(JSON.stringify({ tickets: [{ ticket: {
+        id: "2e4710db-9274-4e4c-96c4-59dc97e21c8d",
+      } }] })),
+      supportImpl: async () => ({
+        ok: true, examined: 1, technicalHandoffs: 1, decisionsRequired: 0,
+        lostLocks: 0, uncertain: 0, deferred: 0,
+      }),
+      ...evidence(),
+    });
+    assert.ok(result.reasonCodes.includes("support_technical_review_required"));
+    assert.deepEqual(planMonitorDispatches(result.reasonCodes).repairReasons, []);
+    assert.equal(JSON.stringify(result).includes("private customer text"), false);
+    const decision = await runRemoteMonitorWithTickets({
+      secrets: SECRETS,
+      tempRoot: root,
+      snapshotImpl: async () => snapshot(1),
+      fetchImpl: async () => new Response(JSON.stringify({ tickets: [{ ticket: {
+        id: "2e4710db-9274-4e4c-96c4-59dc97e21c8d",
+      } }] })),
+      supportImpl: async () => ({
+        ok: true, examined: 1, technicalHandoffs: 0, decisionsRequired: 1,
+        lostLocks: 0, uncertain: 0, deferred: 0,
+      }),
+      ...evidence(),
+    });
+    assert.ok(decision.reasonCodes.includes("support_owner_decision_required"));
+    assert.deepEqual(planMonitorDispatches(decision.reasonCodes).repairReasons, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ticket and Drive findings alert the owner while technical anomalies also request AI investigation", () => {
   assert.deepEqual(planMonitorDispatches(["pending_tickets", "drive_intake_items"]), {
     alertReasons: ["drive_intake_items", "pending_tickets"],

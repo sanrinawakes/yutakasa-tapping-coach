@@ -560,6 +560,8 @@ export async function runRemoteMonitorWithTickets(options = {}) {
     const result = await completeRemoteMonitor(preflight.runId, options);
     if (support) {
       result.support = support;
+      if (support.technicalHandoffs > 0) result.reasonCodes.push("support_technical_review_required");
+      if (support.decisionsRequired > 0) result.reasonCodes.push("support_owner_decision_required");
       if (support.lostLocks > 0) result.reasonCodes.push("support_lock_lost");
       if (support.uncertain > 0) result.reasonCodes.push("support_worker_uncertain");
       if (support.deferred > 0) result.reasonCodes.push("support_deferred");

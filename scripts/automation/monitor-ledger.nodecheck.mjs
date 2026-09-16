@@ -68,6 +68,27 @@ test("active run blocks overlap before monitoring or dispatch", async () => {
   assert.equal(monitorCalls, 0);
 });
 
+test("RPC response without Content-Length stops at the 8 KiB stream limit", async () => {
+  let cancelled = false;
+  const fetchImpl = async () => ({
+    status: 200,
+    headers: { get: () => null },
+    body: new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(4096));
+      },
+      cancel() { cancelled = true; },
+    }),
+  });
+  await assert.rejects(
+    () => acquireMonitorLease({ secrets, fetchImpl, runId }),
+    (error) => error instanceof MonitorLedgerError &&
+      error.code === "monitor_ledger_response_invalid" &&
+      !error.message.includes(secrets.SUPABASE_SERVICE_ROLE_KEY),
+  );
+  assert.equal(cancelled, true);
+});
+
 test("GitHub dispatch receipt is recorded only after the lease is finished", async () => {
   const calls = [];
   const fetchImpl = async (input, init) => {

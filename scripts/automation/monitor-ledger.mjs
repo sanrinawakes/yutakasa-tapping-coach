@@ -40,10 +40,36 @@ async function limitedJson(response) {
   if (declared && /^\d+$/u.test(declared) && Number(declared) > 8192) {
     fail("monitor_ledger_response_invalid");
   }
-  const text = await response.text();
-  if (text.length > 8192) fail("monitor_ledger_response_invalid");
+  const reader = response.body?.getReader?.();
+  if (!reader) fail("monitor_ledger_response_invalid");
+  const chunks = [];
+  let size = 0;
   try {
-    return JSON.parse(text);
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array)) fail("monitor_ledger_response_invalid");
+      size += part.value.byteLength;
+      if (size > 8192) {
+        void reader.cancel().catch(() => {});
+        fail("monitor_ledger_response_invalid");
+      }
+      chunks.push(part.value);
+    }
+  } catch (error) {
+    if (error instanceof MonitorLedgerError) throw error;
+    fail("monitor_ledger_response_invalid");
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     fail("monitor_ledger_response_invalid");
   }
