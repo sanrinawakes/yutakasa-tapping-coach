@@ -10,7 +10,17 @@ Railwayサービス `yutakasa-daily-support-report` は毎時0分（UTC）に起
 正常時は各宛先に1通だけ送る。0件の日も送る。状態を確認できない宛先は
 自動再送せず、送信台帳とResend側の記録を照合する。
 
-本番稼働前に `ledger.sql` を対象Supabaseプロジェクトへ適用し、
+2026-09-16 JSTを最初の対象日とする。前日分を優先して処理し、停止中に
+送れなかった古い日を毎時1日ずつ回収する。確実に拒否された送信は、
+同じ本文・Idempotency-Keyで毎時1日ずつ再試行する。1回の起動で扱う
+対象日は最大3日とし、長期停止後も一度に大量送信しない。送信予約中に
+プロセスが止まった場合は15分後に`uncertain`へ変更し、自動再送しない。
+
+本番稼働前に `ledger.sql`、続けて `ledger-reliability.sql` を
+対象Supabaseプロジェクトへ適用し、SQLのテーブル・関数を確認してから
+新しいRailwayイメージを反映する。後者は初回対象日を保存するカーソル、
+古い送信予約の期限処理、Resendの配達イベント記録、全期間の未解決配信件数の
+集計を追加する。
 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`RESEND_API_KEY`、
 `REPORT_RECIPIENT_1`、`REPORT_RECIPIENT_2` を
 Railwayのサービス変数に設定する。送信元はアプリと同じ
@@ -19,13 +29,28 @@ ResendのIdempotency-Keyと併用する。
 
 `daily-support-report.mjs` の標準出力には日付、件数、宛先ごとの状態と
 Resend受理IDだけを記録する。`accepted` はResendの受理を意味し、
-受信箱への到達を証明しない。前日分の障害監視結果は、現在の旧Mac監視が
+受信箱への到達を証明しない。受理IDから直近7日分と未照合分を
+1回最大4通までResendの取得APIで確認し、`delivered`、`bounced`、
+`failed`、`suppressed`等を送信台帳へ記録する。`delivered`は宛先側の
+メールサーバーでの受理を意味し、受信箱への表示までは証明しない。
+配達失敗、送信結果不明、照合失敗はcronを非0終了させ、日付と宛先番号、
+エラーコードを標準出力へ残す。
+送信カーソルを越えた古い日も、`uncertain`、再試行待ちの`failed`、
+Resendの配達失敗に加え、受理から2時間経っても`sent`・`queued`・
+`delivery_delayed`等の未配達状態にあるメールは、全期間の件数を毎回確認する。
+解決まで固定コード
+`daily_report_delivery_unresolved`と件数を出して非0終了する。
+Railwayの日報サービスには監視側の
+`GITHUB_DISPATCH_TOKEN`を渡していないため、即時の別経路通知は未実装。
+専用トークンと必要最小限の権限を用意した後に、別変更で通知経路を追加する。
+前日分の障害監視結果は、現在の旧Mac監視が
 DBへ永続保存していないため未連携と明示する。
 
 ローカル検証:
 
 ```sh
 node --test scripts/daily-report/*.nodecheck.mjs
+sh scripts/daily-report/test-ledger-sql.sh
 docker build --file scripts/daily-report/Dockerfile --tag yutakasa-daily-support-report:local .
 railway config plan --file scripts/daily-report/.railway/railway.ts
 ```
