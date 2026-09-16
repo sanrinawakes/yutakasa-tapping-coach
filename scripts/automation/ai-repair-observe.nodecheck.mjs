@@ -4,6 +4,7 @@ import test from "node:test";
 import { AiRepairObserveError, evaluateRepairObservation, runRepairObservation } from "./ai-repair-observe.mjs";
 
 const NOW = "2026-09-16T20:00:00.000Z";
+const SCHEDULE_ENV = { GITHUB_EVENT_NAME: "schedule", GITHUB_RUN_ID: "123456" };
 const SHA = "a".repeat(40);
 const DEPLOYMENT = "dpl_Abcdefghijklmnop";
 const release = { pr_number: 42, status: "observing", merge_sha: SHA,
@@ -53,7 +54,7 @@ test("observation requires exact production SHA, bounded zero logs, DB parity, a
 test("probe failure records an unhealthy observation instead of preserving a healthy streak", async () => {
   const calls = [];
   await assert.rejects(() => runRepairObservation({
-    env: { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
     fetchImpl: async (url, options) => {
       calls.push({ url, body: options.body ? JSON.parse(options.body) : null });
       if (url.includes("yutakasa_repair_releases?")) return new Response(JSON.stringify([{
@@ -76,6 +77,7 @@ test("a merge acknowledged by GitHub recovers a failed ledger update before obse
   const calls = [];
   await assert.rejects(() => runRepairObservation({
     env: {
+      ...SCHEDULE_ENV,
       SUPABASE_URL: "https://example.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32),
       GITHUB_TOKEN: "g".repeat(32),
@@ -111,7 +113,7 @@ test("a merge acknowledged by GitHub recovers a failed ledger update before obse
 test("a closed unmerged PR leaves the pending observer queue", async () => {
   const calls = [];
   await assert.rejects(() => runRepairObservation({
-    env: { SUPABASE_URL: "https://example.supabase.co",
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32), GITHUB_TOKEN: "g".repeat(32) },
     fetchImpl: async (url, options) => {
       calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
@@ -139,7 +141,7 @@ test("a closed unmerged PR leaves the pending observer queue", async () => {
 test("no observing release avoids production and provider calls", async () => {
   let calls = 0;
   const result = await runRepairObservation({
-    env: { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
     fetchImpl: async () => { calls += 1; return new Response("[]", { status: 200 }); },
     deploymentImpl: async () => { throw new Error("unexpected"); },
     logsImpl: async () => { throw new Error("unexpected"); },
@@ -147,6 +149,16 @@ test("no observing release avoids production and provider calls", async () => {
   });
   assert.deepEqual(result, { examined: 0, verified: 0, failed: 0 });
   assert.equal(calls, 1);
+});
+
+test("manual dispatch cannot certify a scheduled production observation", async () => {
+  let calls = 0;
+  await assert.rejects(() => runRepairObservation({
+    env: { ...SCHEDULE_ENV, GITHUB_EVENT_NAME: "workflow_dispatch" },
+    fetchImpl: async () => { calls += 1; throw new Error("must not read"); },
+  }), (error) => error instanceof AiRepairObserveError &&
+    error.code === "repair_observation_not_scheduled");
+  assert.equal(calls, 0);
 });
 
 test("six superseded releases are terminalized without starving the newest or oldest", async () => {
@@ -169,7 +181,7 @@ test("six superseded releases are terminalized without starving the newest or ol
   };
   for (let run = 0; run < 2; run += 1) {
     await assert.rejects(() => runRepairObservation({
-      env: { SUPABASE_URL: "https://example.supabase.co",
+      env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
         SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
       fetchImpl,
       deploymentImpl: async () => deployment,

@@ -19,7 +19,13 @@ test("project gate binds key fingerprint and provider project before an AI call"
   const fetchImpl = async (_url, options) => {
     calls += 1;
     assert.equal(options.headers["OpenAI-Project"], PROJECT);
-    return new Response("{}", { status: 200 });
+    assert.equal(_url, "https://api.openai.com/v1/responses");
+    assert.equal(options.method, "POST");
+    const body = JSON.parse(options.body);
+    assert.equal(body.store, false);
+    assert.deepEqual(body.tools, []);
+    assert.equal(JSON.stringify(body).includes(KEY), false);
+    return new Response(JSON.stringify({ id: "resp_1234567890ABCDEF", status: "completed" }), { status: 200 });
   };
   assert.deepEqual(await verifyOpenAiProjectKey({ env, fetchImpl }), { projectConfirmed: true });
   assert.equal(calls, 1);

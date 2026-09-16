@@ -14,10 +14,14 @@ BEGIN
     clock_timestamp() - INTERVAL '10 minutes',1
   );
   SELECT * INTO v_receipt FROM public.record_yutakasa_repair_observation(
-    997,repeat('b',40),'dpl_1234567890ABCDEF',clock_timestamp(),FALSE,'main_sha_changed'
+    997,repeat('b',40),'dpl_1234567890ABCDEF',clock_timestamp(),FALSE,'main_sha_changed',123456
   );
   IF v_receipt.status <> 'failed' OR v_receipt.healthy_count <> 0 THEN
     RAISE EXCEPTION 'superseded release did not leave the observer queue';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.yutakasa_repair_observations
+    WHERE pr_number = 997 AND workflow_run_id = 123456 AND healthy = FALSE) THEN
+    RAISE EXCEPTION 'scheduled observation receipt missing';
   END IF;
 END;
 $$;

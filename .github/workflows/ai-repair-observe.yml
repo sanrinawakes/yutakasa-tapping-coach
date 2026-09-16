@@ -3,7 +3,6 @@ name: Observe merged AI repair
 on:
   schedule:
     - cron: '*/10 * * * *'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,4 +33,6 @@ jobs:
           CRON_SECRET: ${{ secrets.YUTAKASA_CRON_SECRET }}
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: node scripts/automation/ai-repair-observe.mjs

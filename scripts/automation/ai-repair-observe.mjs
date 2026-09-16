@@ -167,6 +167,12 @@ export async function runRepairObservation({
   snapshotImpl = collectProductionSnapshot,
   functionalSmokeImpl = async () => null,
 } = {}) {
+  if (env.GITHUB_EVENT_NAME !== "schedule" ||
+      typeof env.GITHUB_RUN_ID !== "string" ||
+      !/^[1-9][0-9]{0,17}$/u.test(env.GITHUB_RUN_ID) ||
+      !Number.isSafeInteger(Number(env.GITHUB_RUN_ID))) {
+    fail("repair_observation_not_scheduled");
+  }
   const rows = await supabaseRequest(
     env, fetchImpl,
     "/rest/v1/yutakasa_repair_releases?status=in.(pending_merge,observing)&select=pr_number,head_sha,merge_sha,status,created_at,merge_recorded_at&order=pr_number.desc&limit=5",
@@ -235,6 +241,7 @@ export async function runRepairObservation({
       p_observed_at: observedAt,
       p_healthy: observation.healthy,
       p_error_code: observation.code,
+      p_workflow_run_id: Number(env.GITHUB_RUN_ID),
     });
     if (!Array.isArray(result) || result.length !== 1 ||
         !["observing", "verified", "failed"].includes(result[0]?.status) ||
