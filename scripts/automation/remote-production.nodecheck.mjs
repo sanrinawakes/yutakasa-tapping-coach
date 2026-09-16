@@ -76,7 +76,7 @@ test("log queries discard content and reject truncated results", async () => {
     assert.equal(args.includes(id), false, "current deployment must not narrow the 24-hour log window");
     assert.equal(args.some((arg) => arg.startsWith("--deployment")), false);
     assert.ok(args.includes("--environment=production"));
-    assert.ok(args.includes("--no-branch"));
+    assert.equal(args.some((arg) => arg.startsWith("--branch")), false);
     assert.ok(args.includes("--since=24h"));
     assert.ok(args.includes("--project=yutakasa-tapping-coach"));
   }

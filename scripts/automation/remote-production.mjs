@@ -170,7 +170,7 @@ export async function collectRemoteLogs({
       ({ stdout } = await runCommand("vercel", [
         "logs",
         "--since=24h", "--limit=100", "--no-follow", "--json",
-        "--environment=production", "--no-branch",
+        "--environment=production",
         "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
         filter, "--token", token,
       ], {
