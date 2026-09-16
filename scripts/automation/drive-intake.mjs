@@ -44,7 +44,15 @@ function requiredCredential(source, key) {
 }
 
 function validateCredentials(source) {
+  if (source?.GOOGLE_DRIVE_API_KEY !== undefined) {
+    const apiKey = requiredCredential(source, "GOOGLE_DRIVE_API_KEY");
+    if (apiKey.length > 512 || /\s/u.test(apiKey)) {
+      fail("drive_credential_missing_or_invalid_google_drive_api_key");
+    }
+    return { kind: "api_key", apiKey };
+  }
   return {
+    kind: "oauth",
     clientId: requiredCredential(source, "GOOGLE_DRIVE_CLIENT_ID"),
     clientSecret: requiredCredential(source, "GOOGLE_DRIVE_CLIENT_SECRET"),
     refreshToken: requiredCredential(source, "GOOGLE_DRIVE_REFRESH_TOKEN"),
@@ -172,13 +180,18 @@ export async function collectDriveIntakeMetadata({
   fetchImpl = globalThis.fetch,
   now = () => new Date(),
 } = {}) {
-  const accessToken = await refreshAccessToken(
-    validateCredentials(credentials),
-    fetchImpl,
-  );
+  const auth = validateCredentials(credentials);
+  const accessToken = auth.kind === "oauth"
+    ? await refreshAccessToken(auth, fetchImpl)
+    : undefined;
+  // A key identifies the Cloud project for publicly shared files. Keep it in
+  // the request header so it cannot appear in URLs or ordinary request logs.
+  const headers = auth.kind === "api_key"
+    ? { "X-Goog-Api-Key": auth.apiKey }
+    : { Authorization: `Bearer ${accessToken}` };
   const folder = await requestJson(
     FOLDER_URL,
-    { method: "GET", headers: { Authorization: `Bearer ${accessToken}` } },
+    { method: "GET", headers },
     TOKEN_RESPONSE_MAX_BYTES,
     "drive_folder",
     fetchImpl,
@@ -204,7 +217,8 @@ export async function collectDriveIntakeMetadata({
       `'${DRIVE_INTAKE_FOLDER_ID}' in parents and trashed = false`,
     );
     url.searchParams.set("spaces", "drive");
-    url.searchParams.set("corpora", "user");
+    // Public-folder API-key requests have no signed-in user corpus.
+    if (auth.kind === "oauth") url.searchParams.set("corpora", "user");
     url.searchParams.set("pageSize", String(PAGE_SIZE));
     url.searchParams.set(
       "fields",
@@ -216,7 +230,7 @@ export async function collectDriveIntakeMetadata({
       url.toString(),
       {
         method: "GET",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers,
       },
       LIST_RESPONSE_MAX_BYTES,
       "drive_list",
