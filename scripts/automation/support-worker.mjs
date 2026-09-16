@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { MonitorLedgerError } from "./monitor-ledger.mjs";
 import fs from "node:fs";
 
 const SUPPORT_API = "https://yutakasa-tapping-coach.vercel.app/api/internal/support-automation";
@@ -249,6 +250,7 @@ export async function processSupportTickets({
   maxTickets = MAX_TICKETS,
   maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS,
   now = Date.now,
+  beforeMutation = async () => {},
 } = {}) {
   if (typeof automationToken !== "string" || automationToken.length < 32 || /[\r\n]/u.test(automationToken)) {
     fail("support_automation_token_invalid");
@@ -269,6 +271,10 @@ export async function processSupportTickets({
     tickets,
   });
   const result = emptyResult();
+  const ownedPatchAction = async (arguments_) => {
+    await beforeMutation();
+    return patchAction(arguments_);
+  };
   const deadline = now() + maxRuntimeMs;
   const batch = tickets.slice(0, maxTickets);
   for (const [index, entry] of batch.entries()) {
@@ -287,7 +293,7 @@ export async function processSupportTickets({
     let claimAttempted = false;
     try {
       claimAttempted = true;
-      const claim = await patchAction({
+      const claim = await ownedPatchAction({
         automationToken,
         body: { action: "claim", ticketId, lockToken },
         fetchImpl,
@@ -297,7 +303,7 @@ export async function processSupportTickets({
         result.claimConflicts += 1;
         continue;
       }
-      const heartbeat = await patchAction({
+      const heartbeat = await ownedPatchAction({
         automationToken,
         body: {
           action: "log",
@@ -315,7 +321,7 @@ export async function processSupportTickets({
         continue;
       }
       if (plan.kind === "technical_handoff") {
-        const log = await patchAction({
+        const log = await ownedPatchAction({
           automationToken,
           body: {
             action: "log",
@@ -333,7 +339,7 @@ export async function processSupportTickets({
           continue;
         }
       }
-      const terminal = await patchAction({
+      const terminal = await ownedPatchAction({
         automationToken,
         body: plan.kind === "decision_required"
           ? {
@@ -358,11 +364,12 @@ export async function processSupportTickets({
       if (plan.kind === "decision_required") result.decisionsRequired += 1;
       else result.technicalHandoffs += 1;
       claimAttempted = false;
-    } catch {
+    } catch (error) {
+      if (error instanceof MonitorLedgerError) throw error;
       result.uncertain += 1;
       if (claimAttempted) {
         try {
-          const release = await patchAction({
+          const release = await ownedPatchAction({
             automationToken,
             body: {
               action: "failed",

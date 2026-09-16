@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildDailyReport,
+  collectMonitorSummary,
   DailyReportError,
   reportWindow,
   reportingDate,
@@ -51,7 +52,7 @@ function source() {
   };
 }
 
-function testFetch({ records = source(), resendBehavior = async () => json({ id: RESEND_ID }) } = {}) {
+function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200, resendBehavior = async () => json({ id: RESEND_ID }) } = {}) {
   const requests = [];
   const ledger = new Map();
   const fetchImpl = async (input, init = {}) => {
@@ -60,6 +61,15 @@ function testFetch({ records = source(), resendBehavior = async () => json({ id:
     if (url.host === "api.resend.com") return resendBehavior(url, init);
     if (url.pathname === "/rest/v1/yutakasa_daily_report_deliveries") {
       return json([...ledger.entries()].map(([key, value]) => ({ recipient: key.split(":")[1], status: value.status })));
+    }
+    if (url.pathname === "/rest/v1/yutakasa_monitor_runs") {
+      if (monitorStatus !== 200) return json({ code: "not_available" }, monitorStatus);
+      assert.equal(url.searchParams.get("run_kind"), "eq.scheduled");
+      const bounds = url.searchParams.getAll("finished_at");
+      const start = bounds.find((value) => value.startsWith("gte.")).slice(4);
+      const end = bounds.find((value) => value.startsWith("lt.")).slice(3);
+      const filtered = monitorRuns.filter((row) => row.run_kind !== "recheck" && row.finished_at >= start && row.finished_at < end);
+      return json(filtered.slice(Number(url.searchParams.get("offset")), Number(url.searchParams.get("offset")) + Number(url.searchParams.get("limit"))));
     }
     if (url.pathname === "/rest/v1/support_tickets") {
       if (url.searchParams.has("status")) {
@@ -274,4 +284,42 @@ test("a row outside the requested JST window fails closed before sending", async
     (error) => error instanceof DailyReportError && error.code === "source_window_mismatch",
   );
   assert.equal(client.requests.some(({ url }) => url.host === "api.resend.com"), false);
+});
+
+test("monitor results use the previous JST window and distinguish missing hours from healthy runs", async () => {
+  const monitorRuns = [
+    { run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", started_at: "2026-09-14T14:59:00.000Z", finished_at: "2026-09-14T15:00:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: "2026-09-15T03:17:00.000Z", finished_at: "2026-09-15T03:18:00.000Z", status: "action_required", reason_codes: ["pending_tickets", "production_log_fiveXx"], alert_dispatched: true, repair_dispatched: true },
+    { run_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", started_at: "2026-09-15T14:17:00.000Z", finished_at: "2026-09-15T14:59:59.999Z", status: "failed", reason_codes: ["monitor_lease_lost"], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", started_at: "2026-09-15T15:00:00.000Z", finished_at: "2026-09-15T15:00:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", run_kind: "recheck", started_at: "2026-09-15T08:17:00.000Z", finished_at: "2026-09-15T08:18:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+  ];
+  const client = testFetch({ monitorRuns });
+  const summary = await collectMonitorSummary({ supabaseUrl: env.SUPABASE_URL, serviceKey: env.SUPABASE_SERVICE_ROLE_KEY }, reportWindow("2026-09-15"), client.fetchImpl);
+  assert.equal(summary.state, "observed");
+  assert.equal(summary.completedCount, 3);
+  assert.equal(summary.observedHourCount, 2);
+  assert.equal(summary.statusCounts.action_required, 1);
+  assert.deepEqual(summary.reasonCounts, [["monitor_lease_lost", 1], ["pending_tickets", 1], ["production_log_fiveXx", 1]]);
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.monitorCompletedCount, 3);
+  const email = JSON.parse(client.requests.find(({ url }) => url.host === "api.resend.com").init.body).text;
+  assert.match(email, /障害監視の完了記録（確認できた実行のみ）: 3件/);
+  assert.match(email, /記録のある時間帯2\/24/);
+  assert.match(email, /正常1件、要対応1件、失敗1件/);
+  assert.match(email, /pending_tickets 1件/);
+  assert.match(email, /前日全体が正常とは判定していません/);
+});
+
+test("missing monitor table or zero completed rows stays explicitly unverified", async () => {
+  for (const options of [{ monitorStatus: 404 }, { monitorRuns: [] }]) {
+    const client = testFetch(options);
+    const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+    assert.equal(result.ok, true);
+    assert.equal(result.monitorState, options.monitorStatus ? "unavailable" : "missing");
+    const email = JSON.parse(client.requests.find(({ url }) => url.host === "api.resend.com").init.body).text;
+    assert.match(email, /障害0件とは判定していません/);
+    assert.doesNotMatch(email, /障害監視の完了記録: 0件（.*正常/u);
+  }
 });

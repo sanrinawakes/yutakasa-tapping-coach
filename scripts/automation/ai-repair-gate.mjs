@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { runRemoteMonitor } from "./remote-monitor.mjs";
 import { fingerprint } from "./ai-repair-publish.mjs";
+import { acquireMonitorLease, MonitorLedgerError } from "./monitor-ledger.mjs";
 
 const REPAIRABLE_REASONS = new Set([
   "all_time_user_last_baseline_changed",
@@ -146,6 +147,7 @@ function appendGitHubOutputs(outputPath, values) {
 export async function runAiRepairGate({
   env = process.env,
   monitor = runRemoteMonitor,
+  leaseImpl = acquireMonitorLease,
   incidentSearch = existingIncident,
   writeOutputs = appendGitHubOutputs,
 } = {}) {
@@ -155,7 +157,35 @@ export async function runAiRepairGate({
     verifiedProjectId: env.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID,
     verifiedUsd: env.YUTAKASA_OPENAI_CAP_CONFIRMED_USD,
   });
-  const live = await monitor();
+  let live;
+  let lease;
+  try {
+    lease = await leaseImpl({ secrets: env, kind: "recheck" });
+    try {
+      live = await monitor({ secrets: env, leaseGuard: () => lease.assertActive() });
+      await lease.finish({
+        ...live,
+        status: live.actionRequired ? "action_required" : "healthy",
+        alertDispatched: false,
+        repairDispatched: false,
+      });
+    } catch (error) {
+      try {
+        await lease.finish({
+          status: "failed", reasonCodes: ["live_recheck_failed"],
+          errorCode: "live_recheck_failed",
+        });
+      } catch {
+        // Lease loss is a failed recheck; no AI job may start.
+      }
+      throw error;
+    } finally {
+      await lease.stop();
+    }
+  } catch (error) {
+    if (error instanceof MonitorLedgerError) fail(error.code);
+    fail("live_recheck_failed");
+  }
   let decision = decideAiRepair(dispatch, live);
   if (decision.shouldRun && await incidentSearch({
     deploymentId: dispatch.deploymentId,

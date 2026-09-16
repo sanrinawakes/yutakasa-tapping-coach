@@ -16,6 +16,7 @@ import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.
 import { RepairDispatchError, dispatchAlert, dispatchRepair } from "./dispatch-repair.mjs";
 import { DRIVE_INTAKE_FOLDER_ID, collectDriveIntakeMetadata } from "./drive-intake.mjs";
 import { SupportWorkerError, processSupportTicketContextFile } from "./support-worker.mjs";
+import { MonitorLedgerError, acquireMonitorLease } from "./monitor-ledger.mjs";
 
 const RUN_DIRECTORY_PREFIX = "yutakasa-remote-monitor.";
 const RUN_FILES = [
@@ -336,6 +337,7 @@ export async function preflightRemoteMonitor({
   deploymentImpl = collectRemoteDeployment,
   logsImpl = collectRemoteLogs,
   driveImpl = collectDriveIntakeMetadata,
+  leaseGuard = async () => {},
 } = {}) {
   const oldUmask = process.umask(0o077);
   const runId = crypto.randomUUID();
@@ -351,6 +353,7 @@ export async function preflightRemoteMonitor({
     writePrivateText(envPath, productionEnvText(secrets));
     const environment = loadSnapshotEnvironment(envPath);
 
+    await leaseGuard();
     const startSnapshot = await snapshotImpl({ environment });
     const start = validateRemoteSnapshot(startSnapshot);
     const startPath = path.join(directory, "start-snapshot.json");
@@ -359,8 +362,10 @@ export async function preflightRemoteMonitor({
 
     let drive;
     try {
+      await leaseGuard();
       drive = await driveImpl({ credentials: secrets });
-    } catch {
+    } catch (error) {
+      if (error instanceof MonitorLedgerError) throw error;
       fail("drive_intake_snapshot_failed");
     }
     const driveCount = validateDriveIntake(drive);
@@ -369,6 +374,7 @@ export async function preflightRemoteMonitor({
     assertPrivateFile(drivePath);
 
     if (start.queue > 0) {
+      await leaseGuard();
       const tickets = await fetchTicketContext({
         automationToken: environment.automationToken,
         expectedCount: start.queue,
@@ -386,17 +392,21 @@ export async function preflightRemoteMonitor({
 
     let deployment;
     try {
+      await leaseGuard();
       deployment = await deploymentImpl({ token: secrets.VERCEL_TOKEN });
-    } catch {
+    } catch (error) {
+      if (error instanceof MonitorLedgerError) throw error;
       fail("deployment_snapshot_failed");
     }
     let logs;
     try {
+      await leaseGuard();
       logs = await logsImpl({
         deploymentId: deployment.deploymentId,
         token: secrets.VERCEL_TOKEN,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof MonitorLedgerError) throw error;
       fail("vercel_log_snapshot_failed");
     }
     const logCounts = checkedProductionEvidence(deployment, logs);
@@ -444,6 +454,7 @@ export async function completeRemoteMonitor(runId, {
   snapshotImpl = collectProductionSnapshot,
   secrets = process.env,
   driveImpl = collectDriveIntakeMetadata,
+  leaseGuard = async () => {},
 } = {}) {
   const oldUmask = process.umask(0o077);
   let directory;
@@ -481,6 +492,7 @@ export async function completeRemoteMonitor(runId, {
       fail("checkpoint_evidence_mismatch");
     }
     const environment = loadSnapshotEnvironment(path.join(directory, "production.env"));
+    await leaseGuard();
     const finalSnapshot = await snapshotImpl({ environment });
     const final = validateRemoteSnapshot(finalSnapshot);
     const finalPath = path.join(directory, "final-snapshot.json");
@@ -488,8 +500,10 @@ export async function completeRemoteMonitor(runId, {
     assertPrivateFile(finalPath);
     let finalDrive;
     try {
+      await leaseGuard();
       finalDrive = await driveImpl({ credentials: secrets });
-    } catch {
+    } catch (error) {
+      if (error instanceof MonitorLedgerError) throw error;
       fail("final_drive_intake_snapshot_failed");
     }
     const driveFinalCount = validateDriveIntake(finalDrive);
@@ -540,6 +554,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
         contextPath: path.join(runDirectory(preflight.runId, tempRoot), "ticket-context.json"),
         automationToken,
         fetchImpl: options.supportFetchImpl ?? globalThis.fetch,
+        beforeMutation: options.leaseGuard ?? (async () => {}),
       });
     }
     const result = await completeRemoteMonitor(preflight.runId, options);
@@ -564,7 +579,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
 }
 
 function safeErrorCode(error) {
-  if (error instanceof RemoteMonitorError || error instanceof SnapshotError || error instanceof RepairDispatchError || error instanceof SupportWorkerError) {
+  if (error instanceof RemoteMonitorError || error instanceof SnapshotError || error instanceof RepairDispatchError || error instanceof SupportWorkerError || error instanceof MonitorLedgerError) {
     return error.code;
   }
   return "remote_monitor_unexpected_failure";
@@ -584,16 +599,87 @@ export function planMonitorDispatches(reasonCodes) {
   };
 }
 
+export async function runLeasedMonitor({
+  secrets = process.env,
+  leaseImpl = acquireMonitorLease,
+  monitorImpl = runRemoteMonitorWithTickets,
+  alertImpl = dispatchAlert,
+  repairImpl = dispatchRepair,
+  ...options
+} = {}) {
+  const lease = await leaseImpl({ secrets, kind: "scheduled" });
+  let result;
+  let observationError;
+  try {
+    result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
+    await lease.finish({
+      ...result,
+      status: result.actionRequired ? "action_required" : "healthy",
+      alertDispatched: false,
+      repairDispatched: false,
+    });
+  } catch (error) {
+    observationError = error;
+    const code = safeErrorCode(error);
+    try {
+      await lease.finish({
+        ...(result ?? {}),
+        status: "failed",
+        reasonCodes: [code],
+        errorCode: code,
+        alertDispatched: false,
+        repairDispatched: false,
+      });
+    } catch {
+      // A lost lease must never be treated as a successful observation.
+    }
+  } finally {
+    await lease.stop();
+  }
+
+  // Dispatch only after the monitor lease is released. The GitHub recheck
+  // acquires the same lease before its own support snapshot.
+  if (observationError) {
+    try {
+      await alertImpl({
+        token: secrets.GITHUB_DISPATCH_TOKEN,
+        reasonCodes: [safeErrorCode(observationError)],
+        deploymentId: result?.deploymentId ?? "unknown",
+      });
+      await lease.recordDispatch({ alertDispatched: true });
+    } catch {
+      // Railway also retains the failed cron result if the alert is unavailable.
+    }
+    throw observationError;
+  }
+
+  let alertDispatched = false;
+  let repairDispatched = false;
+  if (result.actionRequired) {
+    const { alertReasons, repairReasons } = planMonitorDispatches(result.reasonCodes);
+    await alertImpl({
+      token: secrets.GITHUB_DISPATCH_TOKEN,
+      reasonCodes: alertReasons,
+      deploymentId: result.deploymentId,
+    });
+    alertDispatched = true;
+    await lease.recordDispatch({ alertDispatched });
+    if (repairReasons.length > 0) {
+      await repairImpl({
+        token: secrets.GITHUB_DISPATCH_TOKEN,
+        reasonCodes: repairReasons,
+        deploymentId: result.deploymentId,
+      });
+      repairDispatched = true;
+      await lease.recordDispatch({ repairDispatched });
+    }
+  }
+  return { ...result, alertDispatched, repairDispatched };
+}
+
 export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {
   let result;
-  let phase = "run";
-  if (argv.length === 1 && argv[0] === "preflight") {
-    phase = "preflight";
-    result = await preflightRemoteMonitor();
-  } else if (argv.length === 2 && argv[0] === "complete") {
-    phase = "complete";
-    result = await completeRemoteMonitor(argv[1]);
-  } else if (argv.length === 2 && argv[0] === "cleanup-run") {
+  if (argv.length === 2 && argv[0] === "cleanup-run") {
     cleanupRemoteRun(argv[1]);
     result = { ok: true, runCleaned: true };
   } else if (argv.length === 2 && argv[0] === "context-path") {
@@ -603,29 +689,12 @@ export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {
     assertPrivateFile(contextPath);
     result = { ok: true, contextPath };
   } else if (argv.length === 0 || (argv.length === 1 && argv[0] === "run")) {
-    result = await runRemoteMonitorWithTickets();
-    if (result.actionRequired) {
-      const { alertReasons, repairReasons } = planMonitorDispatches(result.reasonCodes);
-      await dispatchAlert({
-        token: process.env.GITHUB_DISPATCH_TOKEN,
-        reasonCodes: alertReasons,
-        deploymentId: result.deploymentId,
-      });
-      result.alertDispatched = true;
-      if (repairReasons.length > 0) {
-        await dispatchRepair({
-          token: process.env.GITHUB_DISPATCH_TOKEN,
-          reasonCodes: repairReasons,
-          deploymentId: result.deploymentId,
-        });
-        result.repairDispatched = true;
-      }
-    }
+    result = await runLeasedMonitor();
   } else {
     fail("usage_remote_monitor");
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  process.exitCode = monitorResultExitCode(result, phase);
+  process.exitCode = monitorResultExitCode(result, "run");
 }
 
 const isMain =
@@ -633,24 +702,10 @@ const isMain =
 if (isMain) {
   runRemoteMonitorCli().catch(async (error) => {
     const reasonCode = safeErrorCode(error);
-    let dispatchAccepted = false;
-    if (!(error instanceof RepairDispatchError)) {
-      try {
-        await dispatchAlert({
-          token: process.env.GITHUB_DISPATCH_TOKEN,
-          reasonCodes: [/^[A-Za-z0-9_]+$/u.test(reasonCode) ? reasonCode : "remote_monitor_failure"],
-          deploymentId: "unknown",
-        });
-        dispatchAccepted = true;
-      } catch {
-        // Railway retains the failed cron result when dispatch is also unavailable.
-      }
-    }
     process.stdout.write(`${JSON.stringify({
       ok: false,
       actionRequired: true,
       reasonCodes: [reasonCode],
-      alertDispatched: dispatchAccepted,
     })}\n`);
     process.exitCode = 1;
   });

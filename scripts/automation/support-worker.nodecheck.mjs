@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { MonitorLedgerError } from "./monitor-ledger.mjs";
 
 import {
   SupportWorkerError,
@@ -75,6 +76,38 @@ function fakeApi(statuses = {}) {
   };
   return { calls, fetchImpl };
 }
+
+test("lost distributed lease stops before any ticket mutation", async () => {
+  const api = fakeApi();
+  await assert.rejects(
+    () => processSupportTickets({
+      automationToken: TOKEN,
+      tickets: [entry()],
+      fetchImpl: api.fetchImpl,
+      beforeMutation: async () => { throw new MonitorLedgerError("monitor_lease_lost"); },
+    }),
+    (error) => error instanceof MonitorLedgerError && error.code === "monitor_lease_lost",
+  );
+  assert.deepEqual(api.calls, []);
+});
+
+test("lease loss after claim prevents heartbeat, terminal update, and release", async () => {
+  const api = fakeApi();
+  let checks = 0;
+  await assert.rejects(
+    () => processSupportTickets({
+      automationToken: TOKEN,
+      tickets: [entry()],
+      fetchImpl: api.fetchImpl,
+      beforeMutation: async () => {
+        checks += 1;
+        if (checks > 1) throw new MonitorLedgerError("monitor_lease_lost");
+      },
+    }),
+    (error) => error instanceof MonitorLedgerError && error.code === "monitor_lease_lost",
+  );
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim"]);
+});
 
 test("private context schema and file permissions fail closed", () => {
   assert.equal(validateTicketContext(context()).length, 1);

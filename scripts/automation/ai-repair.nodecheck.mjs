@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { MonitorLedgerError } from "./monitor-ledger.mjs";
 
 import {
   AiRepairGateError,
@@ -21,6 +22,14 @@ import {
 
 const deploymentId = "dpl_CnNGM63s3fmYAsHpe1RhkXqvJru4";
 const projectId = "proj_S4e8BxvmjNYzpo8EL2bjRPUH";
+const testLease = async ({ kind }) => {
+  assert.equal(kind, "recheck");
+  return {
+    assertActive: async () => {},
+    finish: async () => {},
+    stop: async () => {},
+  };
+};
 
 test("dispatch parser accepts only bounded reason codes and opaque deployment IDs", () => {
   assert.deepEqual(parseDispatch('["production_log_timeout","production_log_timeout"]', deploymentId), {
@@ -102,6 +111,7 @@ test("gate writes only fixed sanitized outputs and does not call AI", async () =
       deploymentId,
       reasonCodes: ["production_log_timeout"],
     }),
+    leaseImpl: testLease,
     incidentSearch: async () => false,
     writeOutputs: (_path, value) => outputs.push(value),
   });
@@ -148,11 +158,32 @@ test("an open or closed PR or issue suppresses another billable investigation", 
       deploymentId,
       reasonCodes: ["production_log_timeout"],
     }),
+    leaseImpl: testLease,
     incidentSearch: async () => true,
     writeOutputs: () => {},
   });
   assert.equal(result.shouldRun, false);
   assert.equal(result.code, "existing_incident");
+});
+
+test("overlapping Railway run prevents live recheck and paid investigation", async () => {
+  let monitorCalls = 0;
+  await assert.rejects(
+    () => runAiRepairGate({
+      env: {
+        DISPATCH_REASON_CODES: '["production_log_timeout"]',
+        DISPATCH_DEPLOYMENT_ID: deploymentId,
+        YUTAKASA_OPENAI_PROJECT_ID: projectId,
+        YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: projectId,
+        YUTAKASA_OPENAI_CAP_CONFIRMED_USD: "20",
+      },
+      leaseImpl: async () => { throw new MonitorLedgerError("monitor_overlap"); },
+      monitor: async () => { monitorCalls += 1; },
+      writeOutputs: () => assert.fail("no AI output after overlap"),
+    }),
+    (error) => error instanceof AiRepairGateError && error.code === "monitor_overlap",
+  );
+  assert.equal(monitorCalls, 0);
 });
 
 test("proposal schema and size reject arbitrary model output", () => {

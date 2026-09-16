@@ -42,9 +42,7 @@ const monitor = service("yutakasa-support-monitor", {
     CRON_SECRET: preserve(),
     VERCEL_TOKEN: preserve(),
     GITHUB_DISPATCH_TOKEN: preserve(),
-    GOOGLE_DRIVE_CLIENT_ID: preserve(),
-    GOOGLE_DRIVE_CLIENT_SECRET: preserve(),
-    GOOGLE_DRIVE_REFRESH_TOKEN: preserve(),
+    GOOGLE_DRIVE_API_KEY: "${{ shared.GOOGLE_DRIVE_API_KEY }}",
   },
 });
 
