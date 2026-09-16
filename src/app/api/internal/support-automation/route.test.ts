@@ -3,6 +3,8 @@ import {
   addSupportWorkLog,
   appendAdminSupportMessage,
   claimSupportTicket,
+  finishLockedSupportTicket,
+  getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   renewSupportAutomationLock,
   updateAdminSupportTicket,
@@ -13,6 +15,8 @@ vi.mock("@/lib/server/support-service", () => ({
   addSupportWorkLog: vi.fn(),
   appendAdminSupportMessage: vi.fn(),
   claimSupportTicket: vi.fn(),
+  finishLockedSupportTicket: vi.fn(),
+  getAdminSupportTicket: vi.fn(),
   listPendingAutomatedSupportTickets: vi.fn(),
   renewSupportAutomationLock: vi.fn(),
   updateAdminSupportTicket: vi.fn(),
@@ -21,6 +25,8 @@ vi.mock("@/lib/server/support-service", () => ({
 const addLogMock = vi.mocked(addSupportWorkLog);
 const appendMock = vi.mocked(appendAdminSupportMessage);
 const claimMock = vi.mocked(claimSupportTicket);
+const finishLockedMock = vi.mocked(finishLockedSupportTicket);
+const detailMock = vi.mocked(getAdminSupportTicket);
 const listMock = vi.mocked(listPendingAutomatedSupportTickets);
 const renewLockMock = vi.mocked(renewSupportAutomationLock);
 const updateMock = vi.mocked(updateAdminSupportTicket);
@@ -36,17 +42,20 @@ const ticket = {
   status: "in_progress" as const,
   decision_required: false,
   automation_status: "investigating" as const,
+  automation_locked_at: "2026-08-02T00:00:00.000Z",
+  automation_lock_token: lockToken,
   user_last_read_at: null,
   admin_last_read_at: null,
   created_at: "2026-08-02T00:00:00.000Z",
   updated_at: "2026-08-02T00:00:00.000Z",
 };
 
-function request(method: "GET" | "PATCH", body?: unknown, token = secret) {
-  return new NextRequest("http://localhost/api/internal/support-automation", {
+function request(method: "GET" | "PATCH", body?: unknown, token = secret, query = "") {
+  return new NextRequest(`http://localhost/api/internal/support-automation${query}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
+      ...(query ? { "x-automation-lock-token": lockToken } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -76,6 +85,36 @@ describe("support automation API", () => {
     const response = await GET(request("GET"));
     expect(response.status).toBe(200);
     expect(listMock).toHaveBeenCalledWith(10);
+  });
+
+  it("re-reads claimed history without marking it read or exposing email and attachments", async () => {
+    detailMock.mockResolvedValue({
+      ticket,
+      messages: [{ id: messageId, ticket_id: ticketId, sender_type: "user",
+        sender_email: "member@example.com", body: "追加相談", created_at: ticket.updated_at,
+        attachments: [{ id: messageId, filename: "secret.jpg", content_type: "image/jpeg",
+          size_bytes: 3, url: "https://example.com/secret" }] }],
+      work_logs: [],
+    });
+    const response = await GET(request("GET", undefined, secret,
+      `?ticketId=${ticketId}`));
+    expect(response.status).toBe(200);
+    expect(renewLockMock).toHaveBeenCalledWith(ticketId, lockToken);
+    expect(detailMock).toHaveBeenCalledWith(ticketId, { markRead: false });
+    const body = await response.json();
+    expect(body.messages[0].body).toBe("追加相談");
+    expect(JSON.stringify(body)).not.toContain("member@example.com");
+    expect(JSON.stringify(body)).not.toContain("secret.jpg");
+    expect(JSON.stringify(body)).not.toContain("https://example.com/secret");
+  });
+
+  it("rejects a claimed detail read after an administrator replaces the lock", async () => {
+    detailMock.mockResolvedValue({
+      ticket: { ...ticket, automation_lock_token: "f41fb99e-874b-4111-a95a-4f4cb268e48c" },
+      messages: [], work_logs: [],
+    });
+    const response = await GET(request("GET", undefined, secret, `?ticketId=${ticketId}`));
+    expect(response.status).toBe(409);
   });
 
   it("uses an atomic claim and returns 409 when another worker already claimed it", async () => {
@@ -142,20 +181,48 @@ describe("support automation API", () => {
   });
 
   it("blocks business decisions without replying to the customer", async () => {
-    updateMock.mockResolvedValue({ ...ticket, decision_required: true });
+    finishLockedMock.mockResolvedValue({ ...ticket, decision_required: true });
     const response = await PATCH(
       request("PATCH", {
         action: "decision_required",
         ticketId,
         lockToken,
+        latestUserMessageId: messageId,
+        ticketVersion: ticket.updated_at,
         summary: "返金可否の判断が必要です。",
       })
     );
     expect(response.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith({
+    expect(finishLockedMock).toHaveBeenCalledWith({
       ticketId,
-      decisionRequired: true,
+      lockToken,
+      latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at,
+      outcome: "decision_required",
     });
     expect(appendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not log or overwrite a terminal state when the guarded update loses ownership", async () => {
+    finishLockedMock.mockResolvedValue(null);
+    const response = await PATCH(request("PATCH", {
+      action: "failed", ticketId, lockToken, latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at, summary: "再調査が必要です。",
+    }));
+    expect(response.status).toBe(409);
+    expect(addLogMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an uncertain failure if the terminal update succeeds but its work log fails", async () => {
+    finishLockedMock.mockResolvedValue({ ...ticket, automation_status: "failed" });
+    addLogMock.mockRejectedValue(new Error("database log unavailable"));
+    const response = await PATCH(request("PATCH", {
+      action: "failed", ticketId, lockToken, latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at, summary: "再調査が必要です。",
+    }));
+    expect(response.status).toBe(500);
+    expect(finishLockedMock).toHaveBeenCalledOnce();
+    expect(addLogMock).toHaveBeenCalledOnce();
   });
 });

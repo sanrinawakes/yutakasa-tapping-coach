@@ -28,11 +28,13 @@ function validUuid(value) {
 }
 
 function latestUserMessage(ticket) {
-  const users = ticket.messages.filter((message) => message.sender_type === "user");
-  return users.at(-1);
+  return ticket.messages
+    .filter((message) => message.sender_type === "user")
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
+    .at(-1);
 }
 
-export function validateTicketContext(context) {
+export function validateTicketContext(context, allowedAutomationStatuses = ["queued", "failed"]) {
   if (
     context?.schemaVersion !== 1 ||
     context.trust !== "untrusted_customer_input" ||
@@ -48,7 +50,7 @@ export function validateTicketContext(context) {
     if (
       !validUuid(ticket?.id) ||
       seen.has(ticket.id) ||
-      !["queued", "failed"].includes(ticket.automation_status) ||
+      !allowedAutomationStatuses.includes(ticket.automation_status) ||
       !["open", "in_progress"].includes(ticket.status) ||
       ticket.decision_required !== false ||
       !["technical", "login", "quality", "how_to", "feature", "billing", "other"].includes(ticket.category) ||
@@ -118,9 +120,9 @@ export function planTicket(entry) {
   };
 }
 
-async function readApiJson(response) {
+async function readApiJson(response, maxBytes = MAX_API_RESPONSE_BYTES) {
   const declared = response.headers?.get?.("content-length");
-  if (declared && /^\d+$/u.test(declared) && Number(declared) > MAX_API_RESPONSE_BYTES) {
+  if (declared && /^\d+$/u.test(declared) && Number(declared) > maxBytes) {
     fail("support_api_response_too_large");
   }
   const reader = response.body?.getReader?.();
@@ -133,7 +135,7 @@ async function readApiJson(response) {
       if (part.done) break;
       if (!(part.value instanceof Uint8Array)) fail("support_api_response_invalid");
       size += part.value.byteLength;
-      if (size > MAX_API_RESPONSE_BYTES) {
+      if (size > maxBytes) {
         // A broken stream may ignore cancellation. The caller's hard deadline still applies.
         void reader.cancel().catch(() => {});
         fail("support_api_response_too_large");
@@ -153,6 +155,60 @@ async function readApiJson(response) {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     fail("support_api_response_invalid_json");
+  }
+}
+
+function validateClaimedDetail(payload, ticketId, lockToken) {
+  if (
+    payload?.ticket?.id !== ticketId ||
+    payload.ticket.automation_lock_token !== lockToken ||
+    payload.ticket.automation_status !== "investigating" ||
+    payload.ticket.status !== "in_progress" ||
+    typeof payload.ticket.updated_at !== "string" ||
+    !Number.isFinite(Date.parse(payload.ticket.updated_at))
+  ) fail("support_api_detail_invalid");
+  validateTicketContext({
+    schemaVersion: 1,
+    trust: "untrusted_customer_input",
+    obtainedAt: new Date().toISOString(),
+    tickets: [payload],
+  }, ["investigating"]);
+  return payload;
+}
+
+async function getClaimedDetail({ automationToken, ticketId, lockToken, fetchImpl, timeoutMs }) {
+  const controller = new AbortController();
+  const url = new URL(SUPPORT_API);
+  url.searchParams.set("ticketId", ticketId);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new SupportWorkerError("support_api_detail_timeout_uncertain"));
+    }, timeoutMs);
+  });
+  try {
+    const request = (async () => {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: {
+          "x-automation-token": automationToken,
+          "x-automation-lock-token": lockToken,
+        },
+        redirect: "error",
+        signal: controller.signal,
+      });
+      if (response.status === 409) return { status: "conflict" };
+      if (response.status !== 200) fail("support_api_detail_http_failure");
+      const payload = await readApiJson(response, MAX_CONTEXT_BYTES);
+      return { status: "ok", entry: validateClaimedDetail(payload, ticketId, lockToken) };
+    })();
+    return await Promise.race([request, deadline]);
+  } catch (error) {
+    if (error instanceof SupportWorkerError) throw error;
+    fail("support_api_detail_request_uncertain");
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -237,6 +293,7 @@ function emptyResult() {
     decisionsRequired: 0,
     technicalHandoffs: 0,
     lostLocks: 0,
+    staleContexts: 0,
     uncertain: 0,
     deferred: 0,
   };
@@ -291,6 +348,7 @@ export async function processSupportTickets({
     const ticketId = entry.ticket.id;
     const lockToken = crypto.randomUUID();
     let claimAttempted = false;
+    let claimedSnapshot = null;
     try {
       claimAttempted = true;
       const claim = await ownedPatchAction({
@@ -301,6 +359,33 @@ export async function processSupportTickets({
       });
       if (claim.status === "conflict") {
         result.claimConflicts += 1;
+        continue;
+      }
+      await beforeMutation();
+      const detail = await getClaimedDetail({
+        automationToken, ticketId, lockToken, fetchImpl, timeoutMs,
+      });
+      if (detail.status === "conflict") {
+        result.lostLocks += 1;
+        continue;
+      }
+      claimedSnapshot = detail.entry;
+      const freshPlan = planTicket(claimedSnapshot);
+      if (freshPlan.latestUserMessageId !== plan.latestUserMessageId ||
+          freshPlan.kind !== plan.kind) {
+        result.staleContexts += 1;
+        const release = await ownedPatchAction({
+          automationToken,
+          body: {
+            action: "failed", ticketId, lockToken,
+            latestUserMessageId: freshPlan.latestUserMessageId,
+            ticketVersion: claimedSnapshot.ticket.updated_at,
+            summary: "取得後に問い合わせ履歴が変わったため、今回の判断を破棄しました。再調査が必要です。",
+          },
+          fetchImpl, timeoutMs,
+        });
+        if (release.status === "conflict") result.lostLocks += 1;
+        claimAttempted = false;
         continue;
       }
       const heartbeat = await ownedPatchAction({
@@ -320,7 +405,7 @@ export async function processSupportTickets({
         result.lostLocks += 1;
         continue;
       }
-      if (plan.kind === "technical_handoff") {
+      if (freshPlan.kind === "technical_handoff") {
         const log = await ownedPatchAction({
           automationToken,
           body: {
@@ -329,7 +414,7 @@ export async function processSupportTickets({
             lockToken,
             eventType: "remote_support_escalated",
             summary: "技術調査と本番検証が必要です。顧客への返信と本番変更は行っていません。",
-            metadata: { latestUserMessageId: plan.latestUserMessageId },
+            metadata: { latestUserMessageId: freshPlan.latestUserMessageId },
           },
           fetchImpl,
           timeoutMs,
@@ -341,17 +426,21 @@ export async function processSupportTickets({
       }
       const terminal = await ownedPatchAction({
         automationToken,
-        body: plan.kind === "decision_required"
+        body: freshPlan.kind === "decision_required"
           ? {
               action: "decision_required",
               ticketId,
               lockToken,
+              latestUserMessageId: freshPlan.latestUserMessageId,
+              ticketVersion: claimedSnapshot.ticket.updated_at,
               summary: "料金、契約、法的対応、個人情報などの運営判断が必要です。顧客への返信と変更は行っていません。",
             }
           : {
               action: "failed",
               ticketId,
               lockToken,
+              latestUserMessageId: freshPlan.latestUserMessageId,
+              ticketVersion: claimedSnapshot.ticket.updated_at,
               summary: "自動処理で原因と本番での修正結果を確定できません。技術担当による調査が必要です。顧客への返信と本番変更は行っていません。",
             },
         fetchImpl,
@@ -361,20 +450,23 @@ export async function processSupportTickets({
         result.lostLocks += 1;
         continue;
       }
-      if (plan.kind === "decision_required") result.decisionsRequired += 1;
+      if (freshPlan.kind === "decision_required") result.decisionsRequired += 1;
       else result.technicalHandoffs += 1;
       claimAttempted = false;
     } catch (error) {
       if (error instanceof MonitorLedgerError) throw error;
       result.uncertain += 1;
-      if (claimAttempted) {
+      if (claimAttempted && claimedSnapshot) {
         try {
+          const latestUserMessageId = latestUserMessage(claimedSnapshot)?.id;
           const release = await ownedPatchAction({
             automationToken,
             body: {
               action: "failed",
               ticketId,
               lockToken,
+              latestUserMessageId,
+              ticketVersion: claimedSnapshot.ticket.updated_at,
               summary: "自動処理中のAPI応答を確認できません。再調査が必要です。顧客への返信と本番変更は行っていません。",
             },
             fetchImpl,
@@ -387,7 +479,8 @@ export async function processSupportTickets({
       }
     }
   }
-  result.ok = result.uncertain === 0 && result.lostLocks === 0 && result.deferred === 0;
+  result.ok = result.uncertain === 0 && result.lostLocks === 0 &&
+    result.staleContexts === 0 && result.deferred === 0;
   return result;
 }
 

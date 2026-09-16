@@ -563,10 +563,12 @@ export async function runRemoteMonitorWithTickets(options = {}) {
       if (support.technicalHandoffs > 0) result.reasonCodes.push("support_technical_review_required");
       if (support.decisionsRequired > 0) result.reasonCodes.push("support_owner_decision_required");
       if (support.lostLocks > 0) result.reasonCodes.push("support_lock_lost");
+      if (support.staleContexts > 0) result.reasonCodes.push("support_context_stale");
       if (support.uncertain > 0) result.reasonCodes.push("support_worker_uncertain");
       if (support.deferred > 0) result.reasonCodes.push("support_deferred");
       if (support.ok === false &&
-        support.lostLocks === 0 && support.uncertain === 0 && support.deferred === 0) {
+        support.lostLocks === 0 && support.staleContexts === 0 &&
+        support.uncertain === 0 && support.deferred === 0) {
         result.reasonCodes.push("support_worker_nonhealthy");
       }
       result.reasonCodes = [...new Set(result.reasonCodes)].sort();

@@ -68,8 +68,18 @@ test("log queries discard content and reject truncated results", async () => {
     },
   });
   assert.deepEqual(Object.values(result.queries).map(({ count }) => count), [1, 1, 1, 1]);
+  assert.equal(result.logScope, "project_production");
   assert.equal(JSON.stringify(result).includes("private content"), false);
   assert.equal(invocations.length, 4);
+  for (const args of invocations) {
+    assert.equal(args[0], "logs");
+    assert.equal(args.includes(id), false, "current deployment must not narrow the 24-hour log window");
+    assert.equal(args.some((arg) => arg.startsWith("--deployment")), false);
+    assert.ok(args.includes("--environment=production"));
+    assert.ok(args.includes("--no-branch"));
+    assert.ok(args.includes("--since=24h"));
+    assert.ok(args.includes("--project=yutakasa-tapping-coach"));
+  }
   assert.equal(parseBoundedLogQuery("{}\n".repeat(100)).truncated, true);
   await assert.rejects(
     collectRemoteLogs({

@@ -9,7 +9,12 @@ This directory contains PC-independent monitoring, conservative ticket triage, a
 - Schedule: `17 * * * *` (UTC)
 - Container: `Dockerfile`; `node remote-monitor.mjs run`
 - Required Railway variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, one of `JWT_SECRET` or `CRON_SECRET`, `VERCEL_TOKEN`, `GITHUB_DISPATCH_TOKEN` (fine-grained GitHub token with Actions write on this repository), and the Drive API-only shared secret `GOOGLE_DRIVE_API_KEY`. Use dedicated, scoped credentials. Do not commit values.
+- The Drive API key is currently stored as a production shared variable while the monitor service is absent, so the daily-report service inherits it unnecessarily. During monitor creation, verify Railway supports a monitor-service-only variable, move the rotated key there, change the IaC reference, and remove the shared copy only after a monitor-side API read succeeds. Keep the monitor inactive throughout this credential move.
 - Output contains only counts, deployment identifiers, and fixed reason codes. Private ticket context exists only in a 0700 temporary run directory and is removed when the run ends. Ticket claim and terminal actions require the app's live support API, so keep the Railway cron inactive while the desktop automation is running.
+
+After a claim, the worker fetches the ticket's current history through a lock-authenticated internal API. If the latest user message or decision category changed since the queue snapshot, it discards the old decision and releases only through a guarded failure update. Normal `failed` and `decision_required` updates require the current lock token, investigating state, latest user message ID, and the ticket version returned after claim. A conflicting user or administrator change returns 409 and leaves the newer state intact. The lock token is sent in an HTTP header, not a URL. An ambiguous claim without a verified fresh snapshot is left for the existing 30-minute stale-lock recovery.
+
+The terminal ticket update and its work-log insert are currently separate database calls. If the ticket update succeeds but the log insert fails, the API returns 500 and the worker records an uncertain, nonhealthy run; a guarded release can then return 409 because the lock was already cleared. In this case inspect the ticket and work-log state before treating the result as complete. Moving both writes into one atomic database function remains necessary before unattended customer-facing completion.
 
 ## Durable run ownership and observation
 
@@ -20,6 +25,8 @@ Each finished run stores only timestamps, `healthy`/`action_required`/`failed`/`
 The scheduled run finalizes its observation and releases the lease before asking GitHub to recheck it. Dispatch receipt flags are written by a separate, idempotent RPC after GitHub accepts each request. A failed or ambiguous dispatch leaves the observation actionable and the cron result nonzero; the flags do not assert that AI investigation or a repair has finished.
 
 The worker checks the exact support queue via the fixed production snapshot helper, the legacy Drive intake folder, GitHub/Vercel deployment parity, and bounded Vercel log queries. On any actionable condition it dispatches `monitor-alert.yml`, which creates a deduplicated GitHub Issue with fixed reason codes. Current technical anomalies also dispatch `ai-repair.yml` for an isolated investigation and draft PR or issue. No ticket body or Drive filename is sent. A Vercel token, Drive API key, or snapshot failure results in a nonzero exit and no healthy verdict. The support GET may recover stale ticket locks and add recovery work logs, so do not run it concurrently with the desktop automation during cutover.
+
+The Vercel log scan covers the production project across deployments over the preceding 24 hours, including a deployment replaced during that window. It rejects incomplete or truncated query results instead of treating them as healthy.
 
 ## Before cutover
 

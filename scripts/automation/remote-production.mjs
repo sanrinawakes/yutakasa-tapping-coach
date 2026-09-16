@@ -168,8 +168,9 @@ export async function collectRemoteLogs({
     let stdout;
     try {
       ({ stdout } = await runCommand("vercel", [
-        "logs", deploymentId,
+        "logs",
         "--since=24h", "--limit=100", "--no-follow", "--json",
+        "--environment=production", "--no-branch",
         "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
         filter, "--token", token,
       ], {
@@ -187,6 +188,7 @@ export async function collectRemoteLogs({
   return Object.freeze({
     observedAt: new Date().toISOString(),
     deploymentId,
+    logScope: "project_production",
     queries: Object.freeze(queries),
   });
 }
