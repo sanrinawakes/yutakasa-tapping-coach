@@ -52,9 +52,25 @@ function context(tickets = [entry()]) {
   };
 }
 
-function fakeApi(statuses = {}) {
+function fakeApi(statuses = {}, claimedEntry = entry()) {
   const calls = [];
   const fetchImpl = async (_url, init) => {
+    if (init.method === "GET") {
+      assert.equal(new URL(String(_url)).searchParams.has("lockToken"), false);
+      assert.equal(init.headers["x-automation-lock-token"], calls.find((call) => call.action === "claim")?.lockToken);
+      calls.push({ action: "get" });
+      return new Response(JSON.stringify({
+        ticket: {
+          ...claimedEntry.ticket,
+          status: "in_progress",
+          automation_status: "investigating",
+          automation_lock_token: calls.find((call) => call.action === "claim")?.lockToken,
+          updated_at: "2026-09-16T01:05:00.000Z",
+        },
+        messages: claimedEntry.messages,
+        work_logs: claimedEntry.work_logs,
+      }), { status: statuses.get ?? 200 });
+    }
     const body = JSON.parse(init.body);
     calls.push(body);
     const chosen = statuses[`${body.action}:${calls.length}`] ?? statuses[body.action] ?? 200;
@@ -76,6 +92,51 @@ function fakeApi(statuses = {}) {
   };
   return { calls, fetchImpl };
 }
+
+test("a new user message after the queue snapshot prevents the stale terminal decision", async () => {
+  const fresh = entry({ messages: [{
+    id: NEW_MESSAGE_ID,
+    sender_type: "user",
+    body: "追加で相談します。",
+    created_at: "2026-09-16T01:04:00Z",
+  }] });
+  const api = fakeApi({}, fresh);
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.staleContexts, 1);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "failed"]);
+  assert.equal(api.calls[2].latestUserMessageId, NEW_MESSAGE_ID);
+  assert.equal(api.calls.some((call) => call.action === "decision_required" || call.eventType === "remote_support_escalated"), false);
+});
+
+test("a changed claim snapshot or lost detail lock cannot reach progress or terminal actions", async () => {
+  const changed = entry({ ticket: { category: "billing" } });
+  const staleApi = fakeApi({}, changed);
+  const stale = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: staleApi.fetchImpl });
+  assert.equal(stale.staleContexts, 1);
+  assert.deepEqual(staleApi.calls.map((call) => call.action), ["claim", "get", "failed"]);
+  assert.equal(staleApi.calls.some((call) => call.action === "decision_required"), false);
+
+  const conflictApi = fakeApi({ get: 409 });
+  const conflict = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: conflictApi.fetchImpl });
+  assert.equal(conflict.lostLocks, 1);
+  assert.deepEqual(conflictApi.calls.map((call) => call.action), ["claim", "get"]);
+});
+
+test("a claimed-detail fetch that ignores abort leaves the ticket for stale-lock recovery", async () => {
+  const api = fakeApi();
+  const fetchImpl = (url, init) => init.method === "GET"
+    ? new Promise(() => {})
+    : api.fetchImpl(url, init);
+  const started = Date.now();
+  const result = await processSupportTickets({
+    automationToken: TOKEN, tickets: [entry()], fetchImpl,
+    timeoutMs: 1000, maxRuntimeMs: 10_000,
+  });
+  assert.ok(Date.now() - started < 2500);
+  assert.equal(result.uncertain, 1);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim"]);
+});
 
 test("lost distributed lease stops before any ticket mutation", async () => {
   const api = fakeApi();
@@ -155,15 +216,24 @@ test("decision classification uses the customer's full history without exposing 
     work_logs: [{ event_type: "remote_support_escalated", metadata: { latestUserMessageId: MESSAGE_ID } }],
   })).kind, "decision_required");
   assert.equal(planTicket(entry()).kind, "technical_handoff");
+  const tied = entry({ messages: [{
+    id: NEW_MESSAGE_ID,
+    sender_type: "user",
+    body: "同時刻の追記です。",
+    created_at: "2026-09-16T01:00:00Z",
+  }] });
+  tied.messages.reverse();
+  assert.equal(planTicket(tied).latestUserMessageId, NEW_MESSAGE_ID);
 });
 
 test("technical ticket claims, heartbeats, records a durable marker, and terminates failed", async () => {
   const api = fakeApi();
   const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
-  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "log", "log", "failed"]);
-  assert.equal(api.calls[1].eventType, "automation_heartbeat");
-  assert.deepEqual(api.calls[2].metadata, { latestUserMessageId: MESSAGE_ID });
-  assert.equal(new Set(api.calls.map((call) => call.lockToken)).size, 1);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "log", "failed"]);
+  assert.equal(api.calls[2].eventType, "automation_heartbeat");
+  assert.deepEqual(api.calls[3].metadata, { latestUserMessageId: MESSAGE_ID });
+  assert.equal(api.calls[4].ticketVersion, "2026-09-16T01:05:00.000Z");
+  assert.equal(new Set(api.calls.filter((call) => call.lockToken).map((call) => call.lockToken)).size, 1);
   assert.equal(result.technicalHandoffs, 1);
   assert.equal(result.uncertain, 0);
   assert.equal(JSON.stringify(result).includes("private customer text"), false);
@@ -172,24 +242,24 @@ test("technical ticket claims, heartbeats, records a durable marker, and termina
 });
 
 test("decision ticket is locked, heartbeat checked, then blocked without customer reply", async () => {
-  const api = fakeApi();
   const item = entry({ ticket: { category: "billing" } });
+  const api = fakeApi({}, item);
   const result = await processSupportTickets({ automationToken: TOKEN, tickets: [item], fetchImpl: api.fetchImpl });
-  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "log", "decision_required"]);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "decision_required"]);
   assert.equal(result.decisionsRequired, 1);
   assert.equal(api.calls.some((call) => call.action === "reply"), false);
 });
 
 test("prior escalation of the same user message is skipped; new message is processed", async () => {
   const prior = entry({ work_logs: [{ event_type: "remote_support_escalated", metadata: { latestUserMessageId: MESSAGE_ID } }] });
-  const api = fakeApi();
+  const api = fakeApi({}, prior);
   const first = await processSupportTickets({ automationToken: TOKEN, tickets: [prior], fetchImpl: api.fetchImpl });
   assert.equal(first.skippedPriorEscalation, 1);
   assert.equal(api.calls.length, 0);
   prior.messages.push({ id: NEW_MESSAGE_ID, sender_type: "user", body: "まだ直りません", created_at: "2026-09-16T01:20:00Z" });
   const second = await processSupportTickets({ automationToken: TOKEN, tickets: [prior], fetchImpl: api.fetchImpl });
   assert.equal(second.technicalHandoffs, 1);
-  assert.equal(api.calls[2].metadata.latestUserMessageId, NEW_MESSAGE_ID);
+  assert.equal(api.calls[3].metadata.latestUserMessageId, NEW_MESSAGE_ID);
 });
 
 test("claim conflict and lost heartbeat never perform terminal mutation", async () => {
@@ -201,15 +271,24 @@ test("claim conflict and lost heartbeat never perform terminal mutation", async 
   const lostHeartbeat = fakeApi({ log: 409 });
   const two = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: lostHeartbeat.fetchImpl });
   assert.equal(two.lostLocks, 1);
-  assert.deepEqual(lostHeartbeat.calls.map((call) => call.action), ["claim", "log"]);
+  assert.deepEqual(lostHeartbeat.calls.map((call) => call.action), ["claim", "get", "log"]);
 });
 
 test("uncertain log response attempts a safe terminal release and reports uncertainty", async () => {
   const api = fakeApi({ log: 500 });
   const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
-  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "log", "failed"]);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "failed"]);
   assert.equal(result.uncertain, 1);
   assert.equal(result.technicalHandoffs, 0);
+});
+
+test("ambiguous terminal response remains nonhealthy when a second guarded release conflicts", async () => {
+  const api = fakeApi({ "failed:5": 500, "failed:6": 409 });
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "log", "failed", "failed"]);
+  assert.equal(result.uncertain, 1);
+  assert.equal(result.lostLocks, 1);
+  assert.equal(result.ok, false);
 });
 
 test("context file runner processes only current private data", async () => {
@@ -259,7 +338,7 @@ test("a fetch that ignores AbortSignal cannot hold the worker indefinitely", asy
     maxRuntimeMs: 10_000,
   });
   assert.ok(Date.now() - started < 2500);
-  assert.deepEqual(calls, ["claim", "failed"]);
+  assert.deepEqual(calls, ["claim"]);
   assert.equal(result.uncertain, 1);
   assert.equal(result.ok, false);
 });
@@ -291,7 +370,7 @@ test("an oversized response with a stalled cancel fails within the deadline", as
     maxRuntimeMs: 10_000,
   });
   assert.ok(Date.now() - started < 2500);
-  assert.deepEqual(calls, ["claim", "failed"]);
+  assert.deepEqual(calls, ["claim"]);
   assert.equal(result.uncertain, 1);
 });
 
@@ -316,6 +395,6 @@ test("a response stream that never finishes shares the hard request deadline", a
     maxRuntimeMs: 10_000,
   });
   assert.ok(Date.now() - started < 2500);
-  assert.deepEqual(calls, ["claim", "failed"]);
+  assert.deepEqual(calls, ["claim"]);
   assert.equal(result.uncertain, 1);
 });

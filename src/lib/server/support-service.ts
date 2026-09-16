@@ -57,6 +57,8 @@ export type SupportTicket = {
   status: SupportStatus;
   decision_required: boolean;
   automation_status: SupportAutomationStatus;
+  automation_locked_at: string | null;
+  automation_lock_token: string | null;
   user_last_read_at: string | null;
   admin_last_read_at: string | null;
   created_at: string;
@@ -663,7 +665,12 @@ export async function updateAdminSupportTicket(params: {
   automationStatus?: SupportAutomationStatus;
   decisionRequired?: boolean;
 }) {
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  // Any administrator edit supersedes an in-flight automation decision.
+  const update: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    automation_locked_at: null,
+    automation_lock_token: null,
+  };
   if (params.status) {
     update.status = params.status;
     if (!params.automationStatus && params.status === "resolved") {
@@ -802,11 +809,53 @@ export async function renewSupportAutomationLock(
     .from("support_tickets")
     .update({
       automation_locked_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
     })
     .eq("id", ticketId)
     .eq("automation_lock_token", lockToken)
     .eq("automation_status", "investigating")
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return data as SupportTicket | null;
+}
+
+export async function finishLockedSupportTicket(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  ticketVersion: string;
+  outcome: "failed" | "decision_required";
+}): Promise<SupportTicket | null> {
+  const { data: latest, error: latestError } = await getSupabase()
+    .from("support_messages")
+    .select("id")
+    .eq("ticket_id", params.ticketId)
+    .eq("sender_type", "user")
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestError) throw latestError;
+  if (latest?.id !== params.latestUserMessageId) return null;
+
+  const now = new Date().toISOString();
+  const update = params.outcome === "decision_required"
+    ? { decision_required: true, automation_status: "blocked_decision" }
+    : { automation_status: "failed" };
+  const { data, error } = await getSupabase()
+    .from("support_tickets")
+    .update({
+      ...update,
+      automation_locked_at: null,
+      automation_lock_token: null,
+      updated_at: now,
+    })
+    .eq("id", params.ticketId)
+    .eq("automation_lock_token", params.lockToken)
+    .eq("automation_status", "investigating")
+    .eq("decision_required", false)
+    .eq("status", "in_progress")
+    .eq("updated_at", params.ticketVersion)
     .select("*")
     .maybeSingle();
   if (error) throw error;
