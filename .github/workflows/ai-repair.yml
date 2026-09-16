@@ -71,6 +71,14 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - name: Confirm the capped OpenAI project key before paid investigation
+        env:
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+        run: node scripts/automation/openai-project-gate.mjs
       - name: Investigate without production credentials or repository write access
         id: codex
         uses: openai/codex-action@f367b1e9572fd064ea71ef925ca24ee0f01080af # v1

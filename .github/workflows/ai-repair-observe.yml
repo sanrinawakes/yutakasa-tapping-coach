@@ -1,0 +1,35 @@
+name: Observe merged AI repair
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix scripts/automation
+      - name: Check production SHA, logs, and database; record one observation
+        env:
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          CRON_SECRET: ${{ secrets.YUTAKASA_CRON_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+        run: node scripts/automation/ai-repair-observe.mjs
