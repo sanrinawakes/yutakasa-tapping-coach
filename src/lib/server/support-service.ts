@@ -659,6 +659,87 @@ export async function appendAdminSupportMessage(params: {
   return result as { message_id: string; created: boolean };
 }
 
+export async function appendAutomationSupportMessage(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  clientRequestId: string;
+  body: string;
+  resolve: boolean;
+  releasePrNumber: number;
+}): Promise<{ message_id: string; created: boolean }> {
+  const { data: release, error: releaseError } = await getSupabase()
+    .from("yutakasa_repair_releases")
+    .select("merge_sha,deployment_id,status,verified_at")
+    .eq("pr_number", params.releasePrNumber)
+    .maybeSingle();
+  if (releaseError) throw releaseError;
+  if (release?.status !== "verified" ||
+      !/^[a-f0-9]{40}$/u.test(release.merge_sha ?? "") ||
+      !/^dpl_[A-Za-z0-9]{8,160}$/u.test(release.deployment_id ?? "") ||
+      !Number.isFinite(Date.parse(release.verified_at ?? "")) ||
+      Date.now() - Date.parse(release.verified_at) > 15 * 60 * 1000 ||
+      Date.parse(release.verified_at) > Date.now() + 30_000) {
+    throw new SupportRequestError("Repair release is not freshly verified", 409);
+  }
+  const [mainResponse, loginResponse] = await Promise.all([
+    fetch("https://api.github.com/repos/sanrinawakes/yutakasa-tapping-coach/commits/main", {
+      method: "GET", redirect: "error", cache: "no-store",
+      headers: { Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(10_000),
+    }),
+    fetch("https://yutakasa-tapping-coach.vercel.app/login", {
+      method: "GET", redirect: "error", cache: "no-store",
+      headers: { Accept: "text/html" },
+      signal: AbortSignal.timeout(10_000),
+    }),
+  ]);
+  if (mainResponse.status !== 200 || loginResponse.status !== 200) {
+    throw new SupportRequestError("Current production evidence is unavailable", 503);
+  }
+  const [mainText, loginText] = await Promise.all([
+    mainResponse.text(), loginResponse.text(),
+  ]);
+  if (Buffer.byteLength(mainText) > 128 * 1024 ||
+      Buffer.byteLength(loginText) > 8 * 1024 * 1024) {
+    throw new SupportRequestError("Current production evidence is invalid", 503);
+  }
+  let mainSha: string;
+  try { mainSha = JSON.parse(mainText)?.sha; }
+  catch { throw new SupportRequestError("Current main SHA is invalid", 503); }
+  const loginIds = [...loginText.matchAll(/data-dpl-id="(dpl_[A-Za-z0-9]{8,160})"/gu)]
+    .map((match) => match[1]);
+  if (mainSha !== release.merge_sha || loginIds.length === 0 ||
+      loginIds.some((id) => id !== release.deployment_id)) {
+    throw new SupportRequestError("Repair release is no longer production", 409);
+  }
+  const { data, error } = await getSupabase().rpc("append_yutakasa_automation_reply", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_client_request_id: params.clientRequestId,
+    p_body: normalizeSupportText(params.body, MAX_SUPPORT_MESSAGE_LENGTH),
+    p_resolve: params.resolve,
+    p_pr_number: params.releasePrNumber,
+    p_current_main_sha: mainSha,
+    p_current_deployment_id: release.deployment_id,
+  });
+  if (error?.code === "P0001" || error?.code === "23505") {
+    throw new SupportRequestError("Automation reply evidence changed", 409);
+  }
+  if (error) throw error;
+  const result = (Array.isArray(data) ? data[0] : data) as
+    | { message_id: string; created: boolean }
+    | null;
+  if (!result || typeof result.message_id !== "string" ||
+      typeof result.created !== "boolean") {
+    throw new Error("Automation reply RPC returned invalid confirmation");
+  }
+  // This automation records an in-app reply only. Email needs a durable
+  // provider outbox before it can safely share this idempotent transaction.
+  return result;
+}
+
 export async function updateAdminSupportTicket(params: {
   ticketId: string;
   status?: SupportStatus;

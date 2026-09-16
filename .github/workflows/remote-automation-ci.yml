@@ -6,6 +6,10 @@ on:
       - scripts/automation/**
       - .github/workflows/remote-automation-ci.yml
       - .github/workflows/ai-repair.yml
+      - .github/workflows/ai-repair-independent-review.yml
+      - .github/workflows/ai-repair-promote.yml
+      - .github/workflows/ai-repair-observe.yml
+      - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
   push:
     branches: [main]
@@ -13,6 +17,10 @@ on:
       - scripts/automation/**
       - .github/workflows/remote-automation-ci.yml
       - .github/workflows/ai-repair.yml
+      - .github/workflows/ai-repair-independent-review.yml
+      - .github/workflows/ai-repair-promote.yml
+      - .github/workflows/ai-repair-observe.yml
+      - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
 
 permissions:

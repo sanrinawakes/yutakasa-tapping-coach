@@ -1,0 +1,39 @@
+name: Promote reviewed AI repair
+
+on:
+  workflow_run:
+    workflows: [Source repair checks, AI repair independent review]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-ai-repair-promote
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-ai-repair-') &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Merge only after exact-head CI and independent review succeed
+        env:
+          YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REPAIR_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node scripts/automation/ai-repair-promote.mjs

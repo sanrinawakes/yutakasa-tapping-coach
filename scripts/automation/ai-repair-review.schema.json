@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "head_sha", "findings"],
+  "properties": {
+    "decision": { "type": "string", "enum": ["approve", "reject"] },
+    "head_sha": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

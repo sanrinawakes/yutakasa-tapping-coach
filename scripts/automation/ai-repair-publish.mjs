@@ -16,6 +16,12 @@ const ALLOWED_SOURCE_FILES = new Set([
   "src/app/chat/layout.tsx",
   "src/app/api/chat/route.ts",
 ]);
+const ALLOWED_TEST_FILES = new Set([
+  "src/lib/gemini.retry.test.ts",
+  "src/lib/chat-thread.test.ts",
+  "src/app/chat/page.test.tsx",
+  "src/app/api/chat/route.test.ts",
+]);
 const FORBIDDEN_PATCH_LINES = /^(?:GIT binary patch|Binary files |literal |delta |old mode |new mode |new file mode |deleted file mode |rename from |rename to |copy from |copy to )/u;
 
 export class AiRepairPublishError extends Error {
@@ -90,7 +96,7 @@ export function validatePatch(patchText, root = process.cwd()) {
       if (!match || match[1] !== match[2]) fail("patch_path_invalid");
       const file = match[1];
       if (
-        !ALLOWED_SOURCE_FILES.has(file) ||
+        (!ALLOWED_SOURCE_FILES.has(file) && !ALLOWED_TEST_FILES.has(file)) ||
         file.split("/").some((component) => component === ".." || component === ".") ||
         files.includes(file)
       ) {
@@ -124,7 +130,11 @@ export function validatePatch(patchText, root = process.cwd()) {
       newHeader = true;
     }
   }
-  if (files.length < 1 || !oldHeader || !newHeader) fail("patch_header_invalid");
+  if (files.length < 2 || !oldHeader || !newHeader) fail("patch_header_invalid");
+  if (!files.some((file) => ALLOWED_SOURCE_FILES.has(file)) ||
+      !files.some((file) => ALLOWED_TEST_FILES.has(file))) {
+    fail("patch_requires_source_and_regression_test");
+  }
   return files;
 }
 

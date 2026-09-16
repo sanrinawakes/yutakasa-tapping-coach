@@ -156,13 +156,20 @@ export async function collectRemoteLogs({
   deploymentId,
   token = process.env.VERCEL_TOKEN,
   runCommand = execFile,
+  deploymentOnly = false,
+  since = null,
 } = {}) {
   requireMatch(deploymentId, DEPLOYMENT_ID, "deployment_id_invalid");
   if (typeof token !== "string" || token.length < 20) fail("vercel_token_missing");
+  if (deploymentOnly && (typeof since !== "string" ||
+      !Number.isFinite(Date.parse(since)) ||
+      Date.parse(since) > Date.now() + 60_000)) fail("log_since_invalid");
   const queries = {};
   const historicalQueries = {};
   const observedAt = new Date();
-  const since = new Date(observedAt.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const windowStart = deploymentOnly
+    ? since
+    : new Date(observedAt.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const until = observedAt.toISOString();
   const childEnv = { CI: "1", NO_COLOR: "1", VERCEL_TELEMETRY_DISABLED: "1" };
   for (const name of LOG_CHILD_ENV_NAMES) {
@@ -170,13 +177,13 @@ export async function collectRemoteLogs({
   }
   for (const [name, filter] of Object.entries(LOG_FILTERS)) {
     const counts = [];
-    for (const scope of ["project", "current"]) {
+    for (const scope of deploymentOnly ? ["current"] : ["project", "current"]) {
       let stdout;
       try {
         ({ stdout } = await runCommand("vercel", [
           "logs",
           ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
-          `--since=${since}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
+          `--since=${windowStart}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
           "--environment=production",
           "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
           filter, "--token", token,
@@ -193,6 +200,10 @@ export async function collectRemoteLogs({
       if (parsed.truncated) fail(`log_${name}_${scope}_truncated`);
       counts.push(parsed.count);
     }
+    if (deploymentOnly) {
+      queries[name] = { count: counts[0], truncated: false };
+      continue;
+    }
     const [projectCount, currentCount] = counts;
     if (currentCount > projectCount) fail(`log_${name}_scope_inconsistent`);
     queries[name] = { count: currentCount, truncated: false };
@@ -201,7 +212,8 @@ export async function collectRemoteLogs({
   return Object.freeze({
     observedAt: until,
     deploymentId,
-    logScope: "project_production_split_by_current_deployment",
+    logScope: deploymentOnly ? "deployment_post_merge" : "project_production_split_by_current_deployment",
+    since: deploymentOnly ? since : null,
     queries: Object.freeze(queries),
     historicalQueries: Object.freeze(historicalQueries),
   });

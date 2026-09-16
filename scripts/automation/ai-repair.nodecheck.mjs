@@ -202,6 +202,7 @@ test("patch validation rejects trust-boundary files, symlinks, modes, and creati
   try {
     fs.mkdirSync(path.join(root, "src", "lib"), { recursive: true });
     fs.writeFileSync(path.join(root, "src", "lib", "gemini.ts"), "export const value = 1;\n");
+    fs.writeFileSync(path.join(root, "src", "lib", "gemini.retry.test.ts"), "test('old', () => {});\n");
     fs.writeFileSync(path.join(root, "src", "lib", "payment-sync.ts"), "export const value = 1;\n");
     fs.symlinkSync("gemini.ts", path.join(root, "src", "lib", "link.ts"));
     const valid = [
@@ -214,7 +215,18 @@ test("patch validation rejects trust-boundary files, symlinks, modes, and creati
       "+export const value = 2;",
       "",
     ].join("\n");
-    assert.deepEqual(validatePatch(valid, root), ["src/lib/gemini.ts"]);
+    assert.throws(() => validatePatch(valid, root), AiRepairPublishError);
+    const withTest = valid + [
+      "diff --git a/src/lib/gemini.retry.test.ts b/src/lib/gemini.retry.test.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/lib/gemini.retry.test.ts",
+      "+++ b/src/lib/gemini.retry.test.ts",
+      "@@ -1 +1 @@",
+      "-test('old', () => {});",
+      "+test('regression', () => {});",
+      "",
+    ].join("\n");
+    assert.deepEqual(validatePatch(withTest, root), ["src/lib/gemini.ts", "src/lib/gemini.retry.test.ts"]);
     assert.throws(() => validatePatch(valid.replaceAll("src/lib/gemini.ts", ".github/workflows/ai-repair.yml"), root), AiRepairPublishError);
     assert.throws(() => validatePatch(valid.replaceAll("src/lib/gemini.ts", "src/lib/link.ts"), root), AiRepairPublishError);
     assert.throws(() => validatePatch(valid.replaceAll("src/lib/gemini.ts", "src/lib/payment-sync.ts"), root), AiRepairPublishError);

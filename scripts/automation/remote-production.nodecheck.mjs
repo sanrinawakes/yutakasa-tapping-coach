@@ -95,6 +95,27 @@ test("log queries discard content and reject truncated results", async () => {
   );
 });
 
+test("repair observations read only the current deployment after merge", async () => {
+  const argsSeen = [];
+  const result = await collectRemoteLogs({
+    deploymentId: id,
+    token: "x".repeat(30),
+    deploymentOnly: true,
+    since: "2026-09-16T20:00:00.000Z",
+    runCommand: async (_command, args) => {
+      argsSeen.push(args);
+      return { stdout: "" };
+    },
+  });
+  assert.equal(argsSeen.length, 4);
+  assert.equal(result.logScope, "deployment_post_merge");
+  assert.equal(result.since, "2026-09-16T20:00:00.000Z");
+  for (const args of argsSeen) {
+    assert.ok(args.includes(`--deployment=${id}`));
+    assert.ok(args.includes("--since=2026-09-16T20:00:00.000Z"));
+  }
+});
+
 test("older deployment errors are counted separately from current deployment errors", async () => {
   const result = await collectRemoteLogs({
     deploymentId: id, token: "x".repeat(30),
