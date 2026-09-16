@@ -1,0 +1,42 @@
+name: Yutakasa monitor alert
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason_codes:
+        description: JSON array of fixed monitor reason codes
+        required: true
+        type: string
+      deployment_id:
+        description: Production deployment ID or unknown if unavailable
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-monitor-alert
+  cancel-in-progress: false
+
+jobs:
+  issue-alert:
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Create deduplicated, fixed-code monitor alerts
+        env:
+          ALERT_REASON_CODES: ${{ inputs.reason_codes }}
+          ALERT_DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/automation/monitor-alert.mjs

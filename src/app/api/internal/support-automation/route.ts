@@ -2,15 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
-  appendAdminSupportMessage,
   claimSupportTicket,
+  finishLockedSupportTicket,
+  getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   renewSupportAutomationLock,
-  updateAdminSupportTicket,
 } from "@/lib/server/support-service";
 import { supportApiError, SupportRequestError } from "@/lib/server/support-request";
 import {
-  MAX_SUPPORT_MESSAGE_LENGTH,
   normalizeSupportText,
   parseClientRequestId,
 } from "@/lib/support";
@@ -59,6 +58,14 @@ function readLockToken(value: unknown): string {
   return lockToken;
 }
 
+function readTicketVersion(value: unknown): string {
+  if (typeof value !== "string" || value.length > 64 ||
+      !Number.isFinite(Date.parse(value))) {
+    throw new SupportRequestError("Invalid ticket version");
+  }
+  return value;
+}
+
 async function requireLock(ticketId: string, lockToken: string) {
   const ticket = await renewSupportAutomationLock(ticketId, lockToken);
   if (!ticket) {
@@ -75,6 +82,35 @@ export async function GET(request: NextRequest) {
   if (authError) return authError;
 
   try {
+    const ticketIdParam = request.nextUrl.searchParams.get("ticketId");
+    const lockTokenParam = request.headers.get("x-automation-lock-token");
+    if (ticketIdParam !== null || lockTokenParam !== null) {
+      const ticketId = readTicketId(ticketIdParam);
+      const lockToken = readLockToken(lockTokenParam);
+      await requireLock(ticketId, lockToken);
+      const detail = await getAdminSupportTicket(ticketId, { markRead: false });
+      if (!detail || detail.ticket.automation_lock_token !== lockToken ||
+          detail.ticket.automation_status !== "investigating" ||
+          detail.ticket.status !== "in_progress" || detail.ticket.decision_required) {
+        throw new SupportRequestError("Ticket changed after claim", 409);
+      }
+      return NextResponse.json({
+        ticket: {
+          id: detail.ticket.id,
+          category: detail.ticket.category,
+          subject: detail.ticket.subject,
+          status: detail.ticket.status,
+          decision_required: detail.ticket.decision_required,
+          automation_status: detail.ticket.automation_status,
+          automation_lock_token: detail.ticket.automation_lock_token,
+          updated_at: detail.ticket.updated_at,
+        },
+        messages: detail.messages.map(({ id, sender_type, body, created_at }) =>
+          ({ id, sender_type, body, created_at })),
+        work_logs: detail.work_logs.map(({ event_type, metadata }) =>
+          ({ event_type, metadata })),
+      });
+    }
     const rawLimit = Number(request.nextUrl.searchParams.get("limit") ?? "10");
     const limit = Number.isFinite(rawLimit) ? rawLimit : 10;
     const tickets = await listPendingAutomatedSupportTickets(limit);
@@ -95,6 +131,9 @@ export async function PATCH(request: NextRequest) {
     }
     const record = input as Record<string, unknown>;
     const action = typeof record.action === "string" ? record.action : "";
+    if (action === "reply") {
+      throw new SupportRequestError("Automated customer replies are unavailable.", 501);
+    }
     const ticketId = readTicketId(record.ticketId);
 
     if (action === "claim") {
@@ -106,11 +145,6 @@ export async function PATCH(request: NextRequest) {
           { status: 409 }
         );
       }
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_claimed",
-        summary: "Codexが技術調査を開始しました。",
-      });
       return NextResponse.json({ ticket });
     }
 
@@ -140,48 +174,20 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    if (action === "reply") {
-      const body = normalizeSupportText(record.body, MAX_SUPPORT_MESSAGE_LENGTH + 1);
-      if (!body || body.length > MAX_SUPPORT_MESSAGE_LENGTH) {
-        throw new SupportRequestError("Reply body is invalid");
-      }
-      const clientRequestId = readLockToken(record.clientRequestId);
-      const resolve = record.resolve === true;
-      const result = await appendAdminSupportMessage({
-        ticketId,
-        body,
-        clientRequestId,
-        resolve,
-      });
-      await updateAdminSupportTicket({
-        ticketId,
-        automationStatus: "completed",
-      });
-      await addSupportWorkLog({
-        ticketId,
-        eventType: resolve ? "automation_resolved" : "automation_replied",
-        summary: resolve
-          ? "技術対応と利用者への回答を完了しました。"
-          : "利用者へ回答し、追加連絡を待っています。",
-        metadata: { message_id: result.message_id, duplicate: !result.created },
-      });
-      return NextResponse.json(result, { status: result.created ? 201 : 200 });
-    }
-
     if (action === "decision_required") {
       const summary = normalizeSupportText(record.summary, 5001);
       if (!summary || summary.length > 5000) {
         throw new SupportRequestError("Decision summary is invalid");
       }
-      const ticket = await updateAdminSupportTicket({
+      const ticket = await finishLockedSupportTicket({
         ticketId,
-        decisionRequired: true,
-      });
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "owner_decision_required",
+        lockToken,
+        latestUserMessageId: readTicketId(record.latestUserMessageId),
+        ticketVersion: readTicketVersion(record.ticketVersion),
+        outcome: "decision_required",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before decision", 409);
       return NextResponse.json({ ticket });
     }
 
@@ -190,15 +196,15 @@ export async function PATCH(request: NextRequest) {
       if (!summary || summary.length > 5000) {
         throw new SupportRequestError("Failure summary is invalid");
       }
-      const ticket = await updateAdminSupportTicket({
+      const ticket = await finishLockedSupportTicket({
         ticketId,
-        automationStatus: "failed",
-      });
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_failed",
+        lockToken,
+        latestUserMessageId: readTicketId(record.latestUserMessageId),
+        ticketVersion: readTicketVersion(record.ticketVersion),
+        outcome: "failed",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);
       return NextResponse.json({ ticket });
     }
 

@@ -57,6 +57,8 @@ export type SupportTicket = {
   status: SupportStatus;
   decision_required: boolean;
   automation_status: SupportAutomationStatus;
+  automation_locked_at: string | null;
+  automation_lock_token: string | null;
   user_last_read_at: string | null;
   admin_last_read_at: string | null;
   created_at: string;
@@ -663,7 +665,12 @@ export async function updateAdminSupportTicket(params: {
   automationStatus?: SupportAutomationStatus;
   decisionRequired?: boolean;
 }) {
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  // Any administrator edit supersedes an in-flight automation decision.
+  const update: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    automation_locked_at: null,
+    automation_lock_token: null,
+  };
   if (params.status) {
     update.status = params.status;
     if (!params.automationStatus && params.status === "resolved") {
@@ -774,24 +781,13 @@ export async function recoverStaleSupportAutomationTickets(): Promise<string[]> 
 }
 
 export async function claimSupportTicket(ticketId: string, lockToken: string) {
-  const { data, error } = await getSupabase()
-    .from("support_tickets")
-    .update({
-      automation_status: "investigating",
-      automation_locked_at: new Date().toISOString(),
-      automation_lock_token: lockToken,
-      status: "in_progress",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", ticketId)
-    .eq("decision_required", false)
-    .in("automation_status", ["queued", "failed"])
-    .in("status", ["open", "in_progress"])
-    .is("automation_locked_at", null)
-    .select("*")
-    .maybeSingle();
+  const { data, error } = await getSupabase().rpc("claim_support_ticket_with_log", {
+    p_ticket_id: ticketId,
+    p_lock_token: lockToken,
+  });
   if (error) throw error;
-  return data as SupportTicket | null;
+  const ticket = Array.isArray(data) ? data[0] : data;
+  return (ticket ?? null) as SupportTicket | null;
 }
 
 export async function renewSupportAutomationLock(
@@ -802,7 +798,6 @@ export async function renewSupportAutomationLock(
     .from("support_tickets")
     .update({
       automation_locked_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
     })
     .eq("id", ticketId)
     .eq("automation_lock_token", lockToken)
@@ -811,4 +806,25 @@ export async function renewSupportAutomationLock(
     .maybeSingle();
   if (error) throw error;
   return data as SupportTicket | null;
+}
+
+export async function finishLockedSupportTicket(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  ticketVersion: string;
+  outcome: "failed" | "decision_required";
+  summary: string;
+}): Promise<SupportTicket | null> {
+  const { data, error } = await getSupabase().rpc("finish_locked_support_ticket", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_ticket_version: params.ticketVersion,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_outcome: params.outcome,
+    p_summary: params.summary,
+  });
+  if (error) throw error;
+  const ticket = Array.isArray(data) ? data[0] : data;
+  return (ticket ?? null) as SupportTicket | null;
 }

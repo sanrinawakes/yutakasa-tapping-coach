@@ -1,0 +1,44 @@
+name: Remote automation checks
+
+on:
+  pull_request:
+    paths:
+      - scripts/automation/**
+      - .github/workflows/remote-automation-ci.yml
+      - .github/workflows/ai-repair.yml
+      - .github/workflows/monitor-alert.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/automation/**
+      - .github/workflows/remote-automation-ci.yml
+      - .github/workflows/ai-repair.yml
+      - .github/workflows/monitor-alert.yml
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Application tests
+        run: npm test -- --maxWorkers=2
+      - name: Monitor tests
+        run: node --test scripts/automation/*.nodecheck.mjs
+      - name: Production build
+        run: npm run build
+      - name: Docker build
+        run: docker build --file scripts/automation/Dockerfile --tag yutakasa-remote-monitor:ci .

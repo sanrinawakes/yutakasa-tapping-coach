@@ -26,6 +26,9 @@ const CATEGORY = new Set(["technical", "login", "quality", "how_to", "feature", 
 const TICKET_STATUS = new Set(["open", "in_progress", "waiting_user", "resolved"]);
 const AUTOMATION_STATUS = new Set(["queued", "investigating", "blocked_decision", "completed", "failed"]);
 const MESSAGE_SENDER = new Set(["user", "admin", "system"]);
+const MONITOR_STATUS = new Set(["healthy", "action_required", "failed", "abandoned"]);
+const MONITOR_REASON = /^[A-Za-z0-9][A-Za-z0-9_]{0,127}$/u;
+const EXPECTED_MONITOR_SLOTS = 144;
 
 export class DailyReportError extends Error {
   constructor(code) {
@@ -308,6 +311,98 @@ export async function collectReportSource(config, window, fetchImpl = globalThis
   return validateSource({ createdTickets, updatedTickets, messages, workLogs, tickets, openTickets }, window);
 }
 
+export function summarizeMonitorRows(rows, window) {
+  if (!Array.isArray(rows)) fail("monitor_rows_invalid");
+  if (rows.length === 0) return { state: "missing", completedCount: 0 };
+  const statusCounts = Object.fromEntries([...MONITOR_STATUS].map((status) => [status, 0]));
+  const reasonCounts = new Map();
+  const runIds = new Set();
+  const observedHours = new Set();
+  const observedSlots = new Set();
+  let alertDispatches = 0;
+  let repairDispatches = 0;
+  for (const row of rows) {
+    if (!UUID.test(row?.run_id) || runIds.has(row.run_id) ||
+        !validTimestamp(row.started_at) || !MONITOR_STATUS.has(row.status) ||
+        !Array.isArray(row.reason_codes) || row.reason_codes.length > 32 ||
+        row.reason_codes.some((code) => typeof code !== "string" || !MONITOR_REASON.test(code)) ||
+        typeof row.alert_dispatched !== "boolean" || typeof row.repair_dispatched !== "boolean") {
+      fail("monitor_rows_invalid");
+    }
+    assertInWindow(row.finished_at, window);
+    runIds.add(row.run_id);
+    statusCounts[row.status] += 1;
+    for (const reason of new Set(row.reason_codes)) {
+      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+    }
+    if (row.alert_dispatched) alertDispatches += 1;
+    if (row.repair_dispatched) repairDispatches += 1;
+    const hour = Math.floor((Date.parse(row.started_at) - Date.parse(window.start)) / 3_600_000);
+    if (hour >= 0 && hour < 24) observedHours.add(hour);
+    const slot = Math.floor((Date.parse(row.started_at) - Date.parse(window.start)) / 600_000);
+    if (slot >= 0 && slot < EXPECTED_MONITOR_SLOTS) observedSlots.add(slot);
+  }
+  return {
+    state: "observed",
+    completedCount: rows.length,
+    observedHourCount: observedHours.size,
+    observedSlotCount: observedSlots.size,
+    statusCounts,
+    reasonCounts: [...reasonCounts].sort(([a], [b]) => a.localeCompare(b)),
+    alertDispatches,
+    repairDispatches,
+  };
+}
+
+export async function collectMonitorSummary(config, window, fetchImpl = globalThis.fetch) {
+  const rows = [];
+  try {
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const query = new URLSearchParams({
+        select: "run_id,started_at,finished_at,status,reason_codes,alert_dispatched,repair_dispatched",
+        run_kind: "eq.scheduled",
+        finished_at: `gte.${window.start}`,
+        order: "finished_at.asc,run_id.asc",
+        limit: String(PAGE_SIZE),
+        offset: String(page * PAGE_SIZE),
+      });
+      query.append("finished_at", `lt.${window.end}`);
+      const batch = await supabaseRequest(config, `rest/v1/yutakasa_monitor_runs?${query}`, { fetchImpl });
+      if (!Array.isArray(batch) || batch.length > PAGE_SIZE) fail("monitor_rows_invalid");
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) return summarizeMonitorRows(rows, window);
+    }
+  } catch {
+    // The monitor table is introduced separately; reporting must remain truthful
+    // while the monitor is unavailable or its schema has not been applied.
+    return { state: "unavailable" };
+  }
+  return { state: "unavailable" };
+}
+
+function monitorSummaryLines(summary) {
+  if (summary?.state === "missing") {
+    return ["障害監視: 前日の完了記録0件。監視結果を確認できないため、障害0件とは判定していません。"];
+  }
+  if (summary?.state !== "observed") {
+    return ["障害監視: 実行記録を取得できません。監視結果を確認できないため、障害0件とは判定していません。"];
+  }
+  const counts = summary.statusCounts;
+  const lines = [
+    `障害監視の完了記録（確認できた実行のみ）: ${summary.completedCount}件（記録のある10分枠${summary.observedSlotCount}/${EXPECTED_MONITOR_SLOTS}、時間帯${summary.observedHourCount}/24、正常${counts.healthy}件、要対応${counts.action_required}件、失敗${counts.failed}件、期限切れ${counts.abandoned}件）`,
+    `通知処理: GitHubへの警告依頼${summary.alertDispatches}件、AI調査依頼${summary.repairDispatches}件。AI修正・PR/issueの結果は未確認です。依頼の受理は本番復旧の完了を示しません。`,
+  ];
+  if (summary.observedSlotCount < EXPECTED_MONITOR_SLOTS) {
+    lines.push("監視の完了記録がない10分枠があります。前日全体が正常とは判定していません。");
+  }
+  if (summary.reasonCounts.length > 0) {
+    const listed = summary.reasonCounts.slice(0, 20).map(([code, count]) => `${code} ${count}件`);
+    lines.push(`検知・失敗理由: ${listed.join("、")}`);
+    if (summary.reasonCounts.length > 20) lines.push(`ほか${summary.reasonCounts.length - 20}種類の理由があります。`);
+  }
+  return lines;
+}
+
 function countBy(rows, key) {
   const counts = new Map();
   for (const row of rows) counts.set(row[key], (counts.get(row[key]) || 0) + 1);
@@ -324,7 +419,7 @@ function lastEventTime(ticketId, source) {
   return values.sort().at(-1);
 }
 
-export function buildDailyReport(date, source, preparedAt = new Date()) {
+export function buildDailyReport(date, source, preparedAt = new Date(), monitorSummary = { state: "unavailable" }) {
   const window = reportWindow(date);
   validateSource(source, window);
   const messages = countBy(source.messages, "sender_type");
@@ -358,7 +453,7 @@ export function buildDailyReport(date, source, preparedAt = new Date()) {
     `やりとり: 利用者${messages.get("user") || 0}件、運営${messages.get("admin") || 0}件、システム${messages.get("system") || 0}件`,
     `問い合わせへの作業記録: ${source.workLogs.length}件`,
     `前日の対象チケットで要運営判断: ${sorted.filter((row) => row.decision_required).length}件`,
-    "障害監視の結果は本日報に未連携です。障害0件とは判定していません。",
+    ...monitorSummaryLines(monitorSummary),
     "",
     `前日のやりとり・作業時系列: ${events.length}件`,
   ];
@@ -666,8 +761,12 @@ async function runReportDate(config, date, now, fetchImpl) {
     const ok = deliveries.every((delivery) => delivery.status === "accepted");
     return { ok, reportDateJst: date, skipped: ok ? "already_accepted" : "awaiting_reconciliation_or_lease", deliveries };
   }
-  const source = await collectReportSource(config, reportWindow(date), fetchImpl);
-  const report = buildDailyReport(date, source, now);
+  const window = reportWindow(date);
+  const [source, monitorSummary] = await Promise.all([
+    collectReportSource(config, window, fetchImpl),
+    collectMonitorSummary(config, window, fetchImpl),
+  ]);
+  const report = buildDailyReport(date, source, now, monitorSummary);
   const deliveries = [];
   for (const [index, recipient] of config.recipients.entries()) {
     const reserved = await reserveDelivery(config, date, recipient, report, fetchImpl);
@@ -686,6 +785,8 @@ async function runReportDate(config, date, now, fetchImpl) {
     messageCount: source.messages.length,
     workLogCount: source.workLogs.length,
     currentOpenCount: source.openTickets.length,
+    monitorState: monitorSummary.state,
+    monitorCompletedCount: monitorSummary.completedCount ?? null,
     deliveries,
   };
 }

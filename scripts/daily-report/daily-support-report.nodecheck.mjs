@@ -4,10 +4,12 @@ import test from "node:test";
 
 import {
   buildDailyReport,
+  collectMonitorSummary,
   DailyReportError,
   reportWindow,
   reportingDate,
   runDailySupportReport,
+  summarizeMonitorRows,
 } from "./daily-support-report.mjs";
 import { workEventLabel } from "./daily-report-reliability.mjs";
 
@@ -58,7 +60,8 @@ function source() {
   };
 }
 
-function testFetch({ records = source(), resendBehavior = async (_url, init) =>
+function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
+  resendBehavior = async (_url, init) =>
   json({ id: resendIdFor(JSON.parse(init.body).to[0]) }),
   resendRetrieveBehavior,
   cursorDate = "2026-09-16", initialLedger = {}, ignoreWindowFilter = false,
@@ -118,6 +121,15 @@ function testFetch({ records = source(), resendBehavior = async (_url, init) =>
         (!url.searchParams.has("recipient") || env.REPORT_RECIPIENT_1 === row.recipient || env.REPORT_RECIPIENT_2 === row.recipient));
       return json(filtered.sort((a, b) => a.report_date_jst.localeCompare(b.report_date_jst))
         .slice(0, Number(url.searchParams.get("limit")) || filtered.length));
+    }
+    if (url.pathname === "/rest/v1/yutakasa_monitor_runs") {
+      if (monitorStatus !== 200) return json({ code: "not_available" }, monitorStatus);
+      assert.equal(url.searchParams.get("run_kind"), "eq.scheduled");
+      const bounds = url.searchParams.getAll("finished_at");
+      const start = bounds.find((value) => value.startsWith("gte.")).slice(4);
+      const end = bounds.find((value) => value.startsWith("lt.")).slice(3);
+      const filtered = monitorRuns.filter((row) => row.run_kind !== "recheck" && row.finished_at >= start && row.finished_at < end);
+      return json(filtered.slice(Number(url.searchParams.get("offset")), Number(url.searchParams.get("offset")) + Number(url.searchParams.get("limit"))));
     }
     if (url.pathname === "/rest/v1/support_tickets") {
       if (url.searchParams.has("status")) {
@@ -521,4 +533,53 @@ test("a live send lease stays held and later expiration unlocks the cursor", asy
   assert.equal(second.expiredLeaseCount, 2);
   assert.equal(client.state.cursorDate, "2026-09-17");
   assert.equal(client.requests.some(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails"), false);
+});
+
+test("monitor results use the previous JST window and distinguish missing 10-minute slots from healthy runs", async () => {
+  const monitorRuns = [
+    { run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", started_at: "2026-09-15T14:59:00.000Z", finished_at: "2026-09-15T15:00:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: "2026-09-16T03:17:00.000Z", finished_at: "2026-09-16T03:18:00.000Z", status: "action_required", reason_codes: ["pending_tickets", "production_log_fiveXx"], alert_dispatched: true, repair_dispatched: true },
+    { run_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", started_at: "2026-09-16T14:17:00.000Z", finished_at: "2026-09-16T14:59:59.999Z", status: "failed", reason_codes: ["monitor_lease_lost"], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", started_at: "2026-09-16T15:00:00.000Z", finished_at: "2026-09-16T15:00:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+    { run_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", run_kind: "recheck", started_at: "2026-09-16T08:17:00.000Z", finished_at: "2026-09-16T08:18:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
+  ];
+  const client = testFetch({ monitorRuns });
+  const summary = await collectMonitorSummary({ supabaseUrl: env.SUPABASE_URL, serviceKey: env.SUPABASE_SERVICE_ROLE_KEY }, reportWindow("2026-09-16"), client.fetchImpl);
+  assert.equal(summary.state, "observed");
+  assert.equal(summary.completedCount, 3);
+  assert.equal(summary.observedHourCount, 2);
+  assert.equal(summary.observedSlotCount, 2);
+  assert.equal(summary.statusCounts.action_required, 1);
+  assert.deepEqual(summary.reasonCounts, [["monitor_lease_lost", 1], ["pending_tickets", 1], ["production_log_fiveXx", 1]]);
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.monitorCompletedCount, 3);
+  const email = JSON.parse(client.requests.find(({ url }) => url.host === "api.resend.com").init.body).text;
+  assert.match(email, /障害監視の完了記録（確認できた実行のみ）: 3件/);
+  assert.match(email, /記録のある10分枠2\/144、時間帯2\/24/);
+  assert.match(email, /正常1件、要対応1件、失敗1件/);
+  assert.match(email, /pending_tickets 1件/);
+  assert.match(email, /前日全体が正常とは判定していません/);
+});
+
+test("two scheduled runs in one hour occupy two distinct 10-minute slots", () => {
+  const rows = [
+    { run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", started_at: "2026-09-15T15:00:00Z", finished_at: "2026-09-15T15:00:01Z" },
+    { run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: "2026-09-15T15:10:00Z", finished_at: "2026-09-15T15:10:01Z" },
+  ].map((row) => ({ ...row, status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false }));
+  const summary = summarizeMonitorRows(rows, reportWindow("2026-09-16"));
+  assert.equal(summary.observedHourCount, 1);
+  assert.equal(summary.observedSlotCount, 2);
+});
+
+test("missing monitor table or zero completed rows stays explicitly unverified", async () => {
+  for (const options of [{ monitorStatus: 404 }, { monitorRuns: [] }]) {
+    const client = testFetch(options);
+    const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+    assert.equal(result.ok, true);
+    assert.equal(result.monitorState, options.monitorStatus ? "unavailable" : "missing");
+    const email = JSON.parse(client.requests.find(({ url }) => url.host === "api.resend.com").init.body).text;
+    assert.match(email, /障害0件とは判定していません/);
+    assert.doesNotMatch(email, /障害監視の完了記録: 0件（.*正常/u);
+  }
 });

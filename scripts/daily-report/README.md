@@ -43,8 +43,10 @@ Resendの配達失敗に加え、受理から2時間経っても`sent`・`queued
 Railwayの日報サービスには監視側の
 `GITHUB_DISPATCH_TOKEN`を渡していないため、即時の別経路通知は未実装。
 専用トークンと必要最小限の権限を用意した後に、別変更で通知経路を追加する。
-前日分の障害監視結果は、現在の旧Mac監視が
-DBへ永続保存していないため未連携と明示する。
+前日分の障害監視は `yutakasa_monitor_runs` の完了記録から集計する。
+監視用SQLの未導入・取得失敗・記録0件・記録のない時間帯は
+「監視結果未確認」と明記する。AI修正後のPR・issue・CI・本番確認は
+現時点で日報へ連携していないため、実績として扱わない。
 
 ローカル検証:
 
@@ -55,7 +57,7 @@ docker build --file scripts/daily-report/Dockerfile --tag yutakasa-daily-support
 railway config plan --file scripts/daily-report/.railway/railway.ts
 ```
 
-このIaC定義は日報サービスだけを含む。別ブランチにある
-`yutakasa-support-monitor` をRailwayへ反映する前には、両サービスを
-同じ定義へ統合すること。片方だけの定義を再適用すると、もう一方の削除案が
-出る可能性があるため、毎回 `config plan` の差分を確認する。
+IaCの実体は `scripts/automation/.railway/railway.ts` に統合し、このパスも
+同じ定義を参照する。現行の日報サービスと、移行準備中の監視サービスの両方を
+定義するため、監視側の認証情報と切替検証が済むまで設定を適用しない。
+適用前には毎回 `config plan` の差分を確認する。

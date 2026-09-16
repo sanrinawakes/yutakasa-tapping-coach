@@ -1,0 +1,111 @@
+name: Yutakasa anomaly investigation and draft repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason_codes:
+        description: JSON array of fixed monitor reason codes
+        required: true
+        type: string
+      deployment_id:
+        description: Vercel Production deployment ID observed by the monitor
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-ai-repair
+  cancel-in-progress: false
+
+jobs:
+  recheck:
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      reason_codes: ${{ steps.gate.outputs.reason_codes }}
+      deployment_id: ${{ steps.gate.outputs.deployment_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned monitor dependencies
+        run: npm ci --prefix scripts/automation
+      - name: Recheck live anomaly and cap attestation
+        id: gate
+        env:
+          DISPATCH_REASON_CODES: ${{ inputs.reason_codes }}
+          DISPATCH_DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          CRON_SECRET: ${{ secrets.YUTAKASA_CRON_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.YUTAKASA_GOOGLE_DRIVE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+        run: node scripts/automation/ai-repair-gate.mjs
+
+  investigate:
+    needs: recheck
+    if: needs.recheck.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      proposal: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Investigate without production credentials or repository write access
+        id: codex
+        uses: openai/codex-action@f367b1e9572fd064ea71ef925ca24ee0f01080af # v1
+        with:
+          openai-api-key: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          safety-strategy: drop-sudo
+          model: gpt-5.6-terra
+          effort: medium
+          output-schema-file: scripts/automation/ai-repair.output.schema.json
+          prompt: |
+            Follow scripts/automation/ai-repair.prompt.md exactly.
+            Production deployment: ${{ needs.recheck.outputs.deployment_id }}
+            Confirmed anomaly reason codes: ${{ needs.recheck.outputs.reason_codes }}
+            Inspect repository code and produce one JSON proposal matching the output schema.
+
+  publish:
+    needs: [recheck, investigate]
+    if: needs.investigate.result == 'success' && needs.recheck.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate patch and create draft PR or tracked issue
+        env:
+          AI_REPAIR_PROPOSAL: ${{ needs.investigate.outputs.proposal }}
+          AI_REPAIR_REASON_CODES: ${{ needs.recheck.outputs.reason_codes }}
+          AI_REPAIR_DEPLOYMENT_ID: ${{ needs.recheck.outputs.deployment_id }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+        run: node scripts/automation/ai-repair-publish.mjs
