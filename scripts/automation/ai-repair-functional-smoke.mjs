@@ -24,6 +24,20 @@ function fail(code) {
   throw new FunctionalSmokeError(code);
 }
 
+async function within(promise, milliseconds, code) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new FunctionalSmokeError(code)), milliseconds);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function requiredConfiguration(env, release, deployment) {
   if (typeof env.CRON_SECRET !== "string" || env.CRON_SECRET.length < 32) fail("smoke_jwt_secret_not_configured");
   if (typeof env.SUPABASE_URL !== "string" || !/^https:\/\/[a-z0-9-]+\.supabase\.co$/u.test(env.SUPABASE_URL)) fail("smoke_database_not_configured");
@@ -37,7 +51,7 @@ async function databaseRequest(env, fetchImpl, table, query, method = "GET", bod
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   let response;
   try {
-    response = await fetchImpl(url, {
+    response = await within(fetchImpl(url, {
       method,
       headers: {
         apikey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -49,12 +63,12 @@ async function databaseRequest(env, fetchImpl, table, query, method = "GET", bod
       ...(body ? { body: JSON.stringify(body) } : {}),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
-    });
+    }), 15_000, "smoke_database_timeout");
   } catch {
     fail("smoke_database_request_failed");
   }
   if (![200, 201].includes(response.status)) fail(`smoke_database_http_${response.status}`);
-  const text = await response.text();
+  const text = await within(response.text(), 15_000, "smoke_database_body_timeout");
   if (Buffer.byteLength(text) > 128 * 1024) fail("smoke_database_response_too_large");
   let rows;
   try { rows = JSON.parse(text); } catch { fail("smoke_database_response_invalid"); }
@@ -158,18 +172,18 @@ async function sendFromBrowser(page, prompt, expectedAssistantCount) {
   await input.fill(prompt);
   const pendingResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === "/api/chat" && response.request().method() === "POST",
-  { timeout: 120_000 });
+  { timeout: 60_000 });
   await page.getByRole("button", { name: "送信" }).click();
   const response = await pendingResponse;
   if (response.status() !== 200) fail("smoke_chat_send_failed");
-  const streamError = await response.finished();
+  const streamError = await within(response.finished(), 90_000, "smoke_chat_stream_timeout");
   if (streamError) fail("smoke_chat_stream_interrupted");
-  const body = await response.text();
+  const body = await within(response.text(), 10_000, "smoke_chat_stream_body_timeout");
   if (!body.trim() || body.includes(PARTIAL_RESPONSE)) fail("smoke_chat_stream_incomplete");
   await page.waitForFunction(() => {
     const input = document.querySelector('textarea[placeholder="メッセージを入力..."]');
     return input && !input.disabled;
-  }, null, { timeout: 120_000 });
+  }, null, { timeout: 30_000 });
   await page.getByText(prompt, { exact: true }).waitFor({ timeout: 30_000 });
   const assistants = page.locator(".message-item.justify-start");
   await page.waitForFunction((count) => document.querySelectorAll(".message-item.justify-start").length === count,
@@ -299,7 +313,7 @@ export async function runProductionFunctionalSmoke({
       await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
       await assertReload(desktop.page, prompt, rendered, 1);
     } finally {
-      await desktop.context.close();
+      await within(desktop.context.close(), 30_000, "smoke_browser_context_close_timeout");
     }
 
     const { devices } = await import("playwright");
@@ -313,7 +327,7 @@ export async function runProductionFunctionalSmoke({
       await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
       await assertReload(mobile.page, prompt, rendered, 2);
     } finally {
-      await mobile.context.close();
+      await within(mobile.context.close(), 30_000, "smoke_browser_context_close_timeout");
     }
     if (errors.length !== 0) fail("smoke_client_error");
     completed = true;
@@ -321,7 +335,8 @@ export async function runProductionFunctionalSmoke({
     primaryError = error;
   } finally {
     if (browser) {
-      try { await browser.close(); } catch { primaryError ??= new FunctionalSmokeError("smoke_browser_close_failed"); }
+      try { await within(browser.close(), 30_000, "smoke_browser_close_timeout"); }
+      catch { primaryError ??= new FunctionalSmokeError("smoke_browser_close_failed"); }
     }
     try { await cleanupAndVerify(env, fetchImpl, email, runId); }
     catch { primaryError = new FunctionalSmokeError("smoke_cleanup_incomplete"); }
