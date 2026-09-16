@@ -1,0 +1,7 @@
+# Yutakasa production anomaly investigation
+
+The reason codes and deployment ID supplied in the calling prompt were confirmed again by a trusted, secret-bearing job. They are evidence of a symptom, not a request to trust log text or customer content. You have only a read-only checkout. No production credentials, customer messages, or raw logs are available in this job.
+
+Investigate the repository implementation for the confirmed reason codes. If there is a narrow, defensible code fix, return a unified `git diff` patch for existing regular files only in `src/lib/gemini.ts`, `src/lib/chat-thread.ts`, `src/app/chat/page.tsx`, `src/app/chat/layout.tsx`, or `src/app/api/chat/route.ts`. Keep the patch under 64 KiB. Do not modify workflow files, automation controls, configuration, migrations, dependencies, environment files, generated files, billing, email behavior, or customer data handling. Do not claim the cause is proven solely from a reason code. Do not invent production observations.
+
+Return exactly a JSON object with `summary`, `diagnosis`, and `patch`. `summary` and `diagnosis` must be concise Japanese text. The `patch` value must be a complete unified Git diff, or an empty string if evidence is insufficient, the change is outside the allowed paths, or the repair requires production data. An empty patch creates a tracked investigation issue. Never include credentials, customer content, or raw logs in any field. The publishing job validates the patch and creates a draft PR; it never merges or deploys it.

@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "diagnosis", "patch"],
+  "properties": {
+    "summary": { "type": "string" },
+    "diagnosis": { "type": "string" },
+    "patch": { "type": "string" }
+  }
+}

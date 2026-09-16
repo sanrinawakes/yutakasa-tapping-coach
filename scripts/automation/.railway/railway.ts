@@ -1,0 +1,31 @@
+import { defineRailway, github, preserve, project, service } from "railway/iac";
+
+const monitor = service("yutakasa-support-monitor", {
+  source: github("sanrinawakes/yutakasa-tapping-coach", { branch: "main" }),
+  build: {
+    builder: "DOCKERFILE",
+    dockerfilePath: "/scripts/automation/Dockerfile",
+    watchPatterns: ["scripts/automation/**"],
+  },
+  deploy: {
+    startCommand: "node /app/remote-monitor.mjs run",
+    cronSchedule: "17 * * * *",
+    restartPolicyType: "NEVER",
+    numReplicas: 1,
+  },
+  env: {
+    SUPABASE_URL: preserve(),
+    SUPABASE_SERVICE_ROLE_KEY: preserve(),
+    JWT_SECRET: preserve(),
+    CRON_SECRET: preserve(),
+    VERCEL_TOKEN: preserve(),
+    GITHUB_DISPATCH_TOKEN: preserve(),
+    GOOGLE_DRIVE_CLIENT_ID: preserve(),
+    GOOGLE_DRIVE_CLIENT_SECRET: preserve(),
+    GOOGLE_DRIVE_REFRESH_TOKEN: preserve(),
+  },
+});
+
+export default defineRailway(() =>
+  project("yutakasa-support-automation", { resources: [monitor] }),
+);

@@ -1,0 +1,15 @@
+{
+  "name": "yutakasa-remote-monitor-iac",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "dependencies": {
+    "vercel": "59.9.1"
+  },
+  "devDependencies": {
+    "railway": "3.11.0"
+  },
+  "overrides": {
+    "tar": "7.5.22"
+  }
+}
