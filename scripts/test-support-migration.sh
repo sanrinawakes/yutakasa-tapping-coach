@@ -14,14 +14,23 @@ docker run --rm --detach \
   --env POSTGRES_DB=yutakasa \
   postgres:15-alpine >/dev/null
 
+# The official image briefly starts a temporary server during initdb, then
+# stops it before launching the final server. pg_isready can succeed during
+# that gap and leave the first psql call without a socket.
+ready=false
 for _ in $(seq 1 90); do
-  if docker exec "$container" pg_isready -U postgres -d yutakasa >/dev/null 2>&1; then
+  if docker logs "$container" 2>&1 | grep -Fq 'PostgreSQL init process complete; ready for start up' &&
+     docker exec "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa -Atqc 'SELECT 1' 2>/dev/null | grep -qx 1; then
+    ready=true
     break
   fi
   sleep 1
 done
 
-docker exec "$container" pg_isready -U postgres -d yutakasa >/dev/null
+if [[ "$ready" != true ]]; then
+  docker logs "$container" >&2
+  exit 1
+fi
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-migration-harness.sql >/dev/null
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
