@@ -133,10 +133,18 @@ async function reconcilePendingRelease(env, fetchImpl, release) {
   }
   if (pr.merged !== true) {
     const created = Date.parse(release.created_at);
-    if (!Number.isFinite(created) || pr.state !== "open" || Date.now() - created > 30 * 60 * 1000) {
-      fail("pending_release_unresolved");
+    if (!Number.isFinite(created)) fail("pending_release_unresolved");
+    if (pr.state === "open" && Date.now() - created <= 30 * 60 * 1000) {
+      return null;
     }
-    return null;
+    const abandoned = await supabaseRequest(
+      env, fetchImpl,
+      `/rest/v1/yutakasa_repair_releases?pr_number=eq.${release.pr_number}&head_sha=eq.${release.head_sha}&status=eq.pending_merge`,
+      { status: "abandoned", error_code: "pending_merge_abandoned" }, "PATCH",
+    );
+    if (!Array.isArray(abandoned) || abandoned.length !== 1 ||
+        abandoned[0]?.status !== "abandoned") fail("pending_release_abandon_unconfirmed");
+    return { status: "abandoned" };
   }
   if (!SHA.test(pr.merge_commit_sha ?? "")) fail("pending_release_merge_sha_invalid");
   const rows = await supabaseRequest(
@@ -166,15 +174,20 @@ export async function runRepairObservation({
   );
   if (!Array.isArray(rows) || rows.length > 5) fail("repair_observe_release_rows_invalid");
   const releases = [];
+  let abandoned = 0;
   for (const row of rows) {
     if (row?.status === "pending_merge") {
       const recovered = await reconcilePendingRelease(env, fetchImpl, row);
-      if (recovered) releases.push(recovered);
+      if (recovered?.status === "abandoned") abandoned += 1;
+      else if (recovered) releases.push(recovered);
     } else if (row?.status === "observing") {
       releases.push(row);
     } else fail("repair_observe_release_rows_invalid");
   }
-  if (releases.length === 0) return { examined: 0, verified: 0, failed: 0 };
+  if (releases.length === 0) {
+    if (abandoned > 0) fail("pending_release_abandoned");
+    return { examined: 0, verified: 0, failed: 0 };
+  }
   const environment = {
     supabaseUrl: env.SUPABASE_URL,
     supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -230,7 +243,7 @@ export async function runRepairObservation({
     if (result[0].status === "verified") summary.verified += 1;
     if (!observation.healthy || result[0].status === "failed") summary.failed += 1;
   }
-  if (summary.failed > 0) fail("repair_observation_failed");
+  if (summary.failed > 0 || abandoned > 0) fail("repair_observation_failed");
   return summary;
 }
 

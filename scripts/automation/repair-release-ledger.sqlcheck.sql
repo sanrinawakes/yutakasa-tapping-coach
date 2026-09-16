@@ -1,4 +1,6 @@
 BEGIN;
+INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,status,error_code)
+  VALUES (996,repeat('a',40),'abandoned','pending_merge_abandoned');
 DO $$
 DECLARE
   v_receipt RECORD;

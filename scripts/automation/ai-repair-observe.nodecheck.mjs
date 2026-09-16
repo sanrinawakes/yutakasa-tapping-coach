@@ -108,6 +108,34 @@ test("a merge acknowledged by GitHub recovers a failed ledger update before obse
   assert.equal(calls[2].body.merge_sha, SHA);
 });
 
+test("a closed unmerged PR leaves the pending observer queue", async () => {
+  const calls = [];
+  await assert.rejects(() => runRepairObservation({
+    env: { SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32), GITHUB_TOKEN: "g".repeat(32) },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+      if (url.includes("yutakasa_repair_releases?") && options.method === "GET") {
+        return new Response(JSON.stringify([{
+          pr_number: 42, head_sha: "c".repeat(40), merge_sha: null,
+          status: "pending_merge", created_at: NOW,
+        }]));
+      }
+      if (url.includes("api.github.com")) return new Response(JSON.stringify({
+        number: 42, head: { sha: "c".repeat(40), repo: { full_name: "sanrinawakes/yutakasa-tapping-coach" } },
+        merged: false, state: "closed",
+      }));
+      if (url.includes("yutakasa_repair_releases?") && options.method === "PATCH") {
+        return new Response(JSON.stringify([{ status: "abandoned" }]));
+      }
+      throw new Error("unexpected");
+    },
+    deploymentImpl: async () => { throw new Error("must not query production"); },
+  }), (error) => error instanceof AiRepairObserveError &&
+    error.code === "pending_release_abandoned");
+  assert.equal(calls[2].body.status, "abandoned");
+});
+
 test("no observing release avoids production and provider calls", async () => {
   let calls = 0;
   const result = await runRepairObservation({

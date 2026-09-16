@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_repair_releases (
   pr_number INTEGER PRIMARY KEY CHECK (pr_number > 0),
   head_sha TEXT NOT NULL CHECK (head_sha ~ '^[a-f0-9]{40}$'),
   merge_sha TEXT UNIQUE CHECK (merge_sha IS NULL OR merge_sha ~ '^[a-f0-9]{40}$'),
-  status TEXT NOT NULL CHECK (status IN ('pending_merge', 'observing', 'verified', 'failed')),
+  status TEXT NOT NULL CHECK (status IN ('pending_merge', 'observing', 'verified', 'failed', 'abandoned')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   merge_recorded_at TIMESTAMPTZ,
   deployment_id TEXT CHECK (deployment_id IS NULL OR deployment_id ~ '^dpl_[A-Za-z0-9]{8,160}$'),
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_repair_releases (
   healthy_count INTEGER NOT NULL DEFAULT 0 CHECK (healthy_count >= 0),
   verified_at TIMESTAMPTZ,
   error_code TEXT CHECK (error_code IS NULL OR error_code ~ '^[a-z][a-z0-9_]{0,100}$'),
-  CHECK ((status = 'pending_merge') = (merge_sha IS NULL)),
+  CHECK ((status IN ('pending_merge', 'abandoned')) = (merge_sha IS NULL)),
   CHECK ((status = 'verified') = (verified_at IS NOT NULL)),
   CHECK ((healthy_count = 0) = (first_healthy_at IS NULL AND last_healthy_at IS NULL)),
   CHECK ((healthy_count > 0) = (first_healthy_at IS NOT NULL AND last_healthy_at IS NOT NULL))
