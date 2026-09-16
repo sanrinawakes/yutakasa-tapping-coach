@@ -224,6 +224,14 @@ test("decision classification uses the customer's full history without exposing 
   }] });
   tied.messages.reverse();
   assert.equal(planTicket(tied).latestUserMessageId, NEW_MESSAGE_ID);
+  assert.equal(planTicket(entry({ messages: [{
+    id: NEW_MESSAGE_ID, sender_type: "user", body: "I need a refund for this payment.",
+    created_at: "2026-09-16T01:10:00Z",
+  }] })).kind, "decision_required");
+  assert.equal(planTicket(entry({ messages: [{
+    id: NEW_MESSAGE_ID, sender_type: "user", body: "Please delete my personal data.",
+    created_at: "2026-09-16T01:10:00Z",
+  }] })).kind, "decision_required");
 });
 
 test("technical ticket claims, heartbeats, records a durable marker, and terminates failed", async () => {

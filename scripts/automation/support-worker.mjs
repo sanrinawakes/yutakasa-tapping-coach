@@ -5,6 +5,7 @@ import fs from "node:fs";
 const SUPPORT_API = "https://yutakasa-tapping-coach.vercel.app/api/internal/support-automation";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DECISION_TERMS = /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)|個人データ.{0,8}(削除|開示)|損害賠償|消費者センター/u;
+const ENGLISH_DECISION_TERMS = /\b(?:refund|reimbursement|chargeback|billing|payment|charge|price|subscription|cancel(?:lation)?|contract|compensation|damages|lawyer|lawsuit|legal|privacy|personal\s+(?:data|information)|delete\s+(?:my\s+)?(?:account|data))\b/iu;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_API_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_BYTES = 8 * 1024 * 1024;
@@ -105,9 +106,11 @@ export function readTicketContextFile(contextPath) {
 export function planTicket(entry) {
   const latest = latestUserMessage(entry);
   if (!latest) fail("support_context_missing_user_message");
+  const customerText = `${entry.ticket.subject}\n${entry.messages.filter((message) =>
+    message.sender_type === "user").map((message) => message.body).join("\n")}`;
   const decision =
     entry.ticket.category === "billing" ||
-    DECISION_TERMS.test(`${entry.ticket.subject}\n${entry.messages.filter((message) => message.sender_type === "user").map((message) => message.body).join("\n")}`);
+    DECISION_TERMS.test(customerText) || ENGLISH_DECISION_TERMS.test(customerText);
   if (decision) return { kind: "decision_required", latestUserMessageId: latest.id };
   const seen = entry.work_logs.some((log) =>
     log.event_type === "remote_support_escalated" &&

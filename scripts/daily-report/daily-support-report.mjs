@@ -28,6 +28,7 @@ const AUTOMATION_STATUS = new Set(["queued", "investigating", "blocked_decision"
 const MESSAGE_SENDER = new Set(["user", "admin", "system"]);
 const MONITOR_STATUS = new Set(["healthy", "action_required", "failed", "abandoned"]);
 const MONITOR_REASON = /^[A-Za-z0-9][A-Za-z0-9_]{0,127}$/u;
+const EXPECTED_MONITOR_SLOTS = 144;
 
 export class DailyReportError extends Error {
   constructor(code) {
@@ -317,6 +318,7 @@ export function summarizeMonitorRows(rows, window) {
   const reasonCounts = new Map();
   const runIds = new Set();
   const observedHours = new Set();
+  const observedSlots = new Set();
   let alertDispatches = 0;
   let repairDispatches = 0;
   for (const row of rows) {
@@ -337,11 +339,14 @@ export function summarizeMonitorRows(rows, window) {
     if (row.repair_dispatched) repairDispatches += 1;
     const hour = Math.floor((Date.parse(row.started_at) - Date.parse(window.start)) / 3_600_000);
     if (hour >= 0 && hour < 24) observedHours.add(hour);
+    const slot = Math.floor((Date.parse(row.started_at) - Date.parse(window.start)) / 600_000);
+    if (slot >= 0 && slot < EXPECTED_MONITOR_SLOTS) observedSlots.add(slot);
   }
   return {
     state: "observed",
     completedCount: rows.length,
     observedHourCount: observedHours.size,
+    observedSlotCount: observedSlots.size,
     statusCounts,
     reasonCounts: [...reasonCounts].sort(([a], [b]) => a.localeCompare(b)),
     alertDispatches,
@@ -384,11 +389,11 @@ function monitorSummaryLines(summary) {
   }
   const counts = summary.statusCounts;
   const lines = [
-    `障害監視の完了記録（確認できた実行のみ）: ${summary.completedCount}件（記録のある時間帯${summary.observedHourCount}/24、正常${counts.healthy}件、要対応${counts.action_required}件、失敗${counts.failed}件、期限切れ${counts.abandoned}件）`,
+    `障害監視の完了記録（確認できた実行のみ）: ${summary.completedCount}件（記録のある10分枠${summary.observedSlotCount}/${EXPECTED_MONITOR_SLOTS}、時間帯${summary.observedHourCount}/24、正常${counts.healthy}件、要対応${counts.action_required}件、失敗${counts.failed}件、期限切れ${counts.abandoned}件）`,
     `通知処理: GitHubへの警告依頼${summary.alertDispatches}件、AI調査依頼${summary.repairDispatches}件。AI修正・PR/issueの結果は未確認です。依頼の受理は本番復旧の完了を示しません。`,
   ];
-  if (summary.observedHourCount < 24) {
-    lines.push("監視の完了記録がない時間帯があります。前日全体が正常とは判定していません。");
+  if (summary.observedSlotCount < EXPECTED_MONITOR_SLOTS) {
+    lines.push("監視の完了記録がない10分枠があります。前日全体が正常とは判定していません。");
   }
   if (summary.reasonCounts.length > 0) {
     const listed = summary.reasonCounts.slice(0, 20).map(([code, count]) => `${code} ${count}件`);

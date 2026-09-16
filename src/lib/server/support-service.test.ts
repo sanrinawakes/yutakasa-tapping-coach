@@ -102,23 +102,17 @@ describe("support automation leases", () => {
     expect(listQuery.limit).toHaveBeenCalledWith(25);
   });
 
-  it("claims only an unlocked queued ticket", async () => {
-    const claimQuery = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      in: vi.fn().mockReturnThis(),
-      is: vi.fn().mockReturnThis(),
-      select: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: ticket(), error: null }),
-    };
-    getSupabaseMock.mockReturnValue({
-      from: vi.fn().mockReturnValue(claimQuery),
-    } as never);
-
+  it("claims through one atomic ticket and work-log RPC", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [ticket()], error: null });
+    const from = vi.fn();
+    getSupabaseMock.mockReturnValue({ rpc, from } as never);
     await expect(claimSupportTicket(ticketId, lockToken)).resolves.toMatchObject({
       id: ticketId,
     });
-    expect(claimQuery.is).toHaveBeenCalledWith("automation_locked_at", null);
+    expect(rpc).toHaveBeenCalledWith("claim_support_ticket_with_log", {
+      p_ticket_id: ticketId, p_lock_token: lockToken,
+    });
+    expect(from).not.toHaveBeenCalled();
   });
 
   it("renews the active lease before continuing work", async () => {

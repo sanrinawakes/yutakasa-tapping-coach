@@ -160,35 +160,49 @@ export async function collectRemoteLogs({
   requireMatch(deploymentId, DEPLOYMENT_ID, "deployment_id_invalid");
   if (typeof token !== "string" || token.length < 20) fail("vercel_token_missing");
   const queries = {};
+  const historicalQueries = {};
+  const observedAt = new Date();
+  const since = new Date(observedAt.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const until = observedAt.toISOString();
   const childEnv = { CI: "1", NO_COLOR: "1", VERCEL_TELEMETRY_DISABLED: "1" };
   for (const name of LOG_CHILD_ENV_NAMES) {
     if (typeof process.env[name] === "string") childEnv[name] = process.env[name];
   }
   for (const [name, filter] of Object.entries(LOG_FILTERS)) {
-    let stdout;
-    try {
-      ({ stdout } = await runCommand("vercel", [
-        "logs",
-        "--since=24h", "--limit=100", "--no-follow", "--json",
-        "--environment=production",
-        "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
-        filter, "--token", token,
-      ], {
-        timeout: 50_000,
-        maxBuffer: 8 * 1024 * 1024,
-        encoding: "utf8",
-        env: childEnv,
-      }));
-    } catch {
-      fail(`log_${name}_query_failed`);
+    const counts = [];
+    for (const scope of ["project", "current"]) {
+      let stdout;
+      try {
+        ({ stdout } = await runCommand("vercel", [
+          "logs",
+          ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
+          `--since=${since}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
+          "--environment=production",
+          "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
+          filter, "--token", token,
+        ], {
+          timeout: 50_000,
+          maxBuffer: 8 * 1024 * 1024,
+          encoding: "utf8",
+          env: childEnv,
+        }));
+      } catch {
+        fail(`log_${name}_${scope}_query_failed`);
+      }
+      const parsed = parseBoundedLogQuery(stdout);
+      if (parsed.truncated) fail(`log_${name}_${scope}_truncated`);
+      counts.push(parsed.count);
     }
-    queries[name] = parseBoundedLogQuery(stdout);
-    if (queries[name].truncated) fail(`log_${name}_truncated`);
+    const [projectCount, currentCount] = counts;
+    if (currentCount > projectCount) fail(`log_${name}_scope_inconsistent`);
+    queries[name] = { count: currentCount, truncated: false };
+    historicalQueries[name] = { count: projectCount - currentCount, truncated: false };
   }
   return Object.freeze({
-    observedAt: new Date().toISOString(),
+    observedAt: until,
     deploymentId,
-    logScope: "project_production",
+    logScope: "project_production_split_by_current_deployment",
     queries: Object.freeze(queries),
+    historicalQueries: Object.freeze(historicalQueries),
   });
 }

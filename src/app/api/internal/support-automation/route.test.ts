@@ -126,6 +126,21 @@ describe("support automation API", () => {
     expect(addLogMock).not.toHaveBeenCalled();
   });
 
+  it("returns a claimed ticket without a second work-log write", async () => {
+    claimMock.mockResolvedValue(ticket);
+    const response = await PATCH(request("PATCH", { action: "claim", ticketId, lockToken }));
+    expect(response.status).toBe(200);
+    expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an error if the atomic claim and log RPC rolls back", async () => {
+    claimMock.mockRejectedValue(new Error("work log unavailable"));
+    const response = await PATCH(request("PATCH", { action: "claim", ticketId, lockToken }));
+    expect(response.status).toBe(500);
+    expect(addLogMock).not.toHaveBeenCalled();
+    expect(renewLockMock).not.toHaveBeenCalled();
+  });
+
   it("does not write progress without the matching lock", async () => {
     renewLockMock.mockResolvedValue(null);
     const response = await PATCH(
@@ -154,9 +169,7 @@ describe("support automation API", () => {
     expect(addLogMock).toHaveBeenCalled();
   });
 
-  it("sends a verified reply once and marks automation complete", async () => {
-    appendMock.mockResolvedValue({ message_id: messageId, created: true });
-    updateMock.mockResolvedValue(ticket);
+  it("rejects automated replies before renewing a lock or sending a customer message", async () => {
     const response = await PATCH(
       request("PATCH", {
         action: "reply",
@@ -167,17 +180,11 @@ describe("support automation API", () => {
         resolve: true,
       })
     );
-    expect(response.status).toBe(201);
-    expect(appendMock).toHaveBeenCalledWith({
-      ticketId,
-      body: "原因を修正し、保存と再読み込みを確認しました。",
-      clientRequestId: messageId,
-      resolve: true,
-    });
-    expect(updateMock).toHaveBeenCalledWith({
-      ticketId,
-      automationStatus: "completed",
-    });
+    expect(response.status).toBe(501);
+    expect(renewLockMock).not.toHaveBeenCalled();
+    expect(appendMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(addLogMock).not.toHaveBeenCalled();
   });
 
   it("blocks business decisions without replying to the customer", async () => {

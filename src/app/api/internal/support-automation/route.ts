@@ -2,17 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
-  appendAdminSupportMessage,
   claimSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   renewSupportAutomationLock,
-  updateAdminSupportTicket,
 } from "@/lib/server/support-service";
 import { supportApiError, SupportRequestError } from "@/lib/server/support-request";
 import {
-  MAX_SUPPORT_MESSAGE_LENGTH,
   normalizeSupportText,
   parseClientRequestId,
 } from "@/lib/support";
@@ -134,6 +131,9 @@ export async function PATCH(request: NextRequest) {
     }
     const record = input as Record<string, unknown>;
     const action = typeof record.action === "string" ? record.action : "";
+    if (action === "reply") {
+      throw new SupportRequestError("Automated customer replies are unavailable.", 501);
+    }
     const ticketId = readTicketId(record.ticketId);
 
     if (action === "claim") {
@@ -145,11 +145,6 @@ export async function PATCH(request: NextRequest) {
           { status: 409 }
         );
       }
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_claimed",
-        summary: "Codexが技術調査を開始しました。",
-      });
       return NextResponse.json({ ticket });
     }
 
@@ -177,34 +172,6 @@ export async function PATCH(request: NextRequest) {
         metadata,
       });
       return NextResponse.json({ success: true });
-    }
-
-    if (action === "reply") {
-      const body = normalizeSupportText(record.body, MAX_SUPPORT_MESSAGE_LENGTH + 1);
-      if (!body || body.length > MAX_SUPPORT_MESSAGE_LENGTH) {
-        throw new SupportRequestError("Reply body is invalid");
-      }
-      const clientRequestId = readLockToken(record.clientRequestId);
-      const resolve = record.resolve === true;
-      const result = await appendAdminSupportMessage({
-        ticketId,
-        body,
-        clientRequestId,
-        resolve,
-      });
-      await updateAdminSupportTicket({
-        ticketId,
-        automationStatus: "completed",
-      });
-      await addSupportWorkLog({
-        ticketId,
-        eventType: resolve ? "automation_resolved" : "automation_replied",
-        summary: resolve
-          ? "技術対応と利用者への回答を完了しました。"
-          : "利用者へ回答し、追加連絡を待っています。",
-        metadata: { message_id: result.message_id, duplicate: !result.created },
-      });
-      return NextResponse.json(result, { status: result.created ? 201 : 200 });
     }
 
     if (action === "decision_required") {

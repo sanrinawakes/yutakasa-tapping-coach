@@ -781,24 +781,13 @@ export async function recoverStaleSupportAutomationTickets(): Promise<string[]> 
 }
 
 export async function claimSupportTicket(ticketId: string, lockToken: string) {
-  const { data, error } = await getSupabase()
-    .from("support_tickets")
-    .update({
-      automation_status: "investigating",
-      automation_locked_at: new Date().toISOString(),
-      automation_lock_token: lockToken,
-      status: "in_progress",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", ticketId)
-    .eq("decision_required", false)
-    .in("automation_status", ["queued", "failed"])
-    .in("status", ["open", "in_progress"])
-    .is("automation_locked_at", null)
-    .select("*")
-    .maybeSingle();
+  const { data, error } = await getSupabase().rpc("claim_support_ticket_with_log", {
+    p_ticket_id: ticketId,
+    p_lock_token: lockToken,
+  });
   if (error) throw error;
-  return data as SupportTicket | null;
+  const ticket = Array.isArray(data) ? data[0] : data;
+  return (ticket ?? null) as SupportTicket | null;
 }
 
 export async function renewSupportAutomationLock(
