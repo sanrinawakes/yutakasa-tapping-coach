@@ -19,6 +19,8 @@ const WORK_EVENT_LABELS = Object.freeze({
   automation_lock_recovered: "中断した自動対応を再調査可能に変更",
   owner_decision_required: "運営判断が必要と記録",
   notification_failed: "通知メールの送信に失敗",
+  remote_support_escalated: "技術案件を運営確認へ引き渡し",
+  automation_heartbeat: "自動処理のロックを更新",
 });
 
 export function workEventLabel(eventType) {

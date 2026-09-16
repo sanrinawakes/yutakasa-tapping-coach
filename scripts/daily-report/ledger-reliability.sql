@@ -176,7 +176,8 @@ CREATE OR REPLACE FUNCTION public.get_yutakasa_daily_report_health(
 RETURNS TABLE (
   uncertain_count BIGINT,
   failed_count BIGINT,
-  provider_adverse_count BIGINT
+  provider_adverse_count BIGINT,
+  pending_overdue_count BIGINT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -192,7 +193,11 @@ BEGIN
   SELECT count(*) FILTER (WHERE d.status = 'uncertain'),
          count(*) FILTER (WHERE d.status = 'failed'),
          count(*) FILTER (WHERE d.provider_last_event IN (
-           'bounced', 'canceled', 'complained', 'failed', 'suppressed'))
+           'bounced', 'canceled', 'complained', 'failed', 'suppressed')),
+         count(*) FILTER (WHERE d.status = 'accepted'
+           AND d.last_send_started_at <= clock_timestamp() - INTERVAL '2 hours'
+           AND (d.provider_last_event IS NULL OR d.provider_last_event IN (
+             'queued', 'sent', 'scheduled', 'delivery_delayed')))
   FROM public.yutakasa_daily_report_deliveries AS d
   WHERE d.recipient IN (p_recipient_1, p_recipient_2);
 END;

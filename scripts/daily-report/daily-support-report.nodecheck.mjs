@@ -61,7 +61,8 @@ function source() {
 function testFetch({ records = source(), resendBehavior = async (_url, init) =>
   json({ id: resendIdFor(JSON.parse(init.body).to[0]) }),
   resendRetrieveBehavior,
-  cursorDate = "2026-09-16", initialLedger = {}, ignoreWindowFilter = false } = {}) {
+  cursorDate = "2026-09-16", initialLedger = {}, ignoreWindowFilter = false,
+  healthNow = NOW } = {}) {
   const requests = [];
   const ledger = new Map(Object.entries(initialLedger));
   const state = { cursorDate };
@@ -182,6 +183,10 @@ function testFetch({ records = source(), resendBehavior = async (_url, init) =>
         failed_count: rows.filter((row) => row.status === "failed").length,
         provider_adverse_count: rows.filter((row) =>
           ["bounced", "canceled", "complained", "failed", "suppressed"].includes(row.provider_last_event)).length,
+        pending_overdue_count: rows.filter((row) => row.status === "accepted" &&
+          Date.parse(row.last_send_started_at) <= healthNow.getTime() - 2 * 60 * 60 * 1000 &&
+          (row.provider_last_event == null ||
+            ["queued", "sent", "scheduled", "delivery_delayed"].includes(row.provider_last_event))).length,
       }]);
     }
     if (url.pathname === "/rest/v1/rpc/advance_yutakasa_daily_report_cursor") {
@@ -304,6 +309,25 @@ test("old uncertain sends and old bounces remain visible after the day cursor ad
   assert.equal(result.pendingFailedCount, 0);
 });
 
+test("an accepted report still queued after two hours remains an unresolved delivery", async () => {
+  const initialLedger = {
+    [`2026-09-16:${env.REPORT_RECIPIENT_1}`]: { status: "accepted",
+      provider_email_id: RESEND_ID, provider_last_event: "sent",
+      provider_checked_at: "2026-09-17T00:00:00Z",
+      last_send_started_at: "2026-09-16T21:00:00Z" },
+    [`2026-09-16:${env.REPORT_RECIPIENT_2}`]: { status: "accepted",
+      provider_email_id: RESEND_ID_2, provider_last_event: "delivered",
+      provider_checked_at: "2026-09-17T00:00:00Z",
+      last_send_started_at: "2026-09-16T21:00:00Z" },
+  };
+  const client = testFetch({ initialLedger });
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.pendingOverdueCount, 1);
+  assert.equal(result.unresolvedDeliveryCode, "daily_report_delivery_unresolved");
+  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com").length, 0);
+});
+
 test("an uncertain Resend response is recorded and never retried automatically", async () => {
   let sends = 0;
   const client = testFetch({ resendBehavior: async (_url, init) => {
@@ -417,6 +441,8 @@ test("a row outside the requested JST window fails closed before sending", async
 test("known work events explain progress; unknown event types never leak raw text", () => {
   assert.equal(workEventLabel("automation_claimed"), "自動調査を開始");
   assert.equal(workEventLabel("owner_decision_required"), "運営判断が必要と記録");
+  assert.equal(workEventLabel("remote_support_escalated"), "技術案件を運営確認へ引き渡し");
+  assert.equal(workEventLabel("automation_heartbeat"), "自動処理のロックを更新");
   assert.equal(workEventLabel("PRIVATE EVENT TYPE"), "作業記録（種別未分類）");
   const known = source();
   known.workLogs[0].event_type = "automation_replied";

@@ -80,10 +80,22 @@ BEGIN
     'public.record_yutakasa_daily_report_provider_event(date,text,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'provider event write is publicly accessible';
   END IF;
+  SELECT * INTO v_reserved FROM public.reserve_yutakasa_daily_report_delivery(
+    DATE '2026-09-18', 'one@example.com', 'Third report', 'Third body',
+    repeat('c', 64), 'daily-test-third');
+  PERFORM public.finish_yutakasa_daily_report_delivery(
+    DATE '2026-09-18', 'one@example.com', 'daily-test-third', 1,
+    'accepted', '55555555-5555-4555-8555-555555555555', NULL);
+  PERFORM public.record_yutakasa_daily_report_provider_event(
+    DATE '2026-09-18', 'one@example.com',
+    '55555555-5555-4555-8555-555555555555', 'sent');
+  UPDATE public.yutakasa_daily_report_deliveries
+  SET last_send_started_at = clock_timestamp() - INTERVAL '3 hours'
+  WHERE report_date_jst = DATE '2026-09-18' AND recipient = 'one@example.com';
   SELECT * INTO v_health FROM public.get_yutakasa_daily_report_health(
     'one@example.com', 'two@example.com');
   IF v_health.uncertain_count <> 2 OR v_health.failed_count <> 0
-    OR v_health.provider_adverse_count <> 1 THEN
+    OR v_health.provider_adverse_count <> 1 OR v_health.pending_overdue_count <> 1 THEN
     RAISE EXCEPTION 'persistent delivery health counts are wrong';
   END IF;
   IF has_function_privilege('anon',

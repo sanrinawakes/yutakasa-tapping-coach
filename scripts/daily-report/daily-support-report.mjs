@@ -643,13 +643,14 @@ async function auditDeliveryHealth(config, fetchImpl) {
       body: { p_recipient_1: config.recipients[0], p_recipient_2: config.recipients[1] },
     });
   const row = oneRpcRow(payload, "delivery_health_invalid");
-  for (const key of ["uncertain_count", "failed_count", "provider_adverse_count"]) {
+  for (const key of ["uncertain_count", "failed_count", "provider_adverse_count", "pending_overdue_count"]) {
     if (!Number.isSafeInteger(row[key]) || row[key] < 0) fail("delivery_health_invalid");
   }
   return {
     uncertainCount: row.uncertain_count,
     failedCount: row.failed_count,
     providerAdverseCount: row.provider_adverse_count,
+    pendingOverdueCount: row.pending_overdue_count,
   };
 }
 
@@ -728,10 +729,11 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
   let health;
   try { health = await auditDeliveryHealth(config, fetchImpl); }
   catch (error) {
-    health = { uncertainCount: null, failedCount: null, providerAdverseCount: null,
+    health = { uncertainCount: null, failedCount: null, providerAdverseCount: null, pendingOverdueCount: null,
       errorCode: error instanceof DailyReportError ? error.code : "delivery_health_unexpected_failure" };
   }
-  const unresolved = health.uncertainCount > 0 || health.failedCount > 0 || health.providerAdverseCount > 0;
+  const unresolved = health.uncertainCount > 0 || health.failedCount > 0 ||
+    health.providerAdverseCount > 0 || health.pendingOverdueCount > 0;
   return {
     ...latest,
     ok: results.every((result) => result.ok) && !provider.errorCode &&
@@ -742,6 +744,7 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
     unresolvedUncertainCount: health.uncertainCount,
     pendingFailedCount: health.failedCount,
     providerAdverseCount: health.providerAdverseCount,
+    pendingOverdueCount: health.pendingOverdueCount,
     ...(unresolved ? { unresolvedDeliveryCode: "daily_report_delivery_unresolved" } : {}),
     ...(provider.errorCode ? { providerErrorCode: provider.errorCode } : {}),
     ...(health.errorCode ? { healthErrorCode: health.errorCode } : {}),

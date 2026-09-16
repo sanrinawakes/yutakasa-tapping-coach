@@ -36,7 +36,9 @@ Resend受理IDだけを記録する。`accepted` はResendの受理を意味し�
 配達失敗、送信結果不明、照合失敗はcronを非0終了させ、日付と宛先番号、
 エラーコードを標準出力へ残す。
 送信カーソルを越えた古い日も、`uncertain`、再試行待ちの`failed`、
-Resendの配達失敗は全期間の件数を毎回確認し、解決まで固定コード
+Resendの配達失敗に加え、受理から2時間経っても`sent`・`queued`・
+`delivery_delayed`等の未配達状態にあるメールは、全期間の件数を毎回確認する。
+解決まで固定コード
 `daily_report_delivery_unresolved`と件数を出して非0終了する。
 Railwayの日報サービスには監視側の
 `GITHUB_DISPATCH_TOKEN`を渡していないため、即時の別経路通知は未実装。
