@@ -5,7 +5,7 @@ This directory contains PC-independent monitoring, conservative ticket triage, a
 ## Runtime
 
 - Railway project: `yutakasa-support-automation`
-- Service defined in `.railway/railway.ts`: `yutakasa-support-monitor`
+- Shared service definition in `.railway/railway.ts`: existing `yutakasa-daily-support-report` and proposed `yutakasa-support-monitor`
 - Schedule: `17 * * * *` (UTC)
 - Container: `Dockerfile`; `node remote-monitor.mjs run`
 - Required Railway variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, one of `JWT_SECRET` or `CRON_SECRET`, `VERCEL_TOKEN`, `GITHUB_DISPATCH_TOKEN` (fine-grained GitHub token with Actions write on this repository), `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, and `GOOGLE_DRIVE_REFRESH_TOKEN` (Drive metadata.readonly OAuth grant). Use dedicated, scoped credentials. Do not commit values.
@@ -20,4 +20,4 @@ The worker checks the exact support queue via the fixed production snapshot help
 3. Preserve the legacy Google Drive intake check and processing-result output. The old automation only flags new Drive items and stops for a dedicated duplicate-prevention helper; it does not process those items automatically. The connected Drive account confirms `コーチングbot/豊かさ/顧客の声/受付` (folder ID `16q1toSGCWB0WyI7zH2KAKNzvENL9FfLT`; zero direct children observed on 2026-09-16) and `処理結果` (folder ID `11nYD_FzHqnYKbOy2zPBge3Y_of2tM-m5`). The Mac-synced folder is unavailable in Railway; this requires a dedicated Drive API identity with durable access before cutover.
 4. Configure the Railway secrets, GitHub repair credential, and Vercel access token. Run an initial production smoke and verify at least three scheduled executions and failure notification. Only then pause the desktop automation.
 
-The Railway project is currently empty. `railway config plan --file scripts/automation/.railway/railway.ts` reports one service to add. Applying it before the code is merged and credentials are ready would start an incomplete monitor.
+The Railway project already runs `yutakasa-daily-support-report`. The combined Railway definition preserves that service and proposes adding the monitor. The former daily-report entry point re-exports the same definition so either path describes both services. Check `railway config plan --file scripts/automation/.railway/railway.ts` before applying. Do not apply the monitor configuration until the code is merged, credentials are ready, and the cutover checks above pass.

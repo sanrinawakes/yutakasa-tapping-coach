@@ -30,7 +30,7 @@ docker build --file scripts/daily-report/Dockerfile --tag yutakasa-daily-support
 railway config plan --file scripts/daily-report/.railway/railway.ts
 ```
 
-このIaC定義は日報サービスだけを含む。別ブランチにある
-`yutakasa-support-monitor` をRailwayへ反映する前には、両サービスを
-同じ定義へ統合すること。片方だけの定義を再適用すると、もう一方の削除案が
-出る可能性があるため、毎回 `config plan` の差分を確認する。
+IaCの実体は `scripts/automation/.railway/railway.ts` に統合し、このパスも
+同じ定義を参照する。現行の日報サービスと、移行準備中の監視サービスの両方を
+定義するため、監視側の認証情報と切替検証が済むまで設定を適用しない。
+適用前には毎回 `config plan` の差分を確認する。
