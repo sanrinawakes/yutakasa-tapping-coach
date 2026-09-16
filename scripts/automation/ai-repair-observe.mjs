@@ -26,10 +26,13 @@ export function evaluateRepairObservation({ release, deployment, logs, snapshot,
   if (
     !Number.isSafeInteger(release?.pr_number) || release.pr_number < 1 ||
     release?.status !== "observing" || !SHA.test(release?.merge_sha ?? "") ||
+    !Number.isFinite(Date.parse(release?.merge_recorded_at ?? "")) ||
     !Number.isFinite(Date.parse(observedAt)) ||
     deployment?.ready !== true || !DEPLOYMENT.test(deployment?.deploymentId ?? "") ||
     !SHA.test(deployment?.mainSha ?? "") ||
-    logs?.deploymentId !== deployment.deploymentId
+    logs?.deploymentId !== deployment.deploymentId ||
+    logs?.logScope !== "deployment_post_merge" ||
+    logs?.since !== release.merge_recorded_at
   ) fail("repair_observation_evidence_invalid");
   const snapshotSummary = validateRemoteSnapshot(snapshot);
   for (const stamp of [deployment.observedAt, logs.observedAt, snapshot.observedAt]) {
@@ -144,7 +147,8 @@ async function reconcilePendingRelease(env, fetchImpl, release) {
   );
   if (!Array.isArray(rows) || rows.length !== 1 || rows[0]?.merge_sha !== pr.merge_commit_sha ||
       rows[0]?.status !== "observing") fail("pending_release_reconcile_unconfirmed");
-  return { pr_number: release.pr_number, merge_sha: pr.merge_commit_sha, status: "observing" };
+  return { pr_number: release.pr_number, merge_sha: pr.merge_commit_sha,
+    merge_recorded_at: pr.merged_at, status: "observing" };
 }
 
 export async function runRepairObservation({
@@ -157,7 +161,7 @@ export async function runRepairObservation({
 } = {}) {
   const rows = await supabaseRequest(
     env, fetchImpl,
-    "/rest/v1/yutakasa_repair_releases?status=in.(pending_merge,observing)&select=pr_number,head_sha,merge_sha,status,created_at&order=pr_number.asc&limit=5",
+    "/rest/v1/yutakasa_repair_releases?status=in.(pending_merge,observing)&select=pr_number,head_sha,merge_sha,status,created_at,merge_recorded_at&order=pr_number.desc&limit=5",
     null,
   );
   if (!Array.isArray(rows) || rows.length > 5) fail("repair_observe_release_rows_invalid");
@@ -177,12 +181,10 @@ export async function runRepairObservation({
     automationToken: env.CRON_SECRET,
   };
   let deployment;
-  let logs;
   let snapshot;
   let collectionFailed = false;
   try {
     deployment = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
-    logs = await logsImpl({ deploymentId: deployment.deploymentId, token: env.VERCEL_TOKEN });
     snapshot = await snapshotImpl({ environment, fetchImpl });
   } catch {
     collectionFailed = true;
@@ -196,9 +198,17 @@ export async function runRepairObservation({
         healthy: false, code: "production_probe_failed",
         deploymentId: DEPLOYMENT.test(deployment?.deploymentId ?? "") ? deployment.deploymentId : null,
       };
+    } else if (release.merge_sha !== deployment.mainSha) {
+      observation = { healthy: false, code: "main_sha_changed", deploymentId: deployment.deploymentId };
     } else {
       let functionalEvidence = null;
       try {
+        const logs = await logsImpl({
+          deploymentId: deployment.deploymentId,
+          token: env.VERCEL_TOKEN,
+          deploymentOnly: true,
+          since: release.merge_recorded_at,
+        });
         functionalEvidence = await functionalSmokeImpl({ release, deployment });
         observation = evaluateRepairObservation({ release, deployment, logs, snapshot, functionalEvidence, observedAt });
       } catch {

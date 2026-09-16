@@ -6,10 +6,12 @@ import { AiRepairObserveError, evaluateRepairObservation, runRepairObservation }
 const NOW = "2026-09-16T20:00:00.000Z";
 const SHA = "a".repeat(40);
 const DEPLOYMENT = "dpl_Abcdefghijklmnop";
-const release = { pr_number: 42, status: "observing", merge_sha: SHA };
+const release = { pr_number: 42, status: "observing", merge_sha: SHA,
+  merge_recorded_at: NOW };
 const deployment = { observedAt: NOW, mainSha: SHA, deploymentId: DEPLOYMENT, ready: true };
 const logs = {
   observedAt: NOW, deploymentId: DEPLOYMENT,
+  logScope: "deployment_post_merge", since: NOW,
   queries: Object.fromEntries(["fiveXx", "levelError", "timeout", "gemini"].map((name) => [name, { count: 0, truncated: false }])),
 };
 const snapshot = {
@@ -117,4 +119,35 @@ test("no observing release avoids production and provider calls", async () => {
   });
   assert.deepEqual(result, { examined: 0, verified: 0, failed: 0 });
   assert.equal(calls, 1);
+});
+
+test("six superseded releases are terminalized without starving the newest or oldest", async () => {
+  const states = new Map(Array.from({ length: 6 }, (_, index) => [index + 1, "observing"]));
+  const observed = [];
+  const fetchImpl = async (url, options) => {
+    if (url.includes("yutakasa_repair_releases?")) {
+      assert.match(url, /order=pr_number\.desc&limit=5/u);
+      return new Response(JSON.stringify([...states]
+        .filter(([, status]) => status === "observing")
+        .sort((a, b) => b[0] - a[0]).slice(0, 5)
+        .map(([pr_number]) => ({ pr_number, status: "observing",
+          merge_sha: "b".repeat(40), head_sha: "c".repeat(40),
+          created_at: NOW, merge_recorded_at: NOW }))));
+    }
+    const body = JSON.parse(options.body);
+    observed.push(body.p_pr_number);
+    states.set(body.p_pr_number, "failed");
+    return new Response(JSON.stringify([{ status: "failed", healthy_count: 0 }]));
+  };
+  for (let run = 0; run < 2; run += 1) {
+    await assert.rejects(() => runRepairObservation({
+      env: { SUPABASE_URL: "https://example.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+      fetchImpl,
+      deploymentImpl: async () => deployment,
+      snapshotImpl: async () => snapshot,
+      logsImpl: async () => { throw new Error("logs are irrelevant after a newer main SHA"); },
+    }), AiRepairObserveError);
+  }
+  assert.deepEqual(observed, [6, 5, 4, 3, 2, 1]);
 });

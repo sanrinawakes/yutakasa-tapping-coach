@@ -198,6 +198,38 @@ describe("support automation API", () => {
     expect(appendMock).not.toHaveBeenCalled();
   });
 
+  it("blocks automatic reply when an attachment could contain an owner decision", async () => {
+    detailMock.mockResolvedValue({ ticket, messages: [{
+      id: messageId, ticket_id: ticketId, sender_type: "user",
+      sender_email: "member@example.com", body: "添付を見てください",
+      created_at: ticket.updated_at,
+      attachments: [{ id: messageId, filename: "request.png", content_type: "image/png",
+        size_bytes: 3, url: null }],
+    }], work_logs: [] });
+    const response = await PATCH(request("PATCH", {
+      action: "reply", ticketId, lockToken, clientRequestId: messageId,
+      latestUserMessageId: messageId, releasePrNumber: 37,
+      body: "確認しました。", resolve: true,
+    }));
+    expect(response.status).toBe(409);
+    expect(appendMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks automatic reply to text outside the reviewed Japanese classifier", async () => {
+    detailMock.mockResolvedValue({ ticket, messages: [{
+      id: messageId, ticket_id: ticketId, sender_type: "user",
+      sender_email: "member@example.com", body: "Please delete my personal data",
+      created_at: ticket.updated_at, attachments: [],
+    }], work_logs: [] });
+    const response = await PATCH(request("PATCH", {
+      action: "reply", ticketId, lockToken, clientRequestId: messageId,
+      latestUserMessageId: messageId, releasePrNumber: 37,
+      body: "確認しました。", resolve: true,
+    }));
+    expect(response.status).toBe(409);
+    expect(appendMock).not.toHaveBeenCalled();
+  });
+
   it("allows an uncertain HTTP reply result to be retried without another message", async () => {
     appendMock.mockResolvedValue({ message_id: messageId, created: false });
     detailMock.mockResolvedValue({

@@ -202,14 +202,17 @@ export async function PATCH(request: NextRequest) {
         detail.ticket.status === "in_progress";
       const completedRetry = detail?.ticket.automation_status === "completed" &&
         ["resolved", "waiting_user"].includes(detail.ticket.status);
+      const userText = detail?.messages.filter((message) => message.sender_type === "user")
+        .map((message) => message.body).join("\n") ?? "";
       if (!detail || (!currentClaim && !completedRetry) || detail.ticket.decision_required ||
           !["technical", "login", "quality"].includes(detail.ticket.category) ||
           latestUser?.id !== latestUserMessageId ||
+          detail.messages.some((message) => message.attachments.length > 0) ||
+          /[A-Za-z]/u.test(`${detail.ticket.subject}\n${userText}`) ||
           requiresOwnerDecision(
             detail.ticket.category,
             detail.ticket.subject,
-            detail.messages.filter((message) => message.sender_type === "user")
-              .map((message) => message.body).join("\n")
+            userText
           )) {
         throw new SupportRequestError("Ticket needs another review before reply", 409);
       }

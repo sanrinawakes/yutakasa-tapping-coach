@@ -3,13 +3,26 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.yutakasa_repair_ticket_links (
-  pr_number INTEGER NOT NULL REFERENCES public.yutakasa_repair_releases(pr_number),
-  ticket_id UUID NOT NULL REFERENCES public.support_tickets(id),
-  latest_user_message_id UUID NOT NULL REFERENCES public.support_messages(id),
+  pr_number INTEGER NOT NULL REFERENCES public.yutakasa_repair_releases(pr_number) ON DELETE CASCADE,
+  ticket_id UUID NOT NULL REFERENCES public.support_tickets(id) ON DELETE CASCADE,
+  latest_user_message_id UUID NOT NULL REFERENCES public.support_messages(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (pr_number, ticket_id, latest_user_message_id),
-  UNIQUE (ticket_id, latest_user_message_id)
+  PRIMARY KEY (pr_number, ticket_id, latest_user_message_id)
 );
+-- Upgrade an earlier draft of this migration without retaining restrictive
+-- links that would block replacement repairs or customer data deletion.
+ALTER TABLE public.yutakasa_repair_ticket_links
+  DROP CONSTRAINT IF EXISTS yutakasa_repair_ticket_links_ticket_id_latest_user_message_id_key,
+  DROP CONSTRAINT IF EXISTS yutakasa_repair_ticket_links_pr_number_fkey,
+  DROP CONSTRAINT IF EXISTS yutakasa_repair_ticket_links_ticket_id_fkey,
+  DROP CONSTRAINT IF EXISTS yutakasa_repair_ticket_links_latest_user_message_id_fkey;
+ALTER TABLE public.yutakasa_repair_ticket_links
+  ADD CONSTRAINT yutakasa_repair_ticket_links_pr_number_fkey
+    FOREIGN KEY (pr_number) REFERENCES public.yutakasa_repair_releases(pr_number) ON DELETE CASCADE,
+  ADD CONSTRAINT yutakasa_repair_ticket_links_ticket_id_fkey
+    FOREIGN KEY (ticket_id) REFERENCES public.support_tickets(id) ON DELETE CASCADE,
+  ADD CONSTRAINT yutakasa_repair_ticket_links_latest_user_message_id_fkey
+    FOREIGN KEY (latest_user_message_id) REFERENCES public.support_messages(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS yutakasa_repair_ticket_links_ticket_idx
   ON public.yutakasa_repair_ticket_links(ticket_id);
 ALTER TABLE public.yutakasa_repair_ticket_links ENABLE ROW LEVEL SECURITY;
@@ -34,6 +47,7 @@ CREATE TRIGGER lock_support_ticket_before_message_insert
   BEFORE INSERT ON public.support_messages
   FOR EACH ROW EXECUTE FUNCTION public.lock_support_ticket_before_message_insert();
 
+DROP FUNCTION IF EXISTS public.append_yutakasa_automation_reply(UUID,UUID,UUID,UUID,TEXT,BOOLEAN,INTEGER);
 CREATE OR REPLACE FUNCTION public.append_yutakasa_automation_reply(
   p_ticket_id UUID,
   p_lock_token UUID,
@@ -41,7 +55,9 @@ CREATE OR REPLACE FUNCTION public.append_yutakasa_automation_reply(
   p_client_request_id UUID,
   p_body TEXT,
   p_resolve BOOLEAN,
-  p_pr_number INTEGER DEFAULT NULL
+  p_pr_number INTEGER,
+  p_current_main_sha TEXT,
+  p_current_deployment_id TEXT
 )
 RETURNS TABLE(message_id UUID, created BOOLEAN)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -55,7 +71,9 @@ BEGIN
   IF p_ticket_id IS NULL OR p_lock_token IS NULL OR p_latest_user_message_id IS NULL
     OR p_client_request_id IS NULL OR p_body IS NULL OR length(trim(p_body)) < 1
     OR length(p_body) > 10000 OR p_resolve IS NULL OR p_pr_number IS NULL
-    OR p_pr_number < 1
+    OR p_pr_number < 1 OR p_current_main_sha IS NULL OR
+    p_current_main_sha !~ '^[a-f0-9]{40}$' OR p_current_deployment_id IS NULL OR
+    p_current_deployment_id !~ '^dpl_[A-Za-z0-9]{8,160}$'
   THEN
     RAISE EXCEPTION 'invalid automation reply' USING ERRCODE = '22023';
   END IF;
@@ -101,7 +119,11 @@ BEGIN
   END IF;
   SELECT * INTO v_release FROM public.yutakasa_repair_releases r
     WHERE r.pr_number = p_pr_number AND r.status = 'verified';
-  IF NOT FOUND OR NOT EXISTS (
+  IF NOT FOUND OR v_release.merge_sha IS DISTINCT FROM p_current_main_sha
+    OR v_release.deployment_id IS DISTINCT FROM p_current_deployment_id
+    OR v_release.verified_at IS NULL
+    OR v_release.verified_at < clock_timestamp() - INTERVAL '15 minutes'
+    OR NOT EXISTS (
     SELECT 1 FROM public.yutakasa_repair_ticket_links l
     WHERE l.pr_number = p_pr_number AND l.ticket_id = p_ticket_id
       AND l.latest_user_message_id = p_latest_user_message_id
@@ -132,9 +154,9 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.lock_support_ticket_before_message_insert() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.append_yutakasa_automation_reply(UUID,UUID,UUID,UUID,TEXT,BOOLEAN,INTEGER)
+REVOKE ALL ON FUNCTION public.append_yutakasa_automation_reply(UUID,UUID,UUID,UUID,TEXT,BOOLEAN,INTEGER,TEXT,TEXT)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.append_yutakasa_automation_reply(UUID,UUID,UUID,UUID,TEXT,BOOLEAN,INTEGER)
+GRANT EXECUTE ON FUNCTION public.append_yutakasa_automation_reply(UUID,UUID,UUID,UUID,TEXT,BOOLEAN,INTEGER,TEXT,TEXT)
   TO service_role;
 
 COMMIT;

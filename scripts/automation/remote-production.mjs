@@ -156,9 +156,14 @@ export async function collectRemoteLogs({
   deploymentId,
   token = process.env.VERCEL_TOKEN,
   runCommand = execFile,
+  deploymentOnly = false,
+  since = null,
 } = {}) {
   requireMatch(deploymentId, DEPLOYMENT_ID, "deployment_id_invalid");
   if (typeof token !== "string" || token.length < 20) fail("vercel_token_missing");
+  if (deploymentOnly && (typeof since !== "string" ||
+      !Number.isFinite(Date.parse(since)) ||
+      Date.parse(since) > Date.now() + 60_000)) fail("log_since_invalid");
   const queries = {};
   const childEnv = { CI: "1", NO_COLOR: "1", VERCEL_TELEMETRY_DISABLED: "1" };
   for (const name of LOG_CHILD_ENV_NAMES) {
@@ -169,8 +174,9 @@ export async function collectRemoteLogs({
     try {
       ({ stdout } = await runCommand("vercel", [
         "logs",
-        "--since=24h", "--limit=100", "--no-follow", "--json",
+        `--since=${deploymentOnly ? since : "24h"}`, "--limit=100", "--no-follow", "--json",
         "--environment=production",
+        ...(deploymentOnly ? [`--deployment=${deploymentId}`] : []),
         "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
         filter, "--token", token,
       ], {
@@ -188,7 +194,8 @@ export async function collectRemoteLogs({
   return Object.freeze({
     observedAt: new Date().toISOString(),
     deploymentId,
-    logScope: "project_production",
+    logScope: deploymentOnly ? "deployment_post_merge" : "project_production",
+    since: deploymentOnly ? since : null,
     queries: Object.freeze(queries),
   });
 }

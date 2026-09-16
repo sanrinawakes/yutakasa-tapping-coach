@@ -56,7 +56,7 @@ BEGIN
   IF NOT p_healthy THEN
     UPDATE public.yutakasa_repair_releases r
       SET first_healthy_at = NULL, last_healthy_at = NULL, healthy_count = 0,
-          error_code = p_error_code
+          status = 'failed', error_code = p_error_code
       WHERE r.pr_number = p_pr_number;
   ELSE
     -- GitHub runs may be delayed. Only adjacent UTC ten-minute cron slots can
