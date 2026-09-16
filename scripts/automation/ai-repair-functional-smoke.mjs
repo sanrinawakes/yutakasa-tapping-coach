@@ -343,8 +343,8 @@ export async function runProductionFunctionalSmoke({
     });
     if (inserted.length !== 1) fail("smoke_identity_insert_unconfirmed");
     validateAccount(inserted[0], email, runId);
-    // The workflow itself has a ten-minute deadline. End browser work after
-    // four minutes so the finally block has time to remove test data.
+    // End browser work after four minutes so the finally block can remove
+    // test data well before the scheduled job's twenty-minute deadline.
     phaseTimer = setTimeout(() => {
       phaseExpired = true;
       if (browser) void browser.close().catch(() => undefined);

@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.mjs";
 import { collectProductionSnapshot } from "./yutakasa-production-snapshot.mjs";
 import { validateRemoteSnapshot } from "./remote-monitor.mjs";
-import { runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
+import { reapStaleSyntheticIdentities, runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
 
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
@@ -168,12 +168,18 @@ export async function runRepairObservation({
   snapshotImpl = collectProductionSnapshot,
   functionalSmokeImpl = async (args) => args.env.AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED === "true"
     ? runProductionFunctionalSmoke(args) : null,
+  staleCleanupImpl = reapStaleSyntheticIdentities,
 } = {}) {
   if (env.GITHUB_EVENT_NAME !== "schedule" ||
       typeof env.GITHUB_RUN_ID !== "string" ||
       !/^[1-9][0-9]{0,17}$/u.test(env.GITHUB_RUN_ID) ||
       !Number.isSafeInteger(Number(env.GITHUB_RUN_ID))) {
     fail("repair_observation_not_scheduled");
+  }
+  // Run cleanup even when no release remains observing. A failed observation
+  // can leave an isolated test identity after an uncertain cleanup or job kill.
+  if (env.AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED === "true") {
+    await staleCleanupImpl(env, fetchImpl);
   }
   const rows = await supabaseRequest(
     env, fetchImpl,
@@ -238,8 +244,17 @@ export async function runRepairObservation({
           });
           const snapshot = await snapshotImpl({ environment, fetchImpl });
           observedAt = new Date().toISOString();
-          observation = evaluateRepairObservation({ release, deployment: deploymentAfterSmoke,
-            logs, snapshot, functionalEvidence, observedAt });
+          const deploymentAtReceipt = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
+          if (deploymentAtReceipt.mainSha !== deployment.mainSha ||
+              deploymentAtReceipt.deploymentId !== deployment.deploymentId ||
+              deploymentAtReceipt.ready !== true) {
+            observation = { healthy: false, code: "production_changed_during_observation",
+              deploymentId: DEPLOYMENT.test(deploymentAtReceipt.deploymentId ?? "")
+                ? deploymentAtReceipt.deploymentId : null };
+          } else {
+            observation = evaluateRepairObservation({ release, deployment: deploymentAtReceipt,
+              logs, snapshot, functionalEvidence, observedAt });
+          }
         }
       } catch {
         observation = { healthy: false, code: "functional_probe_failed", deploymentId: deployment.deploymentId };

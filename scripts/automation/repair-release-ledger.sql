@@ -83,6 +83,7 @@ BEGIN
     -- GitHub runs may be delayed. Only adjacent UTC ten-minute cron slots can
     -- count as consecutive; an unrecorded failed/missed slot breaks the chain.
     IF v_release.last_healthy_at IS NULL OR
+       v_release.deployment_id IS DISTINCT FROM p_deployment_id OR
        floor(extract(epoch FROM p_observed_at) / 600) <>
        floor(extract(epoch FROM v_release.last_healthy_at) / 600) + 1 THEN
       v_first := p_observed_at;

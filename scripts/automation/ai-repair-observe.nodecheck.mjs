@@ -151,6 +151,22 @@ test("no observing release avoids production and provider calls", async () => {
   assert.equal(calls, 1);
 });
 
+test("scheduled cleanup still runs after a failed release leaves the observation queue", async () => {
+  let cleanupCalls = 0;
+  let databaseCalls = 0;
+  const result = await runRepairObservation({
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32),
+      AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED: "true" },
+    fetchImpl: async () => { databaseCalls += 1; return new Response("[]"); },
+    staleCleanupImpl: async () => { cleanupCalls += 1; },
+    deploymentImpl: async () => { throw new Error("no release must avoid deployment"); },
+  });
+  assert.deepEqual(result, { examined: 0, verified: 0, failed: 0 });
+  assert.equal(cleanupCalls, 1);
+  assert.equal(databaseCalls, 1);
+});
+
 test("manual dispatch cannot certify a scheduled production observation", async () => {
   let calls = 0;
   await assert.rejects(() => runRepairObservation({
@@ -204,6 +220,28 @@ test("production alias movement during browser smoke fails before log or DB heal
   assert.equal(deploymentCalls, 2);
   assert.equal(receipt.p_healthy, false);
   assert.equal(receipt.p_error_code, "production_changed_during_smoke");
+});
+
+test("production alias movement after log and DB probes cannot verify a release", async () => {
+  let deploymentCalls = 0;
+  let receipt = null;
+  await assert.rejects(() => runRepairObservation({
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    fetchImpl: async (url, options) => {
+      if (url.includes("yutakasa_repair_releases?")) return new Response(JSON.stringify([release]));
+      receipt = JSON.parse(options.body);
+      return new Response(JSON.stringify([{ status: "failed", healthy_count: 0 }]));
+    },
+    deploymentImpl: async () => (++deploymentCalls < 3) ? deployment :
+      { ...deployment, deploymentId: "dpl_Changed123456789" },
+    functionalSmokeImpl: async () => functionalEvidence,
+    logsImpl: async () => logs,
+    snapshotImpl: async () => snapshot,
+  }), AiRepairObserveError);
+  assert.equal(deploymentCalls, 3);
+  assert.equal(receipt.p_healthy, false);
+  assert.equal(receipt.p_error_code, "production_changed_during_observation");
 });
 
 test("six superseded releases are terminalized without starving the newest or oldest", async () => {
