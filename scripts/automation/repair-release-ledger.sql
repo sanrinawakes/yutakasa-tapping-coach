@@ -37,7 +37,8 @@ DECLARE
   v_count INTEGER;
 BEGIN
   IF p_pr_number IS NULL OR p_merge_sha IS NULL OR p_merge_sha !~ '^[a-f0-9]{40}$'
-    OR p_deployment_id IS NULL OR p_deployment_id !~ '^dpl_[A-Za-z0-9]{8,160}$'
+    OR (p_healthy AND (p_deployment_id IS NULL OR p_deployment_id !~ '^dpl_[A-Za-z0-9]{8,160}$'))
+    OR (NOT p_healthy AND p_deployment_id IS NOT NULL AND p_deployment_id !~ '^dpl_[A-Za-z0-9]{8,160}$')
     OR p_observed_at IS NULL OR abs(extract(epoch FROM (v_now - p_observed_at))) > 120
     OR p_healthy IS NULL OR (p_healthy AND p_error_code IS NOT NULL)
     OR (NOT p_healthy AND (p_error_code IS NULL OR p_error_code !~ '^[a-z][a-z0-9_]{0,100}$'))
@@ -54,14 +55,17 @@ BEGIN
   END IF;
   IF NOT p_healthy THEN
     UPDATE public.yutakasa_repair_releases r
-      SET status = 'failed', error_code = p_error_code
+      SET first_healthy_at = NULL, last_healthy_at = NULL, healthy_count = 0,
+          error_code = p_error_code
       WHERE r.pr_number = p_pr_number;
   ELSE
-    IF v_release.last_healthy_at IS NULL OR p_observed_at - v_release.last_healthy_at > INTERVAL '15 minutes' THEN
+    -- GitHub runs may be delayed. Only adjacent UTC ten-minute cron slots can
+    -- count as consecutive; an unrecorded failed/missed slot breaks the chain.
+    IF v_release.last_healthy_at IS NULL OR
+       floor(extract(epoch FROM p_observed_at) / 600) <>
+       floor(extract(epoch FROM v_release.last_healthy_at) / 600) + 1 THEN
       v_first := p_observed_at;
       v_count := 1;
-    ELSIF p_observed_at - v_release.last_healthy_at < INTERVAL '9 minutes' THEN
-      RAISE EXCEPTION 'repair observation too soon' USING ERRCODE = '22023';
     ELSE
       v_first := v_release.first_healthy_at;
       v_count := v_release.healthy_count + 1;

@@ -5,10 +5,10 @@ The Railway monitor may dispatch `.github/workflows/ai-repair.yml` only with its
 ## OpenAI monthly limit
 
 1. Create a **dedicated** OpenAI API project for Yutakasa automation. Set its project hard spend limit to **USD 20 per month**, and confirm the UI says enforcement is active. An alert or soft budget is insufficient. Record the project ID, amount, enforcement state, and verification date in the deployment evidence without recording a key.
-2. Create a project-scoped API key in that project with restricted `Responses (/v1/responses): Write` permission. Add it as the GitHub Actions secret `YUTAKASA_OPENAI_API_KEY`. Do not use a key from another project. The currently configured key is user-owned and will need replacement if its owner loses project access.
+2. Create a project-scoped API key in that project with restricted `Responses (/v1/responses): Write` and `List models (/v1/models): Read` permissions. The latter is required for the no-charge key probe. Add it as the GitHub Actions secret `YUTAKASA_OPENAI_API_KEY`. Compute the key's SHA-256 at creation, save only the digest as repository variable `YUTAKASA_OPENAI_KEY_SHA256`, and destroy any temporary copy of the plaintext. The fingerprint check binds the runtime secret to the key observed being created in the capped project. Do not use a key from another project. The currently configured key is user-owned and will need replacement if its owner loses project access.
 3. Set repository variables `YUTAKASA_OPENAI_PROJECT_ID` and `YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID` to the same verified project ID, and `YUTAKASA_OPENAI_CAP_CONFIRMED_USD` to `20`. These variables are an activation attestation; the provider's hard limit is the actual spend control. A project limit change later requires re-verification and variable review.
 
-The workflow never creates a key or changes billing. It requires the verified variables before starting the billable job. An OpenAI Admin API key is not stored in GitHub Actions.
+The workflow never creates a key or changes billing. It requires the verified variables, key fingerprint, and a `GET /v1/models` HTTP 200 with the approved `OpenAI-Project` request header before starting the billable job. The provider does not document a project-identifying response header, so the initial key-creation evidence is required. An OpenAI Admin API key is not stored in GitHub Actions.
 
 ## GitHub and production credentials
 

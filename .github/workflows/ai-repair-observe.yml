@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: yutakasa-ai-repair-observe
@@ -32,4 +33,5 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
           CRON_SECRET: ${{ secrets.YUTAKASA_CRON_SECRET }}
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/automation/ai-repair-observe.mjs

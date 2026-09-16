@@ -3,18 +3,8 @@ name: Source repair checks
 on:
   pull_request:
     branches: [main]
-    paths:
-      - src/**
-      - package.json
-      - package-lock.json
-      - .github/workflows/source-repair-ci.yml
   push:
     branches: [main]
-    paths:
-      - src/**
-      - package.json
-      - package-lock.json
-      - .github/workflows/source-repair-ci.yml
 
 permissions:
   contents: read

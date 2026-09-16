@@ -30,15 +30,80 @@ const snapshot = {
     },
   },
 };
+const functionalEvidence = {
+  schemaVersion: 1, observedAt: NOW, mergeSha: SHA, deploymentId: DEPLOYMENT,
+  desktopBrowser: true, mobileBrowser: true, streamComplete: true,
+  databaseSaved: true, reloadPersisted: true, testDataCleaned: true,
+  clientErrors: 0,
+};
 
 test("observation requires exact production SHA, bounded zero logs, DB parity, and fresh evidence", () => {
-  const input = { release, deployment, logs, snapshot, observedAt: NOW };
+  const input = { release, deployment, logs, snapshot, functionalEvidence, observedAt: NOW };
   assert.deepEqual(evaluateRepairObservation(input), { healthy: true, code: null, deploymentId: DEPLOYMENT });
+  assert.equal(evaluateRepairObservation({ ...input, functionalEvidence: null }).code, "functional_smoke_missing");
   assert.equal(evaluateRepairObservation({ ...input, deployment: { ...deployment, mainSha: "b".repeat(40) } }).code, "main_sha_changed");
   assert.equal(evaluateRepairObservation({ ...input, logs: { ...logs, queries: { ...logs.queries, fiveXx: { count: 1, truncated: false } } } }).code, "production_logs_not_clear");
   assert.equal(evaluateRepairObservation({ ...input, snapshot: { ...snapshot, database: { ...snapshot.database, chat: { ...snapshot.database.chat, orphanMessagesAll: 1 } } } }).code, "production_db_anomaly_present");
   assert.throws(() => evaluateRepairObservation({ ...input, logs: { ...logs, queries: { ...logs.queries, fiveXx: { count: 100, truncated: true } } } }), AiRepairObserveError);
   assert.throws(() => evaluateRepairObservation({ ...input, observedAt: "2026-09-16T20:07:00.000Z" }), AiRepairObserveError);
+});
+
+test("probe failure records an unhealthy observation instead of preserving a healthy streak", async () => {
+  const calls = [];
+  await assert.rejects(() => runRepairObservation({
+    env: { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null });
+      if (url.includes("yutakasa_repair_releases?")) return new Response(JSON.stringify([{
+        ...release, head_sha: "c".repeat(40), created_at: NOW,
+      }]));
+      if (url.includes("record_yutakasa_repair_observation")) {
+        return new Response(JSON.stringify([{ status: "observing", healthy_count: 0 }]));
+      }
+      throw new Error("unexpected");
+    },
+    deploymentImpl: async () => { throw new Error("provider unavailable"); },
+  }), (error) => error instanceof AiRepairObserveError && error.code === "repair_observation_failed");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.p_healthy, false);
+  assert.equal(calls[1].body.p_error_code, "production_probe_failed");
+  assert.equal(calls[1].body.p_deployment_id, null);
+});
+
+test("a merge acknowledged by GitHub recovers a failed ledger update before observation", async () => {
+  const calls = [];
+  await assert.rejects(() => runRepairObservation({
+    env: {
+      SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32),
+      GITHUB_TOKEN: "g".repeat(32),
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+      if (url.includes("yutakasa_repair_releases?") && options.method === "GET") {
+        return new Response(JSON.stringify([{
+          pr_number: 42, head_sha: "c".repeat(40), merge_sha: null,
+          status: "pending_merge", created_at: NOW,
+        }]));
+      }
+      if (url.includes("api.github.com") && options.method === "GET") {
+        return new Response(JSON.stringify({
+          number: 42, head: { sha: "c".repeat(40), repo: { full_name: "sanrinawakes/yutakasa-tapping-coach" } },
+          merged: true, merge_commit_sha: SHA, merged_at: NOW,
+        }));
+      }
+      if (url.includes("yutakasa_repair_releases?") && options.method === "PATCH") {
+        return new Response(JSON.stringify([{ pr_number: 42, merge_sha: SHA, status: "observing" }]));
+      }
+      if (url.includes("record_yutakasa_repair_observation")) {
+        return new Response(JSON.stringify([{ status: "observing", healthy_count: 0 }]));
+      }
+      throw new Error("unexpected");
+    },
+    deploymentImpl: async () => { throw new Error("provider unavailable"); },
+  }), AiRepairObserveError);
+  assert.deepEqual(calls.map((call) => call.method), ["GET", "GET", "PATCH", "POST"]);
+  assert.equal(calls[2].body.merge_sha, SHA);
 });
 
 test("no observing release avoids production and provider calls", async () => {

@@ -22,7 +22,7 @@ function fail(code) {
   throw new AiRepairObserveError(code);
 }
 
-export function evaluateRepairObservation({ release, deployment, logs, snapshot, observedAt = new Date().toISOString() }) {
+export function evaluateRepairObservation({ release, deployment, logs, snapshot, functionalEvidence, observedAt = new Date().toISOString() }) {
   if (
     !Number.isSafeInteger(release?.pr_number) || release.pr_number < 1 ||
     release?.status !== "observing" || !SHA.test(release?.merge_sha ?? "") ||
@@ -63,30 +63,88 @@ export function evaluateRepairObservation({ release, deployment, logs, snapshot,
   ) {
     return { healthy: false, code: "production_db_anomaly_present", deploymentId: deployment.deploymentId };
   }
+  if (
+    functionalEvidence?.schemaVersion !== 1 ||
+    functionalEvidence?.mergeSha !== release.merge_sha ||
+    functionalEvidence?.deploymentId !== deployment.deploymentId ||
+    functionalEvidence?.desktopBrowser !== true ||
+    functionalEvidence?.mobileBrowser !== true ||
+    functionalEvidence?.streamComplete !== true ||
+    functionalEvidence?.databaseSaved !== true ||
+    functionalEvidence?.reloadPersisted !== true ||
+    functionalEvidence?.testDataCleaned !== true ||
+    functionalEvidence?.clientErrors !== 0 ||
+    !Number.isFinite(Date.parse(functionalEvidence?.observedAt)) ||
+    Math.abs(Date.parse(observedAt) - Date.parse(functionalEvidence.observedAt)) > 5 * 60 * 1000
+  ) {
+    return { healthy: false, code: "functional_smoke_missing", deploymentId: deployment.deploymentId };
+  }
   return { healthy: true, code: null, deploymentId: deployment.deploymentId };
 }
 
-async function supabaseRequest(env, fetchImpl, pathSuffix, body) {
+async function supabaseRequest(env, fetchImpl, pathSuffix, body, method = body ? "POST" : "GET") {
   const base = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE_KEY;
   if (typeof base !== "string" || !/^https:\/\/[^/]+$/u.test(base) ||
       typeof key !== "string" || key.length < 20) fail("repair_observe_configuration_invalid");
   const response = await fetchImpl(`${base}${pathSuffix}`, {
-    method: body ? "POST" : "GET",
+    method,
     headers: {
       apikey: key,
       Authorization: `Bearer ${key}`,
       Accept: "application/json",
-      ...(body ? { "content-type": "application/json" } : {}),
+      ...(body ? { "content-type": "application/json", Prefer: "return=representation" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   }).catch(() => fail("repair_observe_db_request_failed"));
-  if (response.status !== 200) fail(`repair_observe_db_http_${response.status}`);
+  if (![200, 201].includes(response.status)) fail(`repair_observe_db_http_${response.status}`);
   const text = await response.text();
   if (Buffer.byteLength(text) > 64 * 1024) fail("repair_observe_db_response_too_large");
   try { return JSON.parse(text); } catch { fail("repair_observe_db_response_invalid"); }
+}
+
+async function reconcilePendingRelease(env, fetchImpl, release) {
+  if (!Number.isSafeInteger(release?.pr_number) || release.pr_number < 1 ||
+      !SHA.test(release?.head_sha ?? "") || release?.status !== "pending_merge" ||
+      release?.merge_sha !== null) fail("pending_release_invalid");
+  const token = env.GITHUB_TOKEN;
+  if (typeof token !== "string" || token.length < 20) fail("github_read_credential_missing");
+  const response = await fetchImpl(
+    `https://api.github.com/repos/sanrinawakes/yutakasa-tapping-coach/pulls/${release.pr_number}`,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      redirect: "error", signal: AbortSignal.timeout(15_000),
+    },
+  ).catch(() => fail("pending_release_github_failed"));
+  if (response.status !== 200) fail("pending_release_github_failed");
+  const text = await response.text();
+  if (Buffer.byteLength(text) > 128 * 1024) fail("pending_release_github_response_large");
+  let pr;
+  try { pr = JSON.parse(text); } catch { fail("pending_release_github_invalid"); }
+  if (pr?.number !== release.pr_number || pr?.head?.sha !== release.head_sha ||
+      pr?.head?.repo?.full_name !== "sanrinawakes/yutakasa-tapping-coach") {
+    fail("pending_release_pr_mismatch");
+  }
+  if (pr.merged !== true) {
+    const created = Date.parse(release.created_at);
+    if (!Number.isFinite(created) || pr.state !== "open" || Date.now() - created > 30 * 60 * 1000) {
+      fail("pending_release_unresolved");
+    }
+    return null;
+  }
+  if (!SHA.test(pr.merge_commit_sha ?? "")) fail("pending_release_merge_sha_invalid");
+  const rows = await supabaseRequest(
+    env, fetchImpl,
+    `/rest/v1/yutakasa_repair_releases?pr_number=eq.${release.pr_number}&head_sha=eq.${release.head_sha}&status=eq.pending_merge`,
+    { merge_sha: pr.merge_commit_sha, status: "observing", merge_recorded_at: pr.merged_at },
+    "PATCH",
+  );
+  if (!Array.isArray(rows) || rows.length !== 1 || rows[0]?.merge_sha !== pr.merge_commit_sha ||
+      rows[0]?.status !== "observing") fail("pending_release_reconcile_unconfirmed");
+  return { pr_number: release.pr_number, merge_sha: pr.merge_commit_sha, status: "observing" };
 }
 
 export async function runRepairObservation({
@@ -95,26 +153,58 @@ export async function runRepairObservation({
   deploymentImpl = collectRemoteDeployment,
   logsImpl = collectRemoteLogs,
   snapshotImpl = collectProductionSnapshot,
+  functionalSmokeImpl = async () => null,
 } = {}) {
-  const releases = await supabaseRequest(
+  const rows = await supabaseRequest(
     env, fetchImpl,
-    "/rest/v1/yutakasa_repair_releases?status=eq.observing&select=pr_number,merge_sha,status&order=pr_number.asc&limit=5",
+    "/rest/v1/yutakasa_repair_releases?status=in.(pending_merge,observing)&select=pr_number,head_sha,merge_sha,status,created_at&order=pr_number.asc&limit=5",
     null,
   );
-  if (!Array.isArray(releases) || releases.length > 5) fail("repair_observe_release_rows_invalid");
+  if (!Array.isArray(rows) || rows.length > 5) fail("repair_observe_release_rows_invalid");
+  const releases = [];
+  for (const row of rows) {
+    if (row?.status === "pending_merge") {
+      const recovered = await reconcilePendingRelease(env, fetchImpl, row);
+      if (recovered) releases.push(recovered);
+    } else if (row?.status === "observing") {
+      releases.push(row);
+    } else fail("repair_observe_release_rows_invalid");
+  }
   if (releases.length === 0) return { examined: 0, verified: 0, failed: 0 };
   const environment = {
     supabaseUrl: env.SUPABASE_URL,
     supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
     automationToken: env.CRON_SECRET,
   };
-  const deployment = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
-  const logs = await logsImpl({ deploymentId: deployment.deploymentId, token: env.VERCEL_TOKEN });
-  const snapshot = await snapshotImpl({ environment, fetchImpl });
+  let deployment;
+  let logs;
+  let snapshot;
+  let collectionFailed = false;
+  try {
+    deployment = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
+    logs = await logsImpl({ deploymentId: deployment.deploymentId, token: env.VERCEL_TOKEN });
+    snapshot = await snapshotImpl({ environment, fetchImpl });
+  } catch {
+    collectionFailed = true;
+  }
   const summary = { examined: 0, verified: 0, failed: 0 };
   for (const release of releases) {
     const observedAt = new Date().toISOString();
-    const observation = evaluateRepairObservation({ release, deployment, logs, snapshot, observedAt });
+    let observation;
+    if (collectionFailed) {
+      observation = {
+        healthy: false, code: "production_probe_failed",
+        deploymentId: DEPLOYMENT.test(deployment?.deploymentId ?? "") ? deployment.deploymentId : null,
+      };
+    } else {
+      let functionalEvidence = null;
+      try {
+        functionalEvidence = await functionalSmokeImpl({ release, deployment });
+        observation = evaluateRepairObservation({ release, deployment, logs, snapshot, functionalEvidence, observedAt });
+      } catch {
+        observation = { healthy: false, code: "functional_probe_failed", deploymentId: deployment.deploymentId };
+      }
+    }
     const result = await supabaseRequest(env, fetchImpl, "/rest/v1/rpc/record_yutakasa_repair_observation", {
       p_pr_number: release.pr_number,
       p_merge_sha: release.merge_sha,
@@ -128,7 +218,7 @@ export async function runRepairObservation({
         !Number.isSafeInteger(result[0]?.healthy_count)) fail("repair_observe_receipt_invalid");
     summary.examined += 1;
     if (result[0].status === "verified") summary.verified += 1;
-    if (result[0].status === "failed") summary.failed += 1;
+    if (!observation.healthy || result[0].status === "failed") summary.failed += 1;
   }
   if (summary.failed > 0) fail("repair_observation_failed");
   return summary;
