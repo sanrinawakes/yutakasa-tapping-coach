@@ -68,18 +68,22 @@ test("log queries discard content and reject truncated results", async () => {
     },
   });
   assert.deepEqual(Object.values(result.queries).map(({ count }) => count), [1, 1, 1, 1]);
-  assert.equal(result.logScope, "project_production");
+  assert.deepEqual(Object.values(result.historicalQueries).map(({ count }) => count), [0, 0, 0, 0]);
+  assert.equal(result.logScope, "project_production_split_by_current_deployment");
   assert.equal(JSON.stringify(result).includes("private content"), false);
-  assert.equal(invocations.length, 4);
-  for (const args of invocations) {
+  assert.equal(invocations.length, 8);
+  for (const [index, args] of invocations.entries()) {
     assert.equal(args[0], "logs");
     assert.equal(args.includes(id), false, "current deployment must not narrow the 24-hour log window");
-    assert.equal(args.some((arg) => arg.startsWith("--deployment")), false);
+    assert.equal(args.includes(`--deployment=${id}`), index % 2 === 1);
     assert.ok(args.includes("--environment=production"));
     assert.equal(args.some((arg) => arg.startsWith("--branch")), false);
-    assert.ok(args.includes("--since=24h"));
+    assert.ok(args.some((arg) => arg.startsWith("--since=202")));
+    assert.ok(args.some((arg) => arg.startsWith("--until=202")));
     assert.ok(args.includes("--project=yutakasa-tapping-coach"));
   }
+  assert.equal(new Set(invocations.map((args) => args.find((arg) => arg.startsWith("--since=")))).size, 1);
+  assert.equal(new Set(invocations.map((args) => args.find((arg) => arg.startsWith("--until=")))).size, 1);
   assert.equal(parseBoundedLogQuery("{}\n".repeat(100)).truncated, true);
   await assert.rejects(
     collectRemoteLogs({
@@ -87,7 +91,7 @@ test("log queries discard content and reject truncated results", async () => {
       token: "x".repeat(30),
       runCommand: async () => ({ stdout: "{}\n".repeat(100) }),
     }),
-    /log_fiveXx_truncated/u,
+    /log_fiveXx_project_truncated/u,
   );
 });
 
@@ -110,4 +114,24 @@ test("repair observations read only the current deployment after merge", async (
     assert.ok(args.includes(`--deployment=${id}`));
     assert.ok(args.includes("--since=2026-09-16T20:00:00.000Z"));
   }
+});
+
+test("older deployment errors are counted separately from current deployment errors", async () => {
+  const result = await collectRemoteLogs({
+    deploymentId: id, token: "x".repeat(30),
+    runCommand: async (_command, args) => ({
+      stdout: args.includes(`--deployment=${id}`)
+        ? '{"message":"current private log"}\n'
+        : '{"message":"old private log"}\n{"message":"current private log"}\n',
+    }),
+  });
+  assert.equal(result.queries.fiveXx.count, 1);
+  assert.equal(result.historicalQueries.fiveXx.count, 1);
+  assert.equal(JSON.stringify(result).includes("private log"), false);
+  await assert.rejects(collectRemoteLogs({
+    deploymentId: id, token: "x".repeat(30),
+    runCommand: async (_command, args) => ({
+      stdout: args.includes(`--deployment=${id}`) ? '{}\n' : '',
+    }),
+  }), /log_fiveXx_scope_inconsistent/u);
 });

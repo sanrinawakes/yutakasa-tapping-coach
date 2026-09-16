@@ -9,6 +9,7 @@ import {
   reportWindow,
   reportingDate,
   runDailySupportReport,
+  summarizeMonitorRows,
 } from "./daily-support-report.mjs";
 import { workEventLabel } from "./daily-report-reliability.mjs";
 
@@ -534,7 +535,7 @@ test("a live send lease stays held and later expiration unlocks the cursor", asy
   assert.equal(client.requests.some(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails"), false);
 });
 
-test("monitor results use the previous JST window and distinguish missing hours from healthy runs", async () => {
+test("monitor results use the previous JST window and distinguish missing 10-minute slots from healthy runs", async () => {
   const monitorRuns = [
     { run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", started_at: "2026-09-15T14:59:00.000Z", finished_at: "2026-09-15T15:00:00.000Z", status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false },
     { run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: "2026-09-16T03:17:00.000Z", finished_at: "2026-09-16T03:18:00.000Z", status: "action_required", reason_codes: ["pending_tickets", "production_log_fiveXx"], alert_dispatched: true, repair_dispatched: true },
@@ -547,6 +548,7 @@ test("monitor results use the previous JST window and distinguish missing hours 
   assert.equal(summary.state, "observed");
   assert.equal(summary.completedCount, 3);
   assert.equal(summary.observedHourCount, 2);
+  assert.equal(summary.observedSlotCount, 2);
   assert.equal(summary.statusCounts.action_required, 1);
   assert.deepEqual(summary.reasonCounts, [["monitor_lease_lost", 1], ["pending_tickets", 1], ["production_log_fiveXx", 1]]);
   const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
@@ -554,10 +556,20 @@ test("monitor results use the previous JST window and distinguish missing hours 
   assert.equal(result.monitorCompletedCount, 3);
   const email = JSON.parse(client.requests.find(({ url }) => url.host === "api.resend.com").init.body).text;
   assert.match(email, /障害監視の完了記録（確認できた実行のみ）: 3件/);
-  assert.match(email, /記録のある時間帯2\/24/);
+  assert.match(email, /記録のある10分枠2\/144、時間帯2\/24/);
   assert.match(email, /正常1件、要対応1件、失敗1件/);
   assert.match(email, /pending_tickets 1件/);
   assert.match(email, /前日全体が正常とは判定していません/);
+});
+
+test("two scheduled runs in one hour occupy two distinct 10-minute slots", () => {
+  const rows = [
+    { run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", started_at: "2026-09-15T15:00:00Z", finished_at: "2026-09-15T15:00:01Z" },
+    { run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: "2026-09-15T15:10:00Z", finished_at: "2026-09-15T15:10:01Z" },
+  ].map((row) => ({ ...row, status: "healthy", reason_codes: [], alert_dispatched: false, repair_dispatched: false }));
+  const summary = summarizeMonitorRows(rows, reportWindow("2026-09-16"));
+  assert.equal(summary.observedHourCount, 1);
+  assert.equal(summary.observedSlotCount, 2);
 });
 
 test("missing monitor table or zero completed rows stays explicitly unverified", async () => {

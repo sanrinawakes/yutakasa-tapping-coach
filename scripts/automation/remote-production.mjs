@@ -165,37 +165,56 @@ export async function collectRemoteLogs({
       !Number.isFinite(Date.parse(since)) ||
       Date.parse(since) > Date.now() + 60_000)) fail("log_since_invalid");
   const queries = {};
+  const historicalQueries = {};
+  const observedAt = new Date();
+  const windowStart = deploymentOnly
+    ? since
+    : new Date(observedAt.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const until = observedAt.toISOString();
   const childEnv = { CI: "1", NO_COLOR: "1", VERCEL_TELEMETRY_DISABLED: "1" };
   for (const name of LOG_CHILD_ENV_NAMES) {
     if (typeof process.env[name] === "string") childEnv[name] = process.env[name];
   }
   for (const [name, filter] of Object.entries(LOG_FILTERS)) {
-    let stdout;
-    try {
-      ({ stdout } = await runCommand("vercel", [
-        "logs",
-        `--since=${deploymentOnly ? since : "24h"}`, "--limit=100", "--no-follow", "--json",
-        "--environment=production",
-        ...(deploymentOnly ? [`--deployment=${deploymentId}`] : []),
-        "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
-        filter, "--token", token,
-      ], {
-        timeout: 50_000,
-        maxBuffer: 8 * 1024 * 1024,
-        encoding: "utf8",
-        env: childEnv,
-      }));
-    } catch {
-      fail(`log_${name}_query_failed`);
+    const counts = [];
+    for (const scope of deploymentOnly ? ["current"] : ["project", "current"]) {
+      let stdout;
+      try {
+        ({ stdout } = await runCommand("vercel", [
+          "logs",
+          ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
+          `--since=${windowStart}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
+          "--environment=production",
+          "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
+          filter, "--token", token,
+        ], {
+          timeout: 50_000,
+          maxBuffer: 8 * 1024 * 1024,
+          encoding: "utf8",
+          env: childEnv,
+        }));
+      } catch {
+        fail(`log_${name}_${scope}_query_failed`);
+      }
+      const parsed = parseBoundedLogQuery(stdout);
+      if (parsed.truncated) fail(`log_${name}_${scope}_truncated`);
+      counts.push(parsed.count);
     }
-    queries[name] = parseBoundedLogQuery(stdout);
-    if (queries[name].truncated) fail(`log_${name}_truncated`);
+    if (deploymentOnly) {
+      queries[name] = { count: counts[0], truncated: false };
+      continue;
+    }
+    const [projectCount, currentCount] = counts;
+    if (currentCount > projectCount) fail(`log_${name}_scope_inconsistent`);
+    queries[name] = { count: currentCount, truncated: false };
+    historicalQueries[name] = { count: projectCount - currentCount, truncated: false };
   }
   return Object.freeze({
-    observedAt: new Date().toISOString(),
+    observedAt: until,
     deploymentId,
-    logScope: deploymentOnly ? "deployment_post_merge" : "project_production",
+    logScope: deploymentOnly ? "deployment_post_merge" : "project_production_split_by_current_deployment",
     since: deploymentOnly ? since : null,
     queries: Object.freeze(queries),
+    historicalQueries: Object.freeze(historicalQueries),
   });
 }

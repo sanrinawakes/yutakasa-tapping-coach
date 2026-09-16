@@ -31,7 +31,7 @@ const monitor = service("yutakasa-support-monitor", {
   },
   deploy: {
     startCommand: "node /app/remote-monitor.mjs run",
-    cronSchedule: "17 * * * *",
+    cronSchedule: "*/10 * * * *",
     restartPolicyType: "NEVER",
     numReplicas: 1,
   },

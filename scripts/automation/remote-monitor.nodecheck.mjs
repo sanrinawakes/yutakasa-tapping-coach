@@ -56,7 +56,7 @@ function snapshot(queue = 0, observedAt = "2026-09-16T12:00:00.000Z", overrides 
   };
 }
 
-function evidence(logCount = 0) {
+function evidence(logCount = 0, historicalLogCount = 0) {
   return {
     driveImpl: async () => ({
       schemaVersion: 1,
@@ -74,8 +74,15 @@ function evidence(logCount = 0) {
     logsImpl: async ({ deploymentId }) => ({
       observedAt: "2026-09-16T12:00:10.000Z",
       deploymentId,
+      logScope: "project_production_split_by_current_deployment",
       queries: {
         fiveXx: { count: logCount, truncated: false },
+        levelError: { count: 0, truncated: false },
+        timeout: { count: 0, truncated: false },
+        gemini: { count: 0, truncated: false },
+      },
+      historicalQueries: {
+        fiveXx: { count: historicalLogCount, truncated: false },
         levelError: { count: 0, truncated: false },
         timeout: { count: 0, truncated: false },
         gemini: { count: 0, truncated: false },
@@ -270,6 +277,10 @@ test("ticket and Drive findings alert the owner while technical anomalies also r
     alertReasons: ["pending_tickets", "production_log_timeout"],
     repairReasons: ["production_log_timeout"],
   });
+  assert.deepEqual(planMonitorDispatches(["historical_production_log_fiveXx"]), {
+    alertReasons: ["historical_production_log_fiveXx"],
+    repairReasons: [],
+  });
 });
 
 test("Drive intake metadata triggers action without leaking filenames", async () => {
@@ -424,6 +435,22 @@ test("nonzero production logs force action; missing secret fails before network"
     );
     assert.equal(snapshotCalls, 0);
     assert.deepEqual(fs.readdirSync(root), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("old deployment errors alert without requesting AI repair for the current deployment", async () => {
+  const root = tempRoot();
+  try {
+    const result = await runRemoteMonitor({
+      secrets: SECRETS, tempRoot: root,
+      snapshotImpl: async () => snapshot(0),
+      ...evidence(0, 1),
+    });
+    assert.deepEqual(result.reasonCodes, ["historical_production_log_fiveXx"]);
+    assert.equal(result.actionRequired, true);
+    assert.deepEqual(planMonitorDispatches(result.reasonCodes).repairReasons, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

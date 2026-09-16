@@ -2,7 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
-  appendAutomationSupportMessage,
   claimSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
@@ -11,10 +10,8 @@ import {
 } from "@/lib/server/support-service";
 import { supportApiError, SupportRequestError } from "@/lib/server/support-request";
 import {
-  MAX_SUPPORT_MESSAGE_LENGTH,
   normalizeSupportText,
   parseClientRequestId,
-  requiresOwnerDecision,
 } from "@/lib/support";
 
 export const runtime = "nodejs";
@@ -134,6 +131,9 @@ export async function PATCH(request: NextRequest) {
     }
     const record = input as Record<string, unknown>;
     const action = typeof record.action === "string" ? record.action : "";
+    if (action === "reply") {
+      throw new SupportRequestError("Automated customer replies are unavailable.", 501);
+    }
     const ticketId = readTicketId(record.ticketId);
 
     if (action === "claim") {
@@ -145,16 +145,11 @@ export async function PATCH(request: NextRequest) {
           { status: 409 }
         );
       }
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_claimed",
-        summary: "Codexが技術調査を開始しました。",
-      });
       return NextResponse.json({ ticket });
     }
 
     const lockToken = readLockToken(record.lockToken);
-    if (action !== "reply") await requireLock(ticketId, lockToken);
+    await requireLock(ticketId, lockToken);
 
     if (action === "log") {
       const summary = normalizeSupportText(record.summary, 5001);
@@ -179,55 +174,6 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    if (action === "reply") {
-      const body = normalizeSupportText(record.body, MAX_SUPPORT_MESSAGE_LENGTH + 1);
-      if (!body || body.length > MAX_SUPPORT_MESSAGE_LENGTH) {
-        throw new SupportRequestError("Reply body is invalid");
-      }
-      const clientRequestId = readLockToken(record.clientRequestId);
-      const resolve = record.resolve === true;
-      const latestUserMessageId = readTicketId(record.latestUserMessageId);
-      const releasePrNumber = record.releasePrNumber;
-      if (!Number.isSafeInteger(releasePrNumber) ||
-          (releasePrNumber as number) < 1) {
-        throw new SupportRequestError("Invalid repair release PR number");
-      }
-      const detail = await getAdminSupportTicket(ticketId, { markRead: false });
-      const latestUser = detail?.messages
-        .filter((message) => message.sender_type === "user")
-        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) ||
-          b.id.localeCompare(a.id))[0];
-      const currentClaim = detail?.ticket.automation_lock_token === lockToken &&
-        detail.ticket.automation_status === "investigating" &&
-        detail.ticket.status === "in_progress";
-      const completedRetry = detail?.ticket.automation_status === "completed" &&
-        ["resolved", "waiting_user"].includes(detail.ticket.status);
-      const userText = detail?.messages.filter((message) => message.sender_type === "user")
-        .map((message) => message.body).join("\n") ?? "";
-      if (!detail || (!currentClaim && !completedRetry) || detail.ticket.decision_required ||
-          !["technical", "login", "quality"].includes(detail.ticket.category) ||
-          latestUser?.id !== latestUserMessageId ||
-          detail.messages.some((message) => message.attachments.length > 0) ||
-          /[A-Za-z]/u.test(`${detail.ticket.subject}\n${userText}`) ||
-          requiresOwnerDecision(
-            detail.ticket.category,
-            detail.ticket.subject,
-            userText
-          )) {
-        throw new SupportRequestError("Ticket needs another review before reply", 409);
-      }
-      const result = await appendAutomationSupportMessage({
-        ticketId,
-        lockToken,
-        latestUserMessageId,
-        body,
-        clientRequestId,
-        resolve,
-        releasePrNumber: releasePrNumber as number,
-      });
-      return NextResponse.json(result, { status: result.created ? 201 : 200 });
-    }
-
     if (action === "decision_required") {
       const summary = normalizeSupportText(record.summary, 5001);
       if (!summary || summary.length > 5000) {
@@ -239,13 +185,9 @@ export async function PATCH(request: NextRequest) {
         latestUserMessageId: readTicketId(record.latestUserMessageId),
         ticketVersion: readTicketVersion(record.ticketVersion),
         outcome: "decision_required",
-      });
-      if (!ticket) throw new SupportRequestError("Ticket changed before decision", 409);
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "owner_decision_required",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before decision", 409);
       return NextResponse.json({ ticket });
     }
 
@@ -260,13 +202,9 @@ export async function PATCH(request: NextRequest) {
         latestUserMessageId: readTicketId(record.latestUserMessageId),
         ticketVersion: readTicketVersion(record.ticketVersion),
         outcome: "failed",
-      });
-      if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_failed",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);
       return NextResponse.json({ ticket });
     }
 

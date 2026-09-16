@@ -14,7 +14,7 @@ docker run --rm --detach \
   --env POSTGRES_DB=yutakasa \
   postgres:15-alpine >/dev/null
 
-for _ in $(seq 1 30); do
+for _ in $(seq 1 90); do
   if docker exec "$container" pg_isready -U postgres -d yutakasa >/dev/null 2>&1; then
     break
   fi
@@ -29,4 +29,16 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < supabase-migration-support.sql >/dev/null
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-terminal.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-terminal.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-claim.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-claim.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-migration-assertions.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/support-terminal-assertions.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/support-claim-assertions.sql

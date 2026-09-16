@@ -39,6 +39,28 @@ test("normalization emits only fixed codes and accepts unknown deployment", () =
   );
 });
 
+test("owner decision, technical review, and stale context retain distinct public alert reasons", () => {
+  const reasons = [
+    "support_owner_decision_required",
+    "support_technical_review_required",
+    "support_context_stale",
+  ];
+  assert.deepEqual(normalizeAlertInput(JSON.stringify(reasons), deploymentId).reasonCodes,
+    [...reasons].sort());
+  for (const reason of reasons) assert.equal(alertTitle(reason), `[Yutakasa monitor] ${reason}`);
+});
+
+test("historical production log reasons remain explicit without implying a current deployment repair", () => {
+  const reasons = [
+    "historical_production_log_fiveXx",
+    "historical_production_log_levelError",
+    "historical_production_log_timeout",
+    "historical_production_log_gemini",
+  ];
+  assert.deepEqual(normalizeAlertInput(JSON.stringify(reasons), deploymentId).reasonCodes,
+    [...reasons].sort());
+});
+
 test("issue listing checks all open issues and ignores PR titles", async () => {
   const rows = [
     { number: 1, title: alertTitle("pending_tickets") },

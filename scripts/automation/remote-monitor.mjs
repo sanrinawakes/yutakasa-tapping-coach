@@ -308,25 +308,32 @@ function checkedProductionEvidence(deployment, logs) {
     typeof deployment.mainSha !== "string" ||
     typeof deployment.deploymentId !== "string" ||
     logs?.deploymentId !== deployment.deploymentId ||
+    logs.logScope !== "project_production_split_by_current_deployment" ||
     !logs.queries ||
-    typeof logs.queries !== "object"
+    typeof logs.queries !== "object" ||
+    !logs.historicalQueries ||
+    typeof logs.historicalQueries !== "object"
   ) {
     fail("production_evidence_invalid");
   }
-  const counts = {};
+  const counts = { current: {}, historical: {} };
   for (const name of ["fiveXx", "levelError", "timeout", "gemini"]) {
-    const query = logs.queries[name];
-    counts[name] = requireCount(query?.count, `log_${name}_count_invalid`);
-    if (query.truncated !== false) fail(`log_${name}_truncated`);
+    for (const [scope, source] of [["current", logs.queries], ["historical", logs.historicalQueries]]) {
+      const query = source[name];
+      counts[scope][name] = requireCount(query?.count, `log_${scope}_${name}_count_invalid`);
+      if (query.truncated !== false) fail(`log_${scope}_${name}_truncated`);
+    }
   }
   return counts;
 }
 
 function evidenceReasons(logCounts) {
-  return Object.entries(logCounts)
-    .filter(([, count]) => count > 0)
-    .map(([name]) => `production_log_${name}`)
-    .sort();
+  return [
+    ...Object.entries(logCounts.current).filter(([, count]) => count > 0)
+      .map(([name]) => `production_log_${name}`),
+    ...Object.entries(logCounts.historical).filter(([, count]) => count > 0)
+      .map(([name]) => `historical_production_log_${name}`),
+  ].sort();
 }
 
 export async function preflightRemoteMonitor({
