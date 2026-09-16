@@ -35,4 +35,5 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_RUN_ID: ${{ github.run_id }}
+          AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED: ${{ vars.YUTAKASA_REPAIR_FUNCTIONAL_SMOKE_ENABLED }}
         run: node scripts/automation/ai-repair-observe.mjs

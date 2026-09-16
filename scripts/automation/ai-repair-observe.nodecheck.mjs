@@ -161,6 +161,27 @@ test("manual dispatch cannot certify a scheduled production observation", async 
   assert.equal(calls, 0);
 });
 
+test("browser smoke stays disabled until the audited production switch is set", async () => {
+  const timestamp = new Date().toISOString();
+  let receipt = null;
+  await assert.rejects(() => runRepairObservation({
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    fetchImpl: async (url, options) => {
+      if (url.includes("yutakasa_repair_releases?")) {
+        return new Response(JSON.stringify([{ ...release, merge_recorded_at: timestamp }]));
+      }
+      receipt = JSON.parse(options.body);
+      return new Response(JSON.stringify([{ status: "observing", healthy_count: 0 }]));
+    },
+    deploymentImpl: async () => ({ ...deployment, observedAt: timestamp }),
+    logsImpl: async () => ({ ...logs, observedAt: timestamp, since: timestamp }),
+    snapshotImpl: async () => ({ ...snapshot, observedAt: timestamp }),
+  }), AiRepairObserveError);
+  assert.equal(receipt.p_healthy, false);
+  assert.equal(receipt.p_error_code, "functional_smoke_missing");
+});
+
 test("production alias movement during browser smoke fails before log or DB health verdict", async () => {
   let deploymentCalls = 0;
   let receipt = null;

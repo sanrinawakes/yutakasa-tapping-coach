@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.mjs";
 import { collectProductionSnapshot } from "./yutakasa-production-snapshot.mjs";
 import { validateRemoteSnapshot } from "./remote-monitor.mjs";
+import { runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
 
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
@@ -165,7 +166,8 @@ export async function runRepairObservation({
   deploymentImpl = collectRemoteDeployment,
   logsImpl = collectRemoteLogs,
   snapshotImpl = collectProductionSnapshot,
-  functionalSmokeImpl = async () => null,
+  functionalSmokeImpl = async (args) => args.env.AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED === "true"
+    ? runProductionFunctionalSmoke(args) : null,
 } = {}) {
   if (env.GITHUB_EVENT_NAME !== "schedule" ||
       typeof env.GITHUB_RUN_ID !== "string" ||
