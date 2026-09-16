@@ -1,0 +1,9 @@
+{
+  "name": "yutakasa-daily-support-report-infra",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "devDependencies": {
+    "railway": "3.11.0"
+  }
+}

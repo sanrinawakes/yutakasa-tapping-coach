@@ -1,0 +1,9 @@
+.git
+.github
+.next
+.vercel
+.railway
+.worktrees
+**/node_modules
+**/.env*
+**/tmp
