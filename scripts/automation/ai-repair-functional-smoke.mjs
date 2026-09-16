@@ -39,7 +39,7 @@ async function within(promise, milliseconds, code) {
 }
 
 function requiredConfiguration(env, release, deployment) {
-  if (typeof env.CRON_SECRET !== "string" || env.CRON_SECRET.length < 32) fail("smoke_jwt_secret_not_configured");
+  if (typeof env.JWT_SECRET !== "string" || env.JWT_SECRET.length < 32) fail("smoke_jwt_secret_not_configured");
   if (typeof env.SUPABASE_URL !== "string" || !/^https:\/\/[a-z0-9-]+\.supabase\.co$/u.test(env.SUPABASE_URL)) fail("smoke_database_not_configured");
   if (typeof env.SUPABASE_SERVICE_ROLE_KEY !== "string" || env.SUPABASE_SERVICE_ROLE_KEY.length < 20) fail("smoke_database_not_configured");
   if (!SHA.test(release?.merge_sha ?? "") || !DEPLOYMENT.test(deployment?.deploymentId ?? "") ||
@@ -276,7 +276,7 @@ export async function runProductionFunctionalSmoke({
   if ((await listThreads(env, fetchImpl, email)).length !== 0) fail("smoke_prior_test_data_remaining");
 
   const errors = [];
-  const token = sessionToken(env.CRON_SECRET, email);
+  const token = sessionToken(env.JWT_SECRET, email);
   const prompts = [];
   const marker = `${TEST_MESSAGE_MARKER} ${randomUUID()}`;
   let browser;

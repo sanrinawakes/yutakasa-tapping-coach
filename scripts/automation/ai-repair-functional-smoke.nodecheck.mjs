@@ -4,7 +4,7 @@ import test from "node:test";
 import { FunctionalSmokeError, runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
 
 const env = {
-  CRON_SECRET: "j".repeat(40),
+  JWT_SECRET: "j".repeat(40),
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "s".repeat(40),
 };
@@ -46,7 +46,7 @@ function fakeDatabase({ preexisting = false, deleteFails = false } = {}) {
 test("missing trusted credentials stop before any production access", async () => {
   let calls = 0;
   await assert.rejects(() => runProductionFunctionalSmoke({
-    release, deployment, env: { ...env, CRON_SECRET: "short" },
+    release, deployment, env: { ...env, JWT_SECRET: "short" },
     fetchImpl: async () => { calls += 1; throw new Error("unexpected"); },
   }), (error) => error instanceof FunctionalSmokeError && error.code === "smoke_jwt_secret_not_configured");
   assert.equal(calls, 0);
