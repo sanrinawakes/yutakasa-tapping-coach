@@ -2,10 +2,12 @@
 
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
 const BRANCH = /^codex\/yutakasa-ai-repair-[a-f0-9]{16}$/u;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 const SOURCES = new Set([
   "src/lib/gemini.ts", "src/lib/chat-thread.ts", "src/app/chat/page.tsx",
   "src/app/chat/layout.tsx", "src/app/api/chat/route.ts",
@@ -18,7 +20,7 @@ const REQUIRED_WORKFLOWS = [
   "source-repair-ci.yml",
   "ai-repair-independent-review.yml",
 ];
-const REQUIRED_CHECK_CONTEXTS = new Set(["source-repair-verify", "ai-repair-independent-review"]);
+const REQUIRED_CHECK_CONTEXTS = new Set(["source-repair-verify", "ai-repair-independent-review", "Vercel"]);
 
 export class AiRepairPromoteError extends Error {
   constructor(code) {
@@ -50,7 +52,7 @@ export function verifyMainProtection(rules) {
   return { protected: true };
 }
 
-function checkCandidate({ pr, files, runsByWorkflow, expectedSha, mainSha }) {
+function checkCandidate({ pr, files, runsByWorkflow, vercelStatus, expectedSha, mainSha }) {
   if (
     !SHA.test(expectedSha ?? "") || !SHA.test(mainSha ?? "") ||
     !Number.isSafeInteger(pr?.number) || pr.number < 1 ||
@@ -90,6 +92,14 @@ function checkCandidate({ pr, files, runsByWorkflow, expectedSha, mainSha }) {
     if (matching[0].conclusion !== "success") {
       fail(`repair_ci_${workflow.replace(/\W/gu, "_")}_not_passed`);
     }
+  }
+  const status = vercelStatus?.statuses?.find((item) => item?.context === "Vercel");
+  if (!status || status.state === "pending") fail("repair_ci_pending");
+  if (vercelStatus?.sha !== expectedSha || status.state !== "success" ||
+      status.description !== "Deployment has completed" ||
+      typeof status.target_url !== "string" ||
+      !status.target_url.startsWith("https://vercel.com/sanrinawakes-projects/yutakasa-tapping-coach/")) {
+    fail("repair_vercel_preview_not_passed");
   }
   return { prNumber: pr.number, headSha: expectedSha };
 }
@@ -189,6 +199,42 @@ async function prepareReleaseLedger(env, fetchImpl, number, sha) {
       inserted[0].status !== "pending_merge") fail("release_ledger_prepare_unconfirmed");
 }
 
+export async function verifyTicketPromotionLink(pr, env, fetchImpl) {
+  const id=pr?.head?.ref?.slice(-16);
+  if (!/^[a-f0-9]{16}$/u.test(id??"")) fail("repair_pr_type_invalid");
+  const ticketTitle=`Yutakasa support repair ${id}`;
+  const anomalyTitle=`Yutakasa anomaly ${id}:`;
+  if (pr.title!==ticketTitle) {
+    if (!pr.title?.startsWith(anomalyTitle) ||
+        !pr.body?.startsWith("Production deployment:")) fail("repair_pr_type_invalid");
+    return {ticketMode:false};
+  }
+  if (typeof pr.body!=="string" ||
+      !pr.body.startsWith(`Private support reference: ${id}\n`)) {
+    fail("ticket_pr_public_metadata_invalid");
+  }
+  if (typeof env.SUPABASE_URL!=="string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
+      typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" ||
+      env.SUPABASE_SERVICE_ROLE_KEY.length<20) fail("ticket_pr_private_check_unavailable");
+  const response=await fetchImpl(`${env.SUPABASE_URL}/rest/v1/rpc/verify_yutakasa_ticket_repair_pr`,{
+    method:"POST",headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept:"application/json","content-type":"application/json"},
+    body:JSON.stringify({p_pr_number:pr.number,p_head_sha:pr.head.sha}),
+    redirect:"error",signal:AbortSignal.timeout(15_000),
+  }).catch(()=>fail("ticket_pr_private_check_unavailable"));
+  if(response.status!==200)fail("ticket_pr_private_check_unavailable");
+  const raw=await response.text();
+  if(Buffer.byteLength(raw)>4096)fail("ticket_pr_private_check_invalid");
+  let rows;
+  try{rows=JSON.parse(raw);}catch{fail("ticket_pr_private_check_invalid");}
+  if(!Array.isArray(rows)||rows.length!==1||!UUID.test(rows[0]?.work_id??"")||
+      crypto.createHash("sha256").update(rows[0].work_id).digest("hex").slice(0,16)!==id) {
+    fail("ticket_pr_private_check_invalid");
+  }
+  return {ticketMode:true};
+}
+
 async function recordMergedRelease(env, fetchImpl, number, sha, mergeSha) {
   const rows = await releaseLedgerRequest(
     env, fetchImpl, "PATCH",
@@ -219,6 +265,7 @@ export async function promoteAiRepair({
   const pr = await githubJson(`/pulls/${number}`, env.GH_TOKEN, fetchImpl);
   const main = await githubJson("/commits/main", env.GH_TOKEN, fetchImpl);
   const files = await githubJson(`/pulls/${number}/files?per_page=100`, env.GH_TOKEN, fetchImpl);
+  const vercelStatus = await githubJson(`/commits/${sha}/status`, env.GH_TOKEN, fetchImpl);
   const runsByWorkflow = {};
   for (const workflow of REQUIRED_WORKFLOWS) {
     const result = await githubJson(
@@ -229,7 +276,8 @@ export async function promoteAiRepair({
     runsByWorkflow[workflow] = result.workflow_runs;
   }
   try {
-    checkCandidate({ pr, files, runsByWorkflow, expectedSha: sha, mainSha: main?.sha });
+    checkCandidate({ pr, files, runsByWorkflow, vercelStatus,
+      expectedSha: sha, mainSha: main?.sha });
   } catch (error) {
     if (error instanceof AiRepairPromoteError && error.code === "repair_ci_pending") {
       return { status: "pending_ci", prNumber: number, headSha: sha };
@@ -237,6 +285,7 @@ export async function promoteAiRepair({
     throw error;
   }
   await prepareReleaseLedger(env, fetchImpl, number, sha);
+  await verifyTicketPromotionLink(pr, env, fetchImpl);
   if (pr.draft) await markReady(pr.node_id, env.GH_TOKEN, fetchImpl);
   // GitHub may compute mergeability asynchronously after leaving draft. A
   // different head or base appearing at this boundary must never be merged.
@@ -253,6 +302,7 @@ export async function promoteAiRepair({
     ready.base.sha !== main?.sha || currentMain?.sha !== main?.sha ||
     ready?.mergeable !== true || ready?.mergeable_state !== "clean"
   ) fail("repair_pr_ready_confirmation_invalid");
+  await verifyTicketPromotionLink(ready, env, fetchImpl);
   const merged = await githubJson(`/pulls/${number}/merge`, env.GH_TOKEN, fetchImpl, "PUT", {
     sha,
     merge_method: "squash",

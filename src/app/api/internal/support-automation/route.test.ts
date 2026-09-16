@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import {
   addSupportWorkLog,
+  beginTicketRepairWork,
   appendAdminSupportMessage,
   claimSupportTicket,
   finishLockedSupportTicket,
@@ -13,6 +14,7 @@ import { GET, PATCH } from "./route";
 
 vi.mock("@/lib/server/support-service", () => ({
   addSupportWorkLog: vi.fn(),
+  beginTicketRepairWork: vi.fn(),
   appendAdminSupportMessage: vi.fn(),
   claimSupportTicket: vi.fn(),
   finishLockedSupportTicket: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock("@/lib/server/support-service", () => ({
 }));
 
 const addLogMock = vi.mocked(addSupportWorkLog);
+const beginRepairMock = vi.mocked(beginTicketRepairWork);
 const appendMock = vi.mocked(appendAdminSupportMessage);
 const claimMock = vi.mocked(claimSupportTicket);
 const finishLockedMock = vi.mocked(finishLockedSupportTicket);
@@ -33,6 +36,7 @@ const updateMock = vi.mocked(updateAdminSupportTicket);
 const ticketId = "2e4710db-9274-4e4c-96c4-59dc97e21c8d";
 const lockToken = "09919e11-742a-41b4-b3f2-8cc3ff86b5cd";
 const messageId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
+const workId = "911e1cc2-77bd-4bd4-b11a-210427535c64";
 const secret = "support-automation-secret-with-32-characters";
 const ticket = {
   id: ticketId,
@@ -131,6 +135,20 @@ describe("support automation API", () => {
     const response = await PATCH(request("PATCH", { action: "claim", ticketId, lockToken }));
     expect(response.status).toBe(200);
     expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it("creates an opaque repair handoff only for a currently locked ticket", async () => {
+    beginRepairMock.mockResolvedValue(workId);
+    const response = await PATCH(request("PATCH", {
+      action: "handoff", ticketId, lockToken, latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at, workId,
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ workId });
+    expect(beginRepairMock).toHaveBeenCalledWith({
+      ticketId, lockToken, latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at, workId,
+    });
   });
 
   it("returns an error if the atomic claim and log RPC rolls back", async () => {

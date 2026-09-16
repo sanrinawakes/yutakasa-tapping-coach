@@ -17,6 +17,8 @@ export type SupportStatus =
 export type SupportAutomationStatus =
   | "queued"
   | "investigating"
+  | "awaiting_repair"
+  | "manual_review"
   | "blocked_decision"
   | "completed"
   | "failed";
@@ -41,6 +43,8 @@ export const SUPPORT_STATUS_LABELS: Record<SupportStatus, string> = {
 export const SUPPORT_AUTOMATION_LABELS: Record<SupportAutomationStatus, string> = {
   queued: "技術確認待ち",
   investigating: "技術確認中",
+  awaiting_repair: "修正と本番確認を待っています",
+  manual_review: "担当者確認待ち",
   blocked_decision: "判断待ち",
   completed: "技術対応完了",
   failed: "再確認が必要",
@@ -77,6 +81,8 @@ export function isSupportAutomationStatus(
     [
       "queued",
       "investigating",
+      "awaiting_repair",
+      "manual_review",
       "blocked_decision",
       "completed",
       "failed",

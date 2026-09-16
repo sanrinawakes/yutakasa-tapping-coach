@@ -103,7 +103,7 @@ export function readTicketContextFile(contextPath) {
   }
 }
 
-export function planTicket(entry) {
+export function planTicket(entry, { ignorePriorEscalation = false } = {}) {
   const latest = latestUserMessage(entry);
   if (!latest) fail("support_context_missing_user_message");
   const customerText = `${entry.ticket.subject}\n${entry.messages.filter((message) =>
@@ -112,11 +112,14 @@ export function planTicket(entry) {
     entry.ticket.category === "billing" ||
     DECISION_TERMS.test(customerText) || ENGLISH_DECISION_TERMS.test(customerText);
   if (decision) return { kind: "decision_required", latestUserMessageId: latest.id };
-  const seen = entry.work_logs.some((log) =>
+  if (entry.ticket.category !== "technical") {
+    return { kind: "manual_review", latestUserMessageId: latest.id };
+  }
+  if (!ignorePriorEscalation && entry.work_logs.some((log) =>
     log.event_type === "remote_support_escalated" &&
-    log.metadata?.latestUserMessageId === latest.id
-  );
-  if (seen) return { kind: "already_escalated", latestUserMessageId: latest.id };
+    log.metadata?.latestUserMessageId === latest.id)) {
+    return { kind: "already_escalated", latestUserMessageId: latest.id };
+  }
   return {
     kind: "technical_handoff",
     latestUserMessageId: latest.id,
@@ -220,6 +223,10 @@ function validateApiResult(body, payload) {
     if (payload?.success !== true) fail("support_api_log_confirmation_invalid");
     return;
   }
+  if (body.action === "handoff") {
+    if (payload?.workId !== body.workId) fail("support_api_handoff_confirmation_invalid");
+    return;
+  }
   const ticket = payload?.ticket;
   if (!ticket || ticket.id !== body.ticketId) {
     fail(`support_api_${body.action}_confirmation_invalid`);
@@ -295,6 +302,7 @@ function emptyResult() {
     claimConflicts: 0,
     decisionsRequired: 0,
     technicalHandoffs: 0,
+    manualReviews: 0,
     lostLocks: 0,
     staleContexts: 0,
     uncertain: 0,
@@ -311,6 +319,7 @@ export async function processSupportTickets({
   maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS,
   now = Date.now,
   beforeMutation = async () => {},
+  repairBridgeEnabled = false,
 } = {}) {
   if (typeof automationToken !== "string" || automationToken.length < 32 || /[\r\n]/u.test(automationToken)) {
     fail("support_automation_token_invalid");
@@ -343,7 +352,7 @@ export async function processSupportTickets({
       break;
     }
     result.examined += 1;
-    const plan = planTicket(entry);
+    const plan = planTicket(entry, { ignorePriorEscalation: repairBridgeEnabled });
     if (plan.kind === "already_escalated") {
       result.skippedPriorEscalation += 1;
       continue;
@@ -373,7 +382,7 @@ export async function processSupportTickets({
         continue;
       }
       claimedSnapshot = detail.entry;
-      const freshPlan = planTicket(claimedSnapshot);
+      const freshPlan = planTicket(claimedSnapshot, { ignorePriorEscalation: repairBridgeEnabled });
       if (freshPlan.latestUserMessageId !== plan.latestUserMessageId ||
           freshPlan.kind !== plan.kind) {
         result.staleContexts += 1;
@@ -408,43 +417,58 @@ export async function processSupportTickets({
         result.lostLocks += 1;
         continue;
       }
-      if (freshPlan.kind === "technical_handoff") {
-        const log = await ownedPatchAction({
+      if (freshPlan.kind === "technical_handoff" && repairBridgeEnabled) {
+        const handoff = await ownedPatchAction({
           automationToken,
           body: {
-            action: "log",
+            action: "handoff",
             ticketId,
             lockToken,
-            eventType: "remote_support_escalated",
-            summary: "技術調査と本番検証が必要です。顧客への返信と本番変更は行っていません。",
-            metadata: { latestUserMessageId: freshPlan.latestUserMessageId },
+            workId: crypto.randomUUID(),
+            latestUserMessageId: freshPlan.latestUserMessageId,
+            ticketVersion: claimedSnapshot.ticket.updated_at,
           },
           fetchImpl,
           timeoutMs,
         });
-        if (log.status === "conflict") {
+        if (handoff.status === "conflict") {
           result.lostLocks += 1;
           continue;
         }
+        result.technicalHandoffs += 1;
+        claimAttempted = false;
+        continue;
+      }
+      if (freshPlan.kind === "technical_handoff") {
+        const log = await ownedPatchAction({
+          automationToken,
+          body: {
+            action: "log",ticketId,lockToken,
+            eventType: "remote_support_escalated",
+            summary: "技術調査と本番検証が必要です。顧客への返信と本番変更は行っていません。",
+            metadata: { latestUserMessageId: freshPlan.latestUserMessageId },
+          },fetchImpl,timeoutMs,
+        });
+        if (log.status === "conflict") { result.lostLocks += 1; continue; }
       }
       const terminal = await ownedPatchAction({
         automationToken,
-        body: freshPlan.kind === "decision_required"
-          ? {
+        body: freshPlan.kind === "decision_required" ? {
               action: "decision_required",
               ticketId,
               lockToken,
               latestUserMessageId: freshPlan.latestUserMessageId,
               ticketVersion: claimedSnapshot.ticket.updated_at,
               summary: "料金、契約、法的対応、個人情報などの運営判断が必要です。顧客への返信と変更は行っていません。",
-            }
-          : {
+            } : {
               action: "failed",
               ticketId,
               lockToken,
               latestUserMessageId: freshPlan.latestUserMessageId,
               ticketVersion: claimedSnapshot.ticket.updated_at,
-              summary: "自動処理で原因と本番での修正結果を確定できません。技術担当による調査が必要です。顧客への返信と本番変更は行っていません。",
+              summary: freshPlan.kind === "technical_handoff"
+                ? "自動処理で原因と本番での修正結果を確定できません。技術担当による調査が必要です。顧客への返信と本番変更は行っていません。"
+                : "今回の問い合わせは自動修正の対象外です。技術担当の確認が必要です。顧客への返信と本番変更は行っていません。",
             },
         fetchImpl,
         timeoutMs,
@@ -454,7 +478,8 @@ export async function processSupportTickets({
         continue;
       }
       if (freshPlan.kind === "decision_required") result.decisionsRequired += 1;
-      else result.technicalHandoffs += 1;
+      else if (freshPlan.kind === "technical_handoff") result.technicalHandoffs += 1;
+      else result.manualReviews += 1;
       claimAttempted = false;
     } catch (error) {
       if (error instanceof MonitorLedgerError) throw error;

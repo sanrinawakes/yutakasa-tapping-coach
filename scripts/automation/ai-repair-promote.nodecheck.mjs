@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import crypto from "node:crypto";
 
-import { AiRepairPromoteError, checkCandidate, promoteAiRepair, verifyMainProtection } from "./ai-repair-promote.mjs";
+import { AiRepairPromoteError, checkCandidate, promoteAiRepair, verifyMainProtection,
+  verifyTicketPromotionLink } from "./ai-repair-promote.mjs";
 
 const SHA = "a".repeat(40);
 const BRANCH = "codex/yutakasa-ai-repair-0123456789abcdef";
@@ -21,9 +23,13 @@ const RUNS = Object.fromEntries(
       path: `.github/workflows/${workflow}`, status: "completed", conclusion: "success" }],
   ]),
 );
+const VERCEL = { sha: SHA, statuses: [{ context: "Vercel", state: "success",
+  description: "Deployment has completed",
+  target_url: "https://vercel.com/sanrinawakes-projects/yutakasa-tapping-coach/preview123" }] };
 
 test("promotion requires approved source CI and separate review on exact PR head", () => {
-  assert.deepEqual(checkCandidate({ pr: PR, files: FILES, runsByWorkflow: RUNS, expectedSha: SHA, mainSha: "b".repeat(40) }), {
+  assert.deepEqual(checkCandidate({ pr: PR, files: FILES, runsByWorkflow: RUNS,
+    vercelStatus: VERCEL, expectedSha: SHA, mainSha: "b".repeat(40) }), {
     prNumber: 42, headSha: SHA,
   });
   for (const invalid of [
@@ -33,7 +39,8 @@ test("promotion requires approved source CI and separate review on exact PR head
     { pr: PR, files: FILES, runsByWorkflow: { ...RUNS, "source-repair-ci.yml": [{ ...RUNS["source-repair-ci.yml"][0], conclusion: "failure" }] } },
     { pr: PR, files: FILES, runsByWorkflow: { ...RUNS, "ai-repair-independent-review.yml": [{ ...RUNS["ai-repair-independent-review.yml"][0], head_sha: "b".repeat(40) }] } },
   ]) {
-    assert.throws(() => checkCandidate({ ...invalid, expectedSha: SHA, mainSha: "b".repeat(40) }), AiRepairPromoteError);
+    assert.throws(() => checkCandidate({ ...invalid, vercelStatus: VERCEL,
+      expectedSha: SHA, mainSha: "b".repeat(40) }), AiRepairPromoteError);
   }
 });
 
@@ -52,6 +59,7 @@ test("main protection requires both exact check contexts and up-to-date enforcem
     required_status_checks: [
       { context: "source-repair-verify" },
       { context: "ai-repair-independent-review" },
+      { context: "Vercel" },
     ],
   } }];
   assert.deepEqual(verifyMainProtection(rules), { protected: true });
@@ -64,8 +72,38 @@ test("unfinished independent review remains pending without a merge", () => {
   assert.throws(
     () => checkCandidate({
       pr: PR, files: FILES,
-      runsByWorkflow: { ...RUNS, "ai-repair-independent-review.yml": [] }, expectedSha: SHA, mainSha: "b".repeat(40),
+      runsByWorkflow: { ...RUNS, "ai-repair-independent-review.yml": [] },
+      vercelStatus: VERCEL, expectedSha: SHA, mainSha: "b".repeat(40),
     }),
     (error) => error instanceof AiRepairPromoteError && error.code === "repair_ci_pending",
   );
+});
+
+test("Vercel preview must succeed for the same PR head before promotion", () => {
+  assert.throws(() => checkCandidate({ pr: PR, files: FILES, runsByWorkflow: RUNS,
+    vercelStatus: { sha: SHA, statuses: [] }, expectedSha: SHA, mainSha: "b".repeat(40) }),
+  (error) => error instanceof AiRepairPromoteError && error.code === "repair_ci_pending");
+  assert.throws(() => checkCandidate({ pr: PR, files: FILES, runsByWorkflow: RUNS,
+    vercelStatus: { ...VERCEL, sha: "c".repeat(40) },
+    expectedSha: SHA, mainSha: "b".repeat(40) }), AiRepairPromoteError);
+  assert.throws(() => checkCandidate({ pr: PR, files: FILES, runsByWorkflow: RUNS,
+    vercelStatus: { ...VERCEL, statuses: [{ ...VERCEL.statuses[0], state: "failure" }] },
+    expectedSha: SHA, mainSha: "b".repeat(40) }), AiRepairPromoteError);
+});
+
+test("ticket PR requires an exact private live link immediately before merge",async()=>{
+  const workId="e1aa3fb1-afae-43b8-b139-bc0fa4682255";
+  const id=crypto.createHash("sha256").update(workId).digest("hex").slice(0,16);
+  const pr={...PR,title:`Yutakasa support repair ${id}`,
+    body:`Private support reference: ${id}\nCustomer content stays private.`,
+    head:{...PR.head,ref:`codex/yutakasa-ai-repair-${id}`}};
+  const env={SUPABASE_URL:"https://example.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"s".repeat(40)};
+  assert.deepEqual(await verifyTicketPromotionLink(pr,env,async()=>
+    new Response(JSON.stringify([{work_id:workId}]),{status:200})),{ticketMode:true});
+  await assert.rejects(()=>verifyTicketPromotionLink(pr,env,async()=>
+    new Response(JSON.stringify([]),{status:200})),AiRepairPromoteError);
+  await assert.rejects(()=>verifyTicketPromotionLink({...pr,head:{...pr.head,sha:"b".repeat(40)}},env,
+    async()=>new Response(null,{status:409})),AiRepairPromoteError);
+  await assert.rejects(()=>verifyTicketPromotionLink({...pr,title:`Yutakasa anomaly ${id}: fake`},env,
+    async()=>{throw new Error("should not call");}),AiRepairPromoteError);
 });

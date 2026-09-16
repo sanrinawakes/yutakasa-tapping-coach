@@ -192,3 +192,21 @@ test("failed observation records a fixed failure and never reports healthy", asy
   assert.equal(saved.errorCode, "remote_monitor_unexpected_failure");
   assert.equal(JSON.stringify(saved).includes("private customer text"), false);
 });
+
+test("enabled ticket bridge alerts on queued work even when GitHub skips dispatch",async()=>{
+  let saved;
+  const alerts=[];
+  const result=await runLeasedMonitor({
+    secrets:{...secrets,TICKET_REPAIR_BRIDGE_ENABLED:"true"},
+    leaseImpl:async()=>({assertActive:async()=>{},
+      finish:async(value)=>{saved=value;},stop:async()=>{},recordDispatch:async()=>{}}),
+    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    ticketBacklogImpl:async()=>({pending:1,overflow:false}),
+    ticketDispatchImpl:async()=>({dispatched:1}),
+    alertImpl:async({reasonCodes})=>{alerts.push(reasonCodes);},
+  });
+  assert.equal(saved.status,"action_required");
+  assert.deepEqual(saved.reasonCodes,["ticket_repair_work_pending"]);
+  assert.deepEqual(alerts,[["ticket_repair_work_pending"]]);
+  assert.equal(result.ticketRepairDispatches,1);
+});

@@ -42,6 +42,7 @@ const monitor = service("yutakasa-support-monitor", {
     CRON_SECRET: preserve(),
     VERCEL_TOKEN: preserve(),
     GITHUB_DISPATCH_TOKEN: preserve(),
+    TICKET_REPAIR_BRIDGE_ENABLED: preserve(),
     GOOGLE_DRIVE_API_KEY: "${{ shared.GOOGLE_DRIVE_API_KEY }}",
   },
 });

@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
+  beginTicketRepairWork,
   claimSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
@@ -172,6 +173,19 @@ export async function PATCH(request: NextRequest) {
         metadata,
       });
       return NextResponse.json({ success: true });
+    }
+
+    if (action === "handoff") {
+      const workId = readTicketId(record.workId);
+      const created = await beginTicketRepairWork({
+        ticketId,
+        lockToken,
+        latestUserMessageId: readTicketId(record.latestUserMessageId),
+        ticketVersion: readTicketVersion(record.ticketVersion),
+        workId,
+      });
+      if (created !== workId) throw new SupportRequestError("Ticket changed before repair handoff", 409);
+      return NextResponse.json({ workId });
     }
 
     if (action === "decision_required") {
