@@ -16,6 +16,9 @@ const CREDENTIALS = Object.freeze({
   GOOGLE_DRIVE_CLIENT_SECRET: "private-client-secret-for-test",
   GOOGLE_DRIVE_REFRESH_TOKEN: "private-refresh-token-for-test",
 });
+const API_KEY_CREDENTIALS = Object.freeze({
+  GOOGLE_DRIVE_API_KEY: "private-google-drive-api-key-for-test",
+});
 const ACCESS_TOKEN = "private-access-token-for-test";
 
 function json(value, status = 200) {
@@ -91,6 +94,7 @@ async function errorCode(run, expected) {
       error instanceof DriveIntakeError &&
       error.code === expected &&
       !error.message.includes(CREDENTIALS.GOOGLE_DRIVE_REFRESH_TOKEN) &&
+      !error.message.includes(API_KEY_CREDENTIALS.GOOGLE_DRIVE_API_KEY) &&
       !error.message.includes(ACCESS_TOKEN),
   );
 }
@@ -122,6 +126,58 @@ test("OAuth refresh and bounded pagination return sorted metadata only", async (
   }
   assert.ok(!JSON.stringify(result).includes("customer-body-must-not-be-returned"));
   assert.ok(!JSON.stringify(result).includes(ACCESS_TOKEN));
+});
+
+test("public folder API key reads metadata without OAuth or user corpus", async () => {
+  let pageCount = 0;
+  const result = await collectDriveIntakeMetadata({
+    credentials: API_KEY_CREDENTIALS,
+    fetchImpl: async (url, init) => {
+      assert.notEqual(url, "https://oauth2.googleapis.com/token");
+      assert.equal(init.headers["X-Goog-Api-Key"], API_KEY_CREDENTIALS.GOOGLE_DRIVE_API_KEY);
+      assert.equal(init.headers.Authorization, undefined);
+      assert.ok(!url.includes(API_KEY_CREDENTIALS.GOOGLE_DRIVE_API_KEY));
+      if (url.startsWith(`https://www.googleapis.com/drive/v3/files/${DRIVE_INTAKE_FOLDER_ID}?`)) {
+        return json({
+          id: DRIVE_INTAKE_FOLDER_ID,
+          name: "受付",
+          mimeType: "application/vnd.google-apps.folder",
+          trashed: false,
+        });
+      }
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, "/drive/v3/files");
+      assert.equal(parsed.searchParams.get("corpora"), null);
+      assert.equal(parsed.searchParams.get("q"), `'${DRIVE_INTAKE_FOLDER_ID}' in parents and trashed = false`);
+      pageCount += 1;
+      return page([file("public-child")]);
+    },
+  });
+  assert.equal(pageCount, 1);
+  assert.deepEqual(result.files.map(({ id }) => id), ["public-child"]);
+  assert.ok(!JSON.stringify(result).includes(API_KEY_CREDENTIALS.GOOGLE_DRIVE_API_KEY));
+});
+
+test("invalid API key fails closed without falling back to OAuth", async () => {
+  let calls = 0;
+  await errorCode(
+    () => collectDriveIntakeMetadata({
+      credentials: { ...CREDENTIALS, GOOGLE_DRIVE_API_KEY: "" },
+      fetchImpl: async () => { calls += 1; },
+    }),
+    "drive_credential_missing_or_invalid_google_drive_api_key",
+  );
+  assert.equal(calls, 0);
+});
+
+test("API key folder denial cannot look empty and healthy", async () => {
+  await errorCode(
+    () => collectDriveIntakeMetadata({
+      credentials: API_KEY_CREDENTIALS,
+      fetchImpl: async () => json({ error: "forbidden" }, 403),
+    }),
+    "drive_folder_http_failure",
+  );
 });
 
 test("private output file contains metadata while stdout summary contains counts only", async () => {
