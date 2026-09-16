@@ -68,7 +68,7 @@ test("ticket job rechecks private context, makes a fixed-body PR, then links CAS
         lookups+=1;
         return new Response(JSON.stringify(lookups===1?[]:[{number:91,state:"open",
           title:"Yutakasa support repair 9e5866bd9dbd02c7",
-          head:{ref:"codex/yutakasa-ticket-repair-9e5866bd9dbd02c7",sha:"a".repeat(40),
+          head:{ref:"codex/yutakasa-support-ai-9e5866bd9dbd02c7",sha:"a".repeat(40),
             repo:{full_name:"sanrinawakes/yutakasa-tapping-coach"}},base:{ref:"main"}}]),{status:200});
       }
       if(target==="https://api.openai.com/v1/responses")
@@ -128,7 +128,7 @@ test("scheduled promotion includes private ticket repair branches",async()=>{
     YUTAKASA_AUTO_MERGE_ENABLED:"true",GITHUB_REPOSITORY:env.GITHUB_REPOSITORY,
     GH_TOKEN:env.GH_TOKEN},now:()=>Date.parse("2026-09-16T12:00:00Z"),
   fetchImpl:async()=>new Response(JSON.stringify([{created_at:"2026-09-16T11:00:00Z",
-    head:{ref:"codex/yutakasa-ticket-repair-0123456789abcdef",sha:"a".repeat(40),
+    head:{ref:"codex/yutakasa-support-ai-0123456789abcdef",sha:"a".repeat(40),
       repo:{full_name:env.GITHUB_REPOSITORY}},base:{ref:"main"}}]),{status:200}),
   promoteImpl:async()=>{calls+=1;return {status:"pending_ci"};}});
   assert.equal(result.pending,1);

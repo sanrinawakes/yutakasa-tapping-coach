@@ -96,7 +96,7 @@ test("ticket PR requires an exact private live link immediately before merge",as
   const id=crypto.createHash("sha256").update(workId).digest("hex").slice(0,16);
   const pr={...PR,title:`Yutakasa support repair ${id}`,
     body:`Private support reference: ${id}\nCustomer content stays private.`,
-    head:{...PR.head,ref:`codex/yutakasa-ticket-repair-${id}`}};
+    head:{...PR.head,ref:`codex/yutakasa-support-ai-${id}`}};
   const env={SUPABASE_URL:"https://example.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"s".repeat(40)};
   assert.deepEqual(checkCandidate({pr,files:FILES,
     runsByWorkflow:Object.fromEntries(Object.entries(RUNS).map(([name,runs])=>

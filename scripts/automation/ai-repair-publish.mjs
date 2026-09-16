@@ -210,7 +210,7 @@ export function runAiRepairPublish(env = process.env) {
     : fingerprint(env.AI_REPAIR_DEPLOYMENT_ID, reasonCodes);
   const titlePrefix = ticketMode ? `Yutakasa support repair ${id}` : `Yutakasa anomaly ${id}`;
   const branch = ticketMode
-    ? `codex/yutakasa-ticket-repair-${id}`
+    ? `codex/yutakasa-support-ai-${id}`
     : `codex/yutakasa-ai-repair-${id}`;
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "yutakasa-ai-repair-"));
   fs.chmodSync(tempDirectory, 0o700);

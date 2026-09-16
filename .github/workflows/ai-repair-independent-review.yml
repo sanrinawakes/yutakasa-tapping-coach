@@ -17,13 +17,13 @@ jobs:
         if: >-
           github.event.pull_request.head.repo.full_name != github.repository ||
           (!startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') &&
-           !startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
+           !startsWith(github.head_ref, 'codex/yutakasa-support-ai-'))
         run: echo '{"ok":true,"code":"not_ai_repair"}'
       - uses: actions/checkout@v4
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
           (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
-           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
+           startsWith(github.head_ref, 'codex/yutakasa-support-ai-'))
         with:
           ref: main
           fetch-depth: 0
@@ -32,7 +32,7 @@ jobs:
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
           (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
-           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
+           startsWith(github.head_ref, 'codex/yutakasa-support-ai-'))
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -47,7 +47,7 @@ jobs:
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
           (startsWith(github.head_ref, 'codex/yutakasa-ai-repair-') ||
-           startsWith(github.head_ref, 'codex/yutakasa-ticket-repair-'))
+           startsWith(github.head_ref, 'codex/yutakasa-support-ai-'))
         env:
           AI_REPAIR_DIFF_PATH: ai-repair-review.diff
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

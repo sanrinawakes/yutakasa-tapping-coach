@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
 const ANOMALY_BRANCH = /^codex\/yutakasa-ai-repair-[a-f0-9]{16}$/u;
-const TICKET_BRANCH = /^codex\/yutakasa-ticket-repair-[a-f0-9]{16}$/u;
+const TICKET_BRANCH = /^codex\/yutakasa-support-ai-[a-f0-9]{16}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 const SOURCES = new Set([
   "src/lib/gemini.ts", "src/lib/chat-thread.ts", "src/app/chat/page.tsx",
