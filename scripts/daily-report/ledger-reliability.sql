@@ -16,6 +16,10 @@ CREATE INDEX IF NOT EXISTS yutakasa_daily_report_provider_check_idx
   ON public.yutakasa_daily_report_deliveries(provider_checked_at, report_date_jst)
   WHERE status = 'accepted';
 
+CREATE INDEX IF NOT EXISTS yutakasa_daily_report_provider_adverse_idx
+  ON public.yutakasa_daily_report_deliveries(recipient, report_date_jst)
+  WHERE provider_last_event IN ('bounced', 'canceled', 'complained', 'failed', 'suppressed');
+
 CREATE TABLE IF NOT EXISTS public.yutakasa_daily_report_state (
   id SMALLINT PRIMARY KEY CHECK (id = 1),
   next_report_date_jst DATE NOT NULL CHECK (next_report_date_jst >= DATE '2026-09-16'),
@@ -162,6 +166,41 @@ $$;
 REVOKE ALL ON FUNCTION public.record_yutakasa_daily_report_provider_event(DATE, TEXT, TEXT, TEXT)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_yutakasa_daily_report_provider_event(DATE, TEXT, TEXT, TEXT)
+  TO service_role;
+
+-- An unresolved old date must remain visible after the daily cursor moves on.
+CREATE OR REPLACE FUNCTION public.get_yutakasa_daily_report_health(
+  p_recipient_1 TEXT,
+  p_recipient_2 TEXT
+)
+RETURNS TABLE (
+  uncertain_count BIGINT,
+  failed_count BIGINT,
+  provider_adverse_count BIGINT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF p_recipient_1 IS NULL OR p_recipient_2 IS NULL
+    OR p_recipient_1 = p_recipient_2 THEN
+    RAISE EXCEPTION 'invalid daily report recipients' USING ERRCODE = '22023';
+  END IF;
+
+  RETURN QUERY
+  SELECT count(*) FILTER (WHERE d.status = 'uncertain'),
+         count(*) FILTER (WHERE d.status = 'failed'),
+         count(*) FILTER (WHERE d.provider_last_event IN (
+           'bounced', 'canceled', 'complained', 'failed', 'suppressed'))
+  FROM public.yutakasa_daily_report_deliveries AS d
+  WHERE d.recipient IN (p_recipient_1, p_recipient_2);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_yutakasa_daily_report_health(TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_yutakasa_daily_report_health(TEXT, TEXT)
   TO service_role;
 
 COMMIT;

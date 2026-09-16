@@ -4,6 +4,7 @@ DECLARE
   v_reserved RECORD;
   v_expired INTEGER;
   v_provider RECORD;
+  v_health RECORD;
 BEGIN
   IF NOT has_table_privilege('service_role', 'public.yutakasa_daily_report_state', 'SELECT')
     OR has_table_privilege('anon', 'public.yutakasa_daily_report_state', 'SELECT')
@@ -78,6 +79,16 @@ BEGIN
   IF has_function_privilege('anon',
     'public.record_yutakasa_daily_report_provider_event(date,text,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'provider event write is publicly accessible';
+  END IF;
+  SELECT * INTO v_health FROM public.get_yutakasa_daily_report_health(
+    'one@example.com', 'two@example.com');
+  IF v_health.uncertain_count <> 2 OR v_health.failed_count <> 0
+    OR v_health.provider_adverse_count <> 1 THEN
+    RAISE EXCEPTION 'persistent delivery health counts are wrong';
+  END IF;
+  IF has_function_privilege('anon',
+    'public.get_yutakasa_daily_report_health(text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'delivery health is publicly accessible';
   END IF;
 END;
 $$;

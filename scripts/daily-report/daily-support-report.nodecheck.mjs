@@ -172,6 +172,18 @@ function testFetch({ records = source(), resendBehavior = async (_url, init) =>
       return json([{ provider_last_event: next.provider_last_event,
         provider_checked_at: next.provider_checked_at }]);
     }
+    if (url.pathname === "/rest/v1/rpc/get_yutakasa_daily_report_health") {
+      const params = JSON.parse(init.body);
+      const rows = [...ledger.entries()].filter(([key]) =>
+        [params.p_recipient_1, params.p_recipient_2].includes(key.split(":")[1]))
+        .map(([, value]) => value);
+      return json([{
+        uncertain_count: rows.filter((row) => row.status === "uncertain").length,
+        failed_count: rows.filter((row) => row.status === "failed").length,
+        provider_adverse_count: rows.filter((row) =>
+          ["bounced", "canceled", "complained", "failed", "suppressed"].includes(row.provider_last_event)).length,
+      }]);
+    }
     if (url.pathname === "/rest/v1/rpc/advance_yutakasa_daily_report_cursor") {
       const params = JSON.parse(init.body);
       const date = params.p_report_date_jst;
@@ -272,6 +284,24 @@ test("provider receipt addressed to someone else fails verification without reco
     ["provider_receipt_invalid", "provider_receipt_invalid"]);
   assert.equal(client.ledger.get(`2026-09-16:${env.REPORT_RECIPIENT_1}`).provider_last_event, undefined);
   assert.equal(client.requests.filter(({ url }) => url.pathname === "/emails").length, 2);
+});
+
+test("old uncertain sends and old bounces remain visible after the day cursor advances", async () => {
+  const initialLedger = {
+    [`2026-09-16:${env.REPORT_RECIPIENT_1}`]: { status: "uncertain" },
+    [`2026-09-16:${env.REPORT_RECIPIENT_2}`]: { status: "accepted",
+      provider_email_id: RESEND_ID_2, provider_last_event: "bounced",
+      provider_checked_at: "2026-09-17T00:00:00Z" },
+  };
+  const client = testFetch({ cursorDate: "2026-09-26", initialLedger });
+  const result = await runDailySupportReport({
+    env, now: new Date("2026-09-26T00:05:00Z"), fetchImpl: client.fetchImpl,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.unresolvedDeliveryCode, "daily_report_delivery_unresolved");
+  assert.equal(result.unresolvedUncertainCount, 1);
+  assert.equal(result.providerAdverseCount, 1);
+  assert.equal(result.pendingFailedCount, 0);
 });
 
 test("an uncertain Resend response is recorded and never retried automatically", async () => {

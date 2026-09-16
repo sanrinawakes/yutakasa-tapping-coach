@@ -6,7 +6,6 @@ import path from "node:path";
 import {
   FIRST_REPORT_DATE_JST,
   PROVIDER_EVENTS,
-  PROVIDER_FAILURE_EVENTS,
   reportDatesToRun,
   workEventLabel,
 } from "./daily-report-reliability.mjs";
@@ -574,17 +573,15 @@ async function providerCandidates(config, latestDate, now, fetchImpl) {
   const unchecked = await providerLedgerRows(config, uncheckedQuery, fetchImpl);
   const seen = new Set();
   const due = [];
-  const adverse = [];
   for (const row of [...recent, ...unchecked]) {
     const key = `${row.report_date_jst}:${row.recipient}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (row.provider_last_event && PROVIDER_FAILURE_EVENTS.has(row.provider_last_event)) adverse.push(row);
     if (row.provider_checked_at !== null &&
         Date.parse(row.provider_checked_at) > now.getTime() - PROVIDER_RECHECK_MS) continue;
     if (due.length < PROVIDER_CHECK_BATCH) due.push(row);
   }
-  return { due, adverse };
+  return due;
 }
 
 async function retrieveProviderEvent(config, row, fetchImpl) {
@@ -622,7 +619,7 @@ async function recordProviderEvent(config, row, event, fetchImpl) {
 }
 
 async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
-  const { due, adverse } = await providerCandidates(config, latestDate, now, fetchImpl);
+  const due = await providerCandidates(config, latestDate, now, fetchImpl);
   const checks = [];
   for (const row of due) {
     try {
@@ -630,15 +627,30 @@ async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
       await recordProviderEvent(config, row, event, fetchImpl);
       checks.push({ reportDateJst: row.report_date_jst,
         recipientNumber: config.recipients.indexOf(row.recipient) + 1, event });
-      if (PROVIDER_FAILURE_EVENTS.has(event)) adverse.push(row);
     } catch (error) {
       checks.push({ reportDateJst: row.report_date_jst,
         recipientNumber: config.recipients.indexOf(row.recipient) + 1,
         errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" });
     }
   }
-  return { checks, adverseCount: new Set(adverse.map((row) =>
-    `${row.report_date_jst}:${row.recipient}`)).size };
+  return checks;
+}
+
+async function auditDeliveryHealth(config, fetchImpl) {
+  const payload = await supabaseRequest(config,
+    "rest/v1/rpc/get_yutakasa_daily_report_health", {
+      method: "POST", fetchImpl,
+      body: { p_recipient_1: config.recipients[0], p_recipient_2: config.recipients[1] },
+    });
+  const row = oneRpcRow(payload, "delivery_health_invalid");
+  for (const key of ["uncertain_count", "failed_count", "provider_adverse_count"]) {
+    if (!Number.isSafeInteger(row[key]) || row[key] < 0) fail("delivery_health_invalid");
+  }
+  return {
+    uncertainCount: row.uncertain_count,
+    failedCount: row.failed_count,
+    providerAdverseCount: row.provider_adverse_count,
+  };
 }
 
 async function runReportDate(config, date, now, fetchImpl) {
@@ -708,20 +720,31 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
   }
   const latest = results[0];
   let provider;
-  try { provider = await reconcileProviderDeliveries(config, latestDate, now, fetchImpl); }
+  try { provider = { checks: await reconcileProviderDeliveries(config, latestDate, now, fetchImpl) }; }
   catch (error) {
-    provider = { checks: [], adverseCount: 0,
+    provider = { checks: [],
       errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" };
   }
+  let health;
+  try { health = await auditDeliveryHealth(config, fetchImpl); }
+  catch (error) {
+    health = { uncertainCount: null, failedCount: null, providerAdverseCount: null,
+      errorCode: error instanceof DailyReportError ? error.code : "delivery_health_unexpected_failure" };
+  }
+  const unresolved = health.uncertainCount > 0 || health.failedCount > 0 || health.providerAdverseCount > 0;
   return {
     ...latest,
     ok: results.every((result) => result.ok) && !provider.errorCode &&
-      provider.adverseCount === 0 && provider.checks.every((check) => !check.errorCode),
+      !health.errorCode && !unresolved && provider.checks.every((check) => !check.errorCode),
     expiredLeaseCount,
     recoveredReportDatesJst: results.slice(1).map((result) => result.reportDateJst),
     providerChecks: provider.checks,
-    providerAdverseCount: provider.adverseCount,
+    unresolvedUncertainCount: health.uncertainCount,
+    pendingFailedCount: health.failedCount,
+    providerAdverseCount: health.providerAdverseCount,
+    ...(unresolved ? { unresolvedDeliveryCode: "daily_report_delivery_unresolved" } : {}),
     ...(provider.errorCode ? { providerErrorCode: provider.errorCode } : {}),
+    ...(health.errorCode ? { healthErrorCode: health.errorCode } : {}),
   };
 }
 
