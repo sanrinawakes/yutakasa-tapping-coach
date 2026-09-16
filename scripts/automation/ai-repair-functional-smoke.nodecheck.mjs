@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FunctionalSmokeError, runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
+import { FunctionalSmokeError, reapStaleSyntheticIdentities, runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
 
 const env = {
   JWT_SECRET: "j".repeat(40),
@@ -56,8 +56,72 @@ test("a pre-existing synthetic identity is never overwritten or deleted", async 
   const db = fakeDatabase({ preexisting: true });
   await assert.rejects(() => runProductionFunctionalSmoke({
     release, deployment, env, fetchImpl: db.fetchImpl,
-  }), (error) => error instanceof FunctionalSmokeError && error.code === "smoke_prior_test_data_remaining");
+  }), (error) => error instanceof FunctionalSmokeError && error.code === "smoke_stale_identity_ambiguous");
   assert.deepEqual(db.calls.map((call) => call.method), ["GET"]);
+});
+
+function staleDatabase({ ageMinutes = 40, ambiguous = false, otp = false } = {}) {
+  const runId = "22222222-2222-4222-8222-222222222222";
+  const email = ambiguous
+    ? "yutakasa-auto-smoke+customer@example.com"
+    : `yutakasa-auto-smoke+${runId}@example.invalid`;
+  const account = {
+    id, email, status: "active", subscription_status: "active", first_payment_date: null,
+    myasp_data: { automation_test_identity: "yutakasa-ai-repair-smoke-v1",
+      source: "system_monitor_no_payment", smoke_run_id: runId },
+    created_at: new Date(Date.now() - ageMinutes * 60_000).toISOString(),
+  };
+  const customer = { id: "33333333-3333-4333-8333-333333333333", email: "customer@example.com" };
+  let rows = [account, customer];
+  const calls = [];
+  const fetchImpl = async (rawUrl, init) => {
+    const url = new URL(rawUrl);
+    calls.push({ method: init.method, table: url.pathname.split("/").at(-1), filters: [...url.searchParams] });
+    const table = url.pathname.split("/").at(-1);
+    if (table === "chat_threads" || table === "chat_messages") return Response.json([]);
+    if (table === "otp_codes") return Response.json(otp ? [{ id, email }] : []);
+    assert.equal(table, "subscribers");
+    if (init.method === "DELETE") {
+      assert.equal(url.searchParams.get("email"), `eq.${email}`);
+      assert.equal(url.searchParams.get("myasp_data->>smoke_run_id"), `eq.${runId}`);
+      rows = rows.filter((row) => row.email !== email);
+      return Response.json([{ id }]);
+    }
+    const emailFilter = url.searchParams.get("email");
+    const matching = emailFilter?.startsWith("like.")
+      ? rows.filter((row) => row.email.startsWith("yutakasa-auto-smoke"))
+      : rows.filter((row) => row.email === emailFilter?.slice(3));
+    return Response.json(matching);
+  };
+  return { fetchImpl, calls, getRows: () => rows };
+}
+
+test("an old exact test identity is reaped, with a customer row untouched", async () => {
+  const db = staleDatabase();
+  assert.deepEqual(await reapStaleSyntheticIdentities(env, db.fetchImpl), { reaped: 1 });
+  assert.deepEqual(db.getRows().map((row) => row.email), ["customer@example.com"]);
+  assert.equal(db.calls.filter((call) => call.method === "DELETE").length, 1);
+});
+
+test("a recent synthetic identity is never reaped", async () => {
+  const db = staleDatabase({ ageMinutes: 5 });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_synthetic_identity_still_recent");
+  assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("ambiguous prefix residue refuses all deletion", async () => {
+  const db = staleDatabase({ ambiguous: true });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_stale_identity_ambiguous");
+  assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("OTP residue refuses deletion even for an old marked account", async () => {
+  const db = staleDatabase({ otp: true });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_stale_otp_ambiguous");
+  assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
 });
 
 test("browser failure still deletes and reads back the exact isolated test subscriber", async () => {
@@ -74,6 +138,21 @@ test("browser failure still deletes and reads back the exact isolated test subsc
   assert.equal(inserted.first_payment_date, null);
   assert.equal(inserted.subscription_status, "active");
   assert.equal(inserted.myasp_data.source, "system_monitor_no_payment");
+});
+
+test("a whole-browser timeout leaves time for subscriber cleanup", async () => {
+  const db = fakeDatabase();
+  await assert.rejects(() => runProductionFunctionalSmoke({
+    release, deployment, env, fetchImpl: db.fetchImpl,
+    browserPhaseLimitMs: 10,
+    chromiumImpl: {
+      launch: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { close: async () => undefined };
+      },
+    },
+  }), (error) => error instanceof FunctionalSmokeError && error.code === "smoke_browser_phase_timeout");
+  assert.equal(db.getAccount(), null);
 });
 
 test("an unconfirmed cleanup prevents healthy evidence", async () => {

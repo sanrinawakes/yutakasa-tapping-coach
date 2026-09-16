@@ -11,6 +11,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
 const PARTIAL_RESPONSE = "通信が途中で中断されたため";
+const SYNTHETIC_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})@example\.invalid$/iu;
+const STALE_AFTER_MS = 30 * 60 * 1_000;
+const PREFLIGHT_LIMIT_MS = 2 * 60 * 1_000;
+const BROWSER_PHASE_LIMIT_MS = 4 * 60 * 1_000;
 
 export class FunctionalSmokeError extends Error {
   constructor(code) {
@@ -252,21 +256,59 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
   }
 }
 
+/** Only old, exact, no-payment synthetic identities can be reaped. */
+export async function reapStaleSyntheticIdentities(env, fetchImpl, nowMs = Date.now()) {
+  const accounts = await databaseRequest(env, fetchImpl, "subscribers", {
+    email: "like.yutakasa-auto-smoke*",
+    select: "id,email,status,subscription_status,first_payment_date,myasp_data,created_at",
+    limit: "4",
+  });
+  if (accounts.length > 3) fail("smoke_stale_identity_limit_exceeded");
+  const stale = [];
+  // Validate every candidate before deleting any row. A recent or malformed
+  // candidate may belong to a still-running check or an unrelated account.
+  for (const account of accounts) {
+    const match = SYNTHETIC_EMAIL.exec(account?.email ?? "");
+    if (!match || !UUID.test(account?.id ?? "")) fail("smoke_stale_identity_ambiguous");
+    const runId = match[1];
+    validateAccount(account, account.email, runId);
+    const createdAt = Date.parse(account.created_at ?? "");
+    if (!Number.isFinite(createdAt) || createdAt > nowMs || nowMs - createdAt < STALE_AFTER_MS) {
+      fail("smoke_synthetic_identity_still_recent");
+    }
+    stale.push({ email: account.email, runId });
+  }
+  const threads = await databaseRequest(env, fetchImpl, "chat_threads", {
+    user_email: "like.yutakasa-auto-smoke*",
+    select: "id,user_email",
+    limit: "20",
+  });
+  const validEmails = new Set(stale.map((account) => account.email));
+  if (threads.some((thread) => !UUID.test(thread?.id ?? "") || !validEmails.has(thread.user_email))) {
+    fail("smoke_stale_threads_ambiguous");
+  }
+  const otps = await databaseRequest(env, fetchImpl, "otp_codes", {
+    email: "like.yutakasa-auto-smoke*",
+    select: "id,email",
+    limit: "20",
+  });
+  if (otps.length !== 0) fail("smoke_stale_otp_ambiguous");
+  for (const account of stale) await cleanupAndVerify(env, fetchImpl, account.email, account.runId);
+  return { reaped: stale.length };
+}
+
 /** Run only from a trusted main checkout, with no PR code or production secrets in the browser. */
 export async function runProductionFunctionalSmoke({
   release, deployment, env = process.env, fetchImpl = globalThis.fetch,
-  chromiumImpl = null,
+  chromiumImpl = null, browserPhaseLimitMs = BROWSER_PHASE_LIMIT_MS,
 } = {}) {
   requiredConfiguration(env, release, deployment);
+  if (!Number.isSafeInteger(browserPhaseLimitMs) || browserPhaseLimitMs < 1) fail("smoke_browser_limit_invalid");
+  const preflightStartedAt = Date.now();
+  await reapStaleSyntheticIdentities(env, fetchImpl);
+  if (Date.now() - preflightStartedAt > PREFLIGHT_LIMIT_MS) fail("smoke_preflight_timeout");
   const runId = randomUUID();
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
-  for (const [table, column] of [["subscribers", "email"], ["chat_threads", "user_email"], ["otp_codes", "email"]]) {
-    const leftovers = await databaseRequest(env, fetchImpl, table, {
-      [column]: "like.yutakasa-auto-smoke*",
-      select: "id", limit: "20",
-    });
-    if (leftovers.length !== 0) fail("smoke_prior_test_data_remaining");
-  }
   const existing = await databaseRequest(env, fetchImpl, "subscribers", {
     email: `eq.${email}`,
     select: "id",
@@ -282,6 +324,8 @@ export async function runProductionFunctionalSmoke({
   let browser;
   let primaryError;
   let completed = false;
+  let phaseExpired = false;
+  let phaseTimer;
   try {
     const inserted = await databaseRequest(env, fetchImpl, "subscribers", {
       select: "id,email,status,subscription_status,first_payment_date,myasp_data",
@@ -299,41 +343,61 @@ export async function runProductionFunctionalSmoke({
     });
     if (inserted.length !== 1) fail("smoke_identity_insert_unconfirmed");
     validateAccount(inserted[0], email, runId);
+    // The workflow itself has a ten-minute deadline. End browser work after
+    // four minutes so the finally block has time to remove test data.
+    phaseTimer = setTimeout(() => {
+      phaseExpired = true;
+      if (browser) void browser.close().catch(() => undefined);
+    }, Math.min(browserPhaseLimitMs, BROWSER_PHASE_LIMIT_MS));
+    const assertBrowserTime = () => { if (phaseExpired) fail("smoke_browser_phase_timeout"); };
     const chromium = chromiumImpl ?? (await import("playwright")).chromium;
     // ubuntu-24.04 GitHub hosted runners provide stable Chrome. Avoid downloading
     // a full browser on every ten-minute scheduled observation.
     browser = await chromium.launch({ headless: true, channel: "chrome" });
+    assertBrowserTime();
     const desktop = await openPage(browser, { viewport: { width: 1440, height: 900 } }, token, errors);
+    assertBrowserTime();
     try {
       const prompt = `${marker} desktop：動作確認です。短く返答してください。`;
       prompts.push(prompt);
       const rendered = await sendFromBrowser(desktop.page, prompt, 1);
+      assertBrowserTime();
       const threads = await listThreads(env, fetchImpl, email);
       if (threads.length !== 1) fail("smoke_thread_count_invalid");
       await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
+      assertBrowserTime();
       await assertReload(desktop.page, prompt, rendered, 1);
+      assertBrowserTime();
     } finally {
       await within(desktop.context.close(), 30_000, "smoke_browser_context_close_timeout");
     }
 
+    assertBrowserTime();
+
     const { devices } = await import("playwright");
     const mobile = await openPage(browser, devices["Pixel 7"], token, errors);
+    assertBrowserTime();
     try {
       const prompt = `${marker} mobile：もう一度、短く返答してください。`;
       prompts.push(prompt);
       const rendered = await sendFromBrowser(mobile.page, prompt, 2);
+      assertBrowserTime();
       const threads = await listThreads(env, fetchImpl, email);
       if (threads.length !== 1) fail("smoke_thread_count_invalid");
       await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
+      assertBrowserTime();
       await assertReload(mobile.page, prompt, rendered, 2);
+      assertBrowserTime();
     } finally {
       await within(mobile.context.close(), 30_000, "smoke_browser_context_close_timeout");
     }
+    assertBrowserTime();
     if (errors.length !== 0) fail("smoke_client_error");
     completed = true;
   } catch (error) {
     primaryError = error;
   } finally {
+    clearTimeout(phaseTimer);
     if (browser) {
       try { await within(browser.close(), 30_000, "smoke_browser_close_timeout"); }
       catch { primaryError ??= new FunctionalSmokeError("smoke_browser_close_failed"); }
