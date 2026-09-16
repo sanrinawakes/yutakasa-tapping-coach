@@ -2,19 +2,19 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
-  appendAdminSupportMessage,
+  appendAutomationSupportMessage,
   claimSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   renewSupportAutomationLock,
-  updateAdminSupportTicket,
 } from "@/lib/server/support-service";
 import { supportApiError, SupportRequestError } from "@/lib/server/support-request";
 import {
   MAX_SUPPORT_MESSAGE_LENGTH,
   normalizeSupportText,
   parseClientRequestId,
+  requiresOwnerDecision,
 } from "@/lib/support";
 
 export const runtime = "nodejs";
@@ -154,7 +154,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const lockToken = readLockToken(record.lockToken);
-    await requireLock(ticketId, lockToken);
+    if (action !== "reply") await requireLock(ticketId, lockToken);
 
     if (action === "log") {
       const summary = normalizeSupportText(record.summary, 5001);
@@ -186,23 +186,41 @@ export async function PATCH(request: NextRequest) {
       }
       const clientRequestId = readLockToken(record.clientRequestId);
       const resolve = record.resolve === true;
-      const result = await appendAdminSupportMessage({
+      const latestUserMessageId = readTicketId(record.latestUserMessageId);
+      const releasePrNumber = record.releasePrNumber;
+      if (!Number.isSafeInteger(releasePrNumber) ||
+          (releasePrNumber as number) < 1) {
+        throw new SupportRequestError("Invalid repair release PR number");
+      }
+      const detail = await getAdminSupportTicket(ticketId, { markRead: false });
+      const latestUser = detail?.messages
+        .filter((message) => message.sender_type === "user")
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) ||
+          b.id.localeCompare(a.id))[0];
+      const currentClaim = detail?.ticket.automation_lock_token === lockToken &&
+        detail.ticket.automation_status === "investigating" &&
+        detail.ticket.status === "in_progress";
+      const completedRetry = detail?.ticket.automation_status === "completed" &&
+        ["resolved", "waiting_user"].includes(detail.ticket.status);
+      if (!detail || (!currentClaim && !completedRetry) || detail.ticket.decision_required ||
+          !["technical", "login", "quality"].includes(detail.ticket.category) ||
+          latestUser?.id !== latestUserMessageId ||
+          requiresOwnerDecision(
+            detail.ticket.category,
+            detail.ticket.subject,
+            detail.messages.filter((message) => message.sender_type === "user")
+              .map((message) => message.body).join("\n")
+          )) {
+        throw new SupportRequestError("Ticket needs another review before reply", 409);
+      }
+      const result = await appendAutomationSupportMessage({
         ticketId,
+        lockToken,
+        latestUserMessageId,
         body,
         clientRequestId,
         resolve,
-      });
-      await updateAdminSupportTicket({
-        ticketId,
-        automationStatus: "completed",
-      });
-      await addSupportWorkLog({
-        ticketId,
-        eventType: resolve ? "automation_resolved" : "automation_replied",
-        summary: resolve
-          ? "技術対応と利用者への回答を完了しました。"
-          : "利用者へ回答し、追加連絡を待っています。",
-        metadata: { message_id: result.message_id, duplicate: !result.created },
+        releasePrNumber: releasePrNumber as number,
       });
       return NextResponse.json(result, { status: result.created ? 201 : 200 });
     }

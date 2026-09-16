@@ -53,7 +53,7 @@ export const MAX_SUPPORT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export const MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 const OWNER_DECISION_PATTERN =
-  /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)/u;
+  /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)|個人データ.{0,8}(削除|開示)|損害賠償|消費者センター/u;
 
 export function isSupportCategory(value: unknown): value is SupportCategory {
   return (

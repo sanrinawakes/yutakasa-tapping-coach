@@ -1,35 +1,32 @@
 import { NextRequest } from "next/server";
 import {
   addSupportWorkLog,
-  appendAdminSupportMessage,
+  appendAutomationSupportMessage,
   claimSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   renewSupportAutomationLock,
-  updateAdminSupportTicket,
 } from "@/lib/server/support-service";
 import { GET, PATCH } from "./route";
 
 vi.mock("@/lib/server/support-service", () => ({
   addSupportWorkLog: vi.fn(),
-  appendAdminSupportMessage: vi.fn(),
+  appendAutomationSupportMessage: vi.fn(),
   claimSupportTicket: vi.fn(),
   finishLockedSupportTicket: vi.fn(),
   getAdminSupportTicket: vi.fn(),
   listPendingAutomatedSupportTickets: vi.fn(),
   renewSupportAutomationLock: vi.fn(),
-  updateAdminSupportTicket: vi.fn(),
 }));
 
 const addLogMock = vi.mocked(addSupportWorkLog);
-const appendMock = vi.mocked(appendAdminSupportMessage);
+const appendMock = vi.mocked(appendAutomationSupportMessage);
 const claimMock = vi.mocked(claimSupportTicket);
 const finishLockedMock = vi.mocked(finishLockedSupportTicket);
 const detailMock = vi.mocked(getAdminSupportTicket);
 const listMock = vi.mocked(listPendingAutomatedSupportTickets);
 const renewLockMock = vi.mocked(renewSupportAutomationLock);
-const updateMock = vi.mocked(updateAdminSupportTicket);
 const ticketId = "2e4710db-9274-4e4c-96c4-59dc97e21c8d";
 const lockToken = "09919e11-742a-41b4-b3f2-8cc3ff86b5cd";
 const messageId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
@@ -156,7 +153,11 @@ describe("support automation API", () => {
 
   it("sends a verified reply once and marks automation complete", async () => {
     appendMock.mockResolvedValue({ message_id: messageId, created: true });
-    updateMock.mockResolvedValue(ticket);
+    detailMock.mockResolvedValue({ ticket, messages: [{
+      id: messageId, ticket_id: ticketId, sender_type: "user",
+      sender_email: "member@example.com", body: "送信できません",
+      created_at: ticket.updated_at, attachments: [],
+    }], work_logs: [] });
     const response = await PATCH(
       request("PATCH", {
         action: "reply",
@@ -165,19 +166,56 @@ describe("support automation API", () => {
         clientRequestId: messageId,
         body: "原因を修正し、保存と再読み込みを確認しました。",
         resolve: true,
+        latestUserMessageId: messageId,
+        releasePrNumber: 37,
       })
     );
     expect(response.status).toBe(201);
     expect(appendMock).toHaveBeenCalledWith({
       ticketId,
+      lockToken,
+      latestUserMessageId: messageId,
       body: "原因を修正し、保存と再読み込みを確認しました。",
       clientRequestId: messageId,
       resolve: true,
+      releasePrNumber: 37,
     });
-    expect(updateMock).toHaveBeenCalledWith({
-      ticketId,
-      automationStatus: "completed",
+    expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks reply after a new user message or owner decision", async () => {
+    detailMock.mockResolvedValue({ ticket, messages: [{
+      id: "c27fb99e-874b-4111-a95a-4f4cb268e48c", ticket_id: ticketId,
+      sender_type: "user", sender_email: "member@example.com", body: "返金してください",
+      created_at: ticket.updated_at, attachments: [],
+    }], work_logs: [] });
+    const response = await PATCH(request("PATCH", {
+      action: "reply", ticketId, lockToken, clientRequestId: messageId,
+      latestUserMessageId: messageId, releasePrNumber: 37,
+      body: "原因を修正しました。", resolve: true,
+    }));
+    expect(response.status).toBe(409);
+    expect(appendMock).not.toHaveBeenCalled();
+  });
+
+  it("allows an uncertain HTTP reply result to be retried without another message", async () => {
+    appendMock.mockResolvedValue({ message_id: messageId, created: false });
+    detailMock.mockResolvedValue({
+      ticket: { ...ticket, status: "resolved", automation_status: "completed",
+        automation_lock_token: null },
+      messages: [{ id: messageId, ticket_id: ticketId, sender_type: "user",
+        sender_email: "member@example.com", body: "送信できません",
+        created_at: ticket.updated_at, attachments: [] }],
+      work_logs: [],
     });
+    const response = await PATCH(request("PATCH", {
+      action: "reply", ticketId, lockToken, clientRequestId: messageId,
+      latestUserMessageId: messageId, releasePrNumber: 37,
+      body: "原因を修正し、保存と再読み込みを確認しました。", resolve: true,
+    }));
+    expect(response.status).toBe(200);
+    expect(renewLockMock).not.toHaveBeenCalled();
+    expect(appendMock).toHaveBeenCalledOnce();
   });
 
   it("blocks business decisions without replying to the customer", async () => {
@@ -211,7 +249,6 @@ describe("support automation API", () => {
     }));
     expect(response.status).toBe(409);
     expect(addLogMock).not.toHaveBeenCalled();
-    expect(updateMock).not.toHaveBeenCalled();
   });
 
   it("returns an uncertain failure if the terminal update succeeds but its work log fails", async () => {

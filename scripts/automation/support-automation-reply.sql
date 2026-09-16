@@ -54,7 +54,8 @@ DECLARE
 BEGIN
   IF p_ticket_id IS NULL OR p_lock_token IS NULL OR p_latest_user_message_id IS NULL
     OR p_client_request_id IS NULL OR p_body IS NULL OR length(trim(p_body)) < 1
-    OR length(p_body) > 10000 OR p_resolve IS NULL OR (p_resolve AND p_pr_number IS NULL)
+    OR length(p_body) > 10000 OR p_resolve IS NULL OR p_pr_number IS NULL
+    OR p_pr_number < 1
   THEN
     RAISE EXCEPTION 'invalid automation reply' USING ERRCODE = '22023';
   END IF;
@@ -71,6 +72,13 @@ BEGIN
     IF v_existing.sender_type <> 'admin' OR v_existing.body <> p_body
       OR v_ticket.automation_status <> 'completed'
       OR v_ticket.status <> (CASE WHEN p_resolve THEN 'resolved' ELSE 'waiting_user' END)
+      OR NOT EXISTS (
+        SELECT 1 FROM public.support_work_logs w
+        WHERE w.ticket_id = p_ticket_id
+          AND w.event_type = (CASE WHEN p_resolve THEN 'automation_resolved' ELSE 'automation_replied' END)
+          AND w.metadata->>'message_id' = v_existing.id::text
+          AND w.metadata->>'release_pr_number' = p_pr_number::text
+      )
     THEN
       RAISE EXCEPTION 'automation reply request conflict' USING ERRCODE = '23505';
     END IF;
@@ -91,16 +99,14 @@ BEGIN
   IF v_latest IS DISTINCT FROM p_latest_user_message_id THEN
     RAISE EXCEPTION 'newer user message' USING ERRCODE = 'P0001';
   END IF;
-  IF p_resolve THEN
-    SELECT * INTO v_release FROM public.yutakasa_repair_releases r
-      WHERE r.pr_number = p_pr_number AND r.status = 'verified';
-    IF NOT FOUND OR NOT EXISTS (
-      SELECT 1 FROM public.yutakasa_repair_ticket_links l
-      WHERE l.pr_number = p_pr_number AND l.ticket_id = p_ticket_id
-        AND l.latest_user_message_id = p_latest_user_message_id
-    ) THEN
-      RAISE EXCEPTION 'repair release evidence missing' USING ERRCODE = 'P0001';
-    END IF;
+  SELECT * INTO v_release FROM public.yutakasa_repair_releases r
+    WHERE r.pr_number = p_pr_number AND r.status = 'verified';
+  IF NOT FOUND OR NOT EXISTS (
+    SELECT 1 FROM public.yutakasa_repair_ticket_links l
+    WHERE l.pr_number = p_pr_number AND l.ticket_id = p_ticket_id
+      AND l.latest_user_message_id = p_latest_user_message_id
+  ) THEN
+    RAISE EXCEPTION 'repair release evidence missing' USING ERRCODE = 'P0001';
   END IF;
 
   INSERT INTO public.support_messages(ticket_id,sender_type,sender_email,body,client_request_id)

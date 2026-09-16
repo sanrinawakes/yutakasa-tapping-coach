@@ -659,6 +659,55 @@ export async function appendAdminSupportMessage(params: {
   return result as { message_id: string; created: boolean };
 }
 
+export async function appendAutomationSupportMessage(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  clientRequestId: string;
+  body: string;
+  resolve: boolean;
+  releasePrNumber: number;
+}): Promise<{ message_id: string; created: boolean }> {
+  const { data, error } = await getSupabase().rpc("append_yutakasa_automation_reply", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_client_request_id: params.clientRequestId,
+    p_body: normalizeSupportText(params.body, MAX_SUPPORT_MESSAGE_LENGTH),
+    p_resolve: params.resolve,
+    p_pr_number: params.releasePrNumber,
+  });
+  if (error?.code === "P0001" || error?.code === "23505") {
+    throw new SupportRequestError("Automation reply evidence changed", 409);
+  }
+  if (error) throw error;
+  const result = (Array.isArray(data) ? data[0] : data) as
+    | { message_id: string; created: boolean }
+    | null;
+  if (!result || typeof result.message_id !== "string" ||
+      typeof result.created !== "boolean") {
+    throw new Error("Automation reply RPC returned invalid confirmation");
+  }
+  if (result.created) {
+    const { data: ticket, error: ticketError } = await getSupabase()
+      .from("support_tickets")
+      .select("user_email,subject")
+      .eq("id", params.ticketId)
+      .single();
+    if (ticketError) throw ticketError;
+    const notification = await sendSupportEmail({
+      to: ticket.user_email,
+      subject: `【豊かさAI】「${ticket.subject}」へ返信しました`,
+      text:
+        `豊かさAIのサポート画面へ返信しました。\n\n` +
+        `こちらから内容をご確認ください。\n${SUPPORT_APP_URL}/support\n\n` +
+        `このメールへ返信しても、問い合わせ履歴には追加されません。追加のご連絡は豊かさAI内の問い合わせ画面からお送りください。`,
+    });
+    await recordNotificationResult(params.ticketId, "user", notification);
+  }
+  return result;
+}
+
 export async function updateAdminSupportTicket(params: {
   ticketId: string;
   status?: SupportStatus;
