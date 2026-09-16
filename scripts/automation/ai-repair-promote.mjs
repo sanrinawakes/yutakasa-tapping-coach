@@ -18,6 +18,7 @@ const REQUIRED_WORKFLOWS = [
   "source-repair-ci.yml",
   "ai-repair-independent-review.yml",
 ];
+const REQUIRED_CHECK_CONTEXTS = new Set(["source-repair-verify", "ai-repair-independent-review"]);
 
 export class AiRepairPromoteError extends Error {
   constructor(code) {
@@ -29,6 +30,24 @@ export class AiRepairPromoteError extends Error {
 
 function fail(code) {
   throw new AiRepairPromoteError(code);
+}
+
+export function verifyMainProtection(rules) {
+  if (!Array.isArray(rules)) fail("main_protection_evidence_invalid");
+  const statusRules = rules.filter((rule) => rule?.type === "required_status_checks");
+  if (statusRules.length < 1) fail("main_protection_incomplete");
+  const protectedContexts = new Set();
+  let strict = false;
+  for (const rule of statusRules) {
+    if (rule?.parameters?.strict_required_status_checks_policy === true) strict = true;
+    for (const check of rule?.parameters?.required_status_checks ?? []) {
+      if (typeof check?.context === "string") protectedContexts.add(check.context);
+    }
+  }
+  if (!strict || [...REQUIRED_CHECK_CONTEXTS].some((context) => !protectedContexts.has(context))) {
+    fail("main_protection_incomplete");
+  }
+  return { protected: true };
 }
 
 function checkCandidate({ pr, files, runsByWorkflow, expectedSha, mainSha }) {
@@ -191,6 +210,7 @@ export async function promoteAiRepair({
       typeof env.GH_TOKEN !== "string" || env.GH_TOKEN.length < 20 ||
       !SHA.test(env.REPAIR_TRIGGER_SHA ?? "")) fail("promote_configuration_invalid");
   const sha = env.REPAIR_TRIGGER_SHA;
+  verifyMainProtection(await githubJson("/rules/branches/main", env.GH_TOKEN, fetchImpl));
   const linked = await githubJson(`/commits/${sha}/pulls`, env.GH_TOKEN, fetchImpl);
   if (!Array.isArray(linked) || linked.length !== 1 || !Number.isSafeInteger(linked[0]?.number)) {
     fail("repair_pr_link_invalid");

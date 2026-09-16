@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AiRepairPromoteError, checkCandidate, promoteAiRepair } from "./ai-repair-promote.mjs";
+import { AiRepairPromoteError, checkCandidate, promoteAiRepair, verifyMainProtection } from "./ai-repair-promote.mjs";
 
 const SHA = "a".repeat(40);
 const BRANCH = "codex/yutakasa-ai-repair-0123456789abcdef";
@@ -44,6 +44,20 @@ test("disabled auto merge never calls GitHub", async () => {
     fetchImpl: async () => { calls += 1; throw new Error("unexpected"); },
   }), AiRepairPromoteError);
   assert.equal(calls, 0);
+});
+
+test("main protection requires both exact check contexts and up-to-date enforcement", () => {
+  const rules = [{ type: "required_status_checks", parameters: {
+    strict_required_status_checks_policy: true,
+    required_status_checks: [
+      { context: "source-repair-verify" },
+      { context: "ai-repair-independent-review" },
+    ],
+  } }];
+  assert.deepEqual(verifyMainProtection(rules), { protected: true });
+  assert.throws(() => verifyMainProtection([]), AiRepairPromoteError);
+  assert.throws(() => verifyMainProtection([{ ...rules[0], parameters: { ...rules[0].parameters, strict_required_status_checks_policy: false } }]), AiRepairPromoteError);
+  assert.throws(() => verifyMainProtection([{ ...rules[0], parameters: { ...rules[0].parameters, required_status_checks: [{ context: "source-repair-verify" }] } }]), AiRepairPromoteError);
 });
 
 test("unfinished independent review remains pending without a merge", () => {
