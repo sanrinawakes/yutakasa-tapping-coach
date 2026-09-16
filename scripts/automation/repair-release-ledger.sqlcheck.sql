@@ -1,4 +1,17 @@
 BEGIN;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname='yutakasa_repair_releases'
+      AND c.relrowsecurity) OR
+    has_table_privilege('anon','public.yutakasa_repair_releases','SELECT') OR
+    has_table_privilege('authenticated','public.yutakasa_repair_releases','SELECT') OR
+    NOT has_table_privilege('service_role','public.yutakasa_repair_releases','SELECT') THEN
+    RAISE EXCEPTION 'repair release ledger RLS/grants invalid';
+  END IF;
+END;
+$$;
 INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,status,error_code)
   VALUES (996,repeat('a',40),'abandoned','pending_merge_abandoned');
 DO $$
