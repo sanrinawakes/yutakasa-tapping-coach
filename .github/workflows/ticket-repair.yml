@@ -1,0 +1,49 @@
+name: Private support ticket repair draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      work_id:
+        description: Random private work UUID; no customer content
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-ticket-repair-${{ inputs.work_id }}
+  cancel-in-progress: false
+
+jobs:
+  investigate:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_TICKET_REPAIR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Investigate privately and link an opaque draft PR
+        env:
+          WORK_ID: ${{ inputs.work_id }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+        run: node scripts/automation/ticket-repair-investigate.mjs

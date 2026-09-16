@@ -110,6 +110,7 @@ END;
 $$;
 
 REVOKE ALL ON public.yutakasa_repair_releases FROM PUBLIC, anon, authenticated;
+ALTER TABLE public.yutakasa_repair_releases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.yutakasa_repair_observations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_repair_observations FROM PUBLIC, anon, authenticated;
 DROP FUNCTION IF EXISTS public.record_yutakasa_repair_observation(INTEGER,TEXT,TEXT,TIMESTAMPTZ,BOOLEAN,TEXT);

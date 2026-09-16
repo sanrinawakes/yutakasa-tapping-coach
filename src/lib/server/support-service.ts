@@ -909,3 +909,22 @@ export async function finishLockedSupportTicket(params: {
   const ticket = Array.isArray(data) ? data[0] : data;
   return (ticket ?? null) as SupportTicket | null;
 }
+
+export async function beginTicketRepairWork(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  ticketVersion: string;
+  workId: string;
+}): Promise<string | null> {
+  const { data, error } = await getSupabase().rpc("begin_yutakasa_ticket_repair", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_ticket_version: params.ticketVersion,
+    p_work_id: params.workId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row?.work_id === params.workId ? row.work_id : null;
+}

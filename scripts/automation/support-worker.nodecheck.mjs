@@ -76,6 +76,7 @@ function fakeApi(statuses = {}, claimedEntry = entry()) {
     const chosen = statuses[`${body.action}:${calls.length}`] ?? statuses[body.action] ?? 200;
     const payload = body.action === "log"
       ? { success: true }
+      : body.action === "handoff" ? { workId: body.workId }
       : {
           ticket: {
             id: body.ticketId,
@@ -234,19 +235,30 @@ test("decision classification uses the customer's full history without exposing 
   }] })).kind, "decision_required");
 });
 
-test("technical ticket claims, heartbeats, records a durable marker, and terminates failed", async () => {
+test("technical ticket claims, heartbeats, and atomically queues a private repair job", async () => {
   const api = fakeApi();
-  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
-  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "log", "failed"]);
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "handoff"]);
   assert.equal(api.calls[2].eventType, "automation_heartbeat");
-  assert.deepEqual(api.calls[3].metadata, { latestUserMessageId: MESSAGE_ID });
-  assert.equal(api.calls[4].ticketVersion, "2026-09-16T01:05:00.000Z");
+  assert.equal(api.calls[3].latestUserMessageId, MESSAGE_ID);
+  assert.equal(api.calls[3].ticketVersion, "2026-09-16T01:05:00.000Z");
+  assert.match(api.calls[3].workId, /^[a-f0-9-]{36}$/u);
   assert.equal(new Set(api.calls.filter((call) => call.lockToken).map((call) => call.lockToken)).size, 1);
   assert.equal(result.technicalHandoffs, 1);
   assert.equal(result.uncertain, 0);
   assert.equal(JSON.stringify(result).includes("private customer text"), false);
   assert.equal(JSON.stringify(api.calls).includes("private customer text"), false);
   assert.equal(api.calls.some((call) => call.action === "reply"), false);
+});
+
+test("bridge OFF uses the existing manual escalation without the new RPC", async () => {
+  const api = fakeApi({ handoff: 500 });
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()],
+    fetchImpl: api.fetchImpl });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim","get","log","log","failed"]);
+  assert.equal(result.technicalHandoffs,1);
+  assert.equal(api.calls.some((call)=>call.action==="handoff"),false);
 });
 
 test("decision ticket is locked, heartbeat checked, then blocked without customer reply", async () => {
@@ -258,16 +270,22 @@ test("decision ticket is locked, heartbeat checked, then blocked without custome
   assert.equal(api.calls.some((call) => call.action === "reply"), false);
 });
 
-test("prior escalation of the same user message is skipped; new message is processed", async () => {
+test("old escalation log cannot suppress an atomic handoff after an uncertain failure", async () => {
   const prior = entry({ work_logs: [{ event_type: "remote_support_escalated", metadata: { latestUserMessageId: MESSAGE_ID } }] });
   const api = fakeApi({}, prior);
-  const first = await processSupportTickets({ automationToken: TOKEN, tickets: [prior], fetchImpl: api.fetchImpl });
-  assert.equal(first.skippedPriorEscalation, 1);
-  assert.equal(api.calls.length, 0);
+  const first = await processSupportTickets({ automationToken: TOKEN, tickets: [prior],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.equal(first.technicalHandoffs, 1);
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "handoff"]);
   prior.messages.push({ id: NEW_MESSAGE_ID, sender_type: "user", body: "まだ直りません", created_at: "2026-09-16T01:20:00Z" });
-  const second = await processSupportTickets({ automationToken: TOKEN, tickets: [prior], fetchImpl: api.fetchImpl });
+  const secondApi = fakeApi({}, prior);
+  const second = await processSupportTickets({ automationToken: TOKEN, tickets: [prior],
+    fetchImpl: secondApi.fetchImpl, repairBridgeEnabled: true });
   assert.equal(second.technicalHandoffs, 1);
-  assert.equal(api.calls[3].metadata.latestUserMessageId, NEW_MESSAGE_ID);
+  assert.equal(secondApi.calls[3].latestUserMessageId, NEW_MESSAGE_ID);
+  const offApi=fakeApi({},prior);
+  const off=await processSupportTickets({automationToken:TOKEN,tickets:[prior],fetchImpl:offApi.fetchImpl});
+  assert.equal(off.skippedPriorEscalation,0);
 });
 
 test("claim conflict and lost heartbeat never perform terminal mutation", async () => {
@@ -284,16 +302,18 @@ test("claim conflict and lost heartbeat never perform terminal mutation", async 
 
 test("uncertain log response attempts a safe terminal release and reports uncertainty", async () => {
   const api = fakeApi({ log: 500 });
-  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
   assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "failed"]);
   assert.equal(result.uncertain, 1);
   assert.equal(result.technicalHandoffs, 0);
 });
 
-test("ambiguous terminal response remains nonhealthy when a second guarded release conflicts", async () => {
-  const api = fakeApi({ "failed:5": 500, "failed:6": 409 });
-  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()], fetchImpl: api.fetchImpl });
-  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "log", "failed", "failed"]);
+test("ambiguous handoff response remains nonhealthy when a guarded release conflicts", async () => {
+  const api = fakeApi({ "handoff:4": 500, "failed:5": 409 });
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [entry()],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "handoff", "failed"]);
   assert.equal(result.uncertain, 1);
   assert.equal(result.lostLocks, 1);
   assert.equal(result.ok, false);
@@ -310,6 +330,7 @@ test("context file runner processes only current private data", async () => {
       contextPath: file,
       automationToken: TOKEN,
       fetchImpl: api.fetchImpl,
+      repairBridgeEnabled: true,
     });
     assert.equal(result.technicalHandoffs, 1);
     fs.unlinkSync(file);

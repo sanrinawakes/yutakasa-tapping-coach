@@ -1,0 +1,35 @@
+name: Review support repair release evidence
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yutakasa-ticket-repair-reconcile
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      vars.YUTAKASA_TICKET_RECONCILE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Move exhausted or unproven repairs to manual review
+        env:
+          TICKET_RECONCILE_ENABLED: ${{ vars.YUTAKASA_TICKET_RECONCILE_ENABLED }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/automation/ticket-repair-reconcile.mjs

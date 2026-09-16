@@ -14,6 +14,7 @@ import {
 } from "./yutakasa-production-snapshot.mjs";
 import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.mjs";
 import { RepairDispatchError, dispatchAlert, dispatchRepair } from "./dispatch-repair.mjs";
+import { dispatchQueuedTicketRepairs, inspectTicketRepairBacklog } from "./ticket-repair-dispatch.mjs";
 import { DRIVE_INTAKE_FOLDER_ID, collectDriveIntakeMetadata } from "./drive-intake.mjs";
 import { SupportWorkerError, processSupportTicketContextFile } from "./support-worker.mjs";
 import { MonitorLedgerError, acquireMonitorLease } from "./monitor-ledger.mjs";
@@ -561,6 +562,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
         contextPath: path.join(runDirectory(preflight.runId, tempRoot), "ticket-context.json"),
         automationToken,
         fetchImpl: options.supportFetchImpl ?? globalThis.fetch,
+        repairBridgeEnabled: secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true",
         beforeMutation: options.leaseGuard ?? (async () => {}),
       });
     }
@@ -568,6 +570,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
     if (support) {
       result.support = support;
       if (support.technicalHandoffs > 0) result.reasonCodes.push("support_technical_review_required");
+      if (support.manualReviews > 0) result.reasonCodes.push("support_manual_review_required");
       if (support.decisionsRequired > 0) result.reasonCodes.push("support_owner_decision_required");
       if (support.lostLocks > 0) result.reasonCodes.push("support_lock_lost");
       if (support.staleContexts > 0) result.reasonCodes.push("support_context_stale");
@@ -616,6 +619,8 @@ export async function runLeasedMonitor({
   monitorImpl = runRemoteMonitorWithTickets,
   alertImpl = dispatchAlert,
   repairImpl = dispatchRepair,
+  ticketDispatchImpl = dispatchQueuedTicketRepairs,
+  ticketBacklogImpl = inspectTicketRepairBacklog,
   ...options
 } = {}) {
   const lease = await leaseImpl({ secrets, kind: "scheduled" });
@@ -623,6 +628,15 @@ export async function runLeasedMonitor({
   let observationError;
   try {
     result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
+    if (secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true") {
+      const backlog=await ticketBacklogImpl({secrets});
+      if (!Number.isSafeInteger(backlog?.pending) || backlog.pending<0 ||
+          typeof backlog?.overflow!=="boolean") fail("ticket_backlog_invalid");
+      if (backlog.pending>0 || backlog.overflow) {
+        result.reasonCodes=[...new Set([...result.reasonCodes,"ticket_repair_work_pending"])].sort();
+        result.actionRequired=true;
+      }
+    }
     await lease.finish({
       ...result,
       status: result.actionRequired ? "action_required" : "healthy",
@@ -685,7 +699,10 @@ export async function runLeasedMonitor({
       await lease.recordDispatch({ repairDispatched });
     }
   }
-  return { ...result, alertDispatched, repairDispatched };
+  const ticketRepairs = secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true"
+    ? await ticketDispatchImpl({ secrets }) : { dispatched: 0 };
+  return { ...result, alertDispatched, repairDispatched,
+    ticketRepairDispatches: ticketRepairs.dispatched };
 }
 
 export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {

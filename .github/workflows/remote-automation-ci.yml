@@ -9,6 +9,8 @@ on:
       - .github/workflows/ai-repair-independent-review.yml
       - .github/workflows/ai-repair-promote.yml
       - .github/workflows/ai-repair-observe.yml
+      - .github/workflows/ticket-repair.yml
+      - .github/workflows/ticket-repair-reconcile.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
   push:
@@ -20,6 +22,8 @@ on:
       - .github/workflows/ai-repair-independent-review.yml
       - .github/workflows/ai-repair-promote.yml
       - .github/workflows/ai-repair-observe.yml
+      - .github/workflows/ticket-repair.yml
+      - .github/workflows/ticket-repair-reconcile.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
 
@@ -46,6 +50,8 @@ jobs:
         run: npm test -- --maxWorkers=2
       - name: Monitor tests
         run: node --test scripts/automation/*.nodecheck.mjs
+      - name: Atomic support repair bridge database tests
+        run: bash scripts/automation/test-support-automation-reply-sql.sh
       - name: Production build
         run: npm run build
       - name: Docker build

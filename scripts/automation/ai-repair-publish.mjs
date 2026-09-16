@@ -23,6 +23,7 @@ const ALLOWED_TEST_FILES = new Set([
   "src/app/api/chat/route.test.ts",
 ]);
 const FORBIDDEN_PATCH_LINES = /^(?:GIT binary patch|Binary files |literal |delta |old mode |new mode |new file mode |deleted file mode |rename from |rename to |copy from |copy to )/u;
+const WORK_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 
 export class AiRepairPublishError extends Error {
   constructor(code) {
@@ -201,14 +202,24 @@ export function runAiRepairPublish(env = process.env) {
     fail("github_repair_credential_missing");
   }
   const proposal = parseProposal(env.AI_REPAIR_PROPOSAL);
-  const reasonCodes = JSON.parse(env.AI_REPAIR_REASON_CODES ?? "null");
-  const id = fingerprint(env.AI_REPAIR_DEPLOYMENT_ID, reasonCodes);
-  const titlePrefix = `Yutakasa anomaly ${id}`;
-  const branch = `codex/yutakasa-ai-repair-${id}`;
+  const ticketMode = env.AI_REPAIR_TICKET_MODE === "true";
+  if (ticketMode && !WORK_ID.test(env.AI_REPAIR_WORK_ID ?? "")) fail("ticket_work_id_invalid");
+  const reasonCodes = ticketMode ? [] : JSON.parse(env.AI_REPAIR_REASON_CODES ?? "null");
+  const id = ticketMode
+    ? crypto.createHash("sha256").update(env.AI_REPAIR_WORK_ID).digest("hex").slice(0, 16)
+    : fingerprint(env.AI_REPAIR_DEPLOYMENT_ID, reasonCodes);
+  const titlePrefix = ticketMode ? `Yutakasa support repair ${id}` : `Yutakasa anomaly ${id}`;
+  const branch = ticketMode
+    ? `codex/yutakasa-support-ai-${id}`
+    : `codex/yutakasa-ai-repair-${id}`;
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "yutakasa-ai-repair-"));
   fs.chmodSync(tempDirectory, 0o700);
   try {
-    const body = [
+    const body = ticketMode ? [
+      `Private support reference: ${id}`,
+      "Customer content and identifiers are stored only in the private support database.",
+      "This draft is unverified. Do not send a customer reply until the exact release passes production observation.",
+    ].join("\n") : [
       `Production deployment: ${env.AI_REPAIR_DEPLOYMENT_ID}`,
       `Reason codes: ${reasonCodes.join(", ")}`,
       "",
@@ -287,7 +298,7 @@ export function runAiRepairPublish(env = process.env) {
     ], { env: gitEnv });
     command("gh", [
       "pr", "create", "--draft", "--base", "main", "--head", branch,
-      "--title", `${titlePrefix}: ${proposal.summary.slice(0, 80)}`,
+      "--title", ticketMode ? titlePrefix : `${titlePrefix}: ${proposal.summary.slice(0, 80)}`,
       "--body-file", bodyFile,
     ], { env: childEnv });
     return { status: "draft_pr_created", id, branch };
