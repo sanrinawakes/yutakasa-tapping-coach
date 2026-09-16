@@ -154,53 +154,36 @@ describe("support automation leases", () => {
     }));
   });
 
-  it("rejects a terminal update when the latest user message changed", async () => {
-    const latestQuery = {
-      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "f41fb99e-874b-4111-a95a-4f4cb268e48c" }, error: null }),
-    };
-    const updateQuery = { update: vi.fn() };
-    getSupabaseMock.mockReturnValue({
-      from: vi.fn((table: string) => table === "support_messages" ? latestQuery : updateQuery),
-    } as never);
+  it("passes the lock and fresh snapshot to one atomic terminal RPC", async () => {
+    const latestId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
+    const rpc = vi.fn().mockResolvedValue({ data: [ticket()], error: null });
+    const from = vi.fn();
+    getSupabaseMock.mockReturnValue({ rpc, from } as never);
+    const current = ticket();
+    await expect(finishLockedSupportTicket({
+      ticketId, lockToken, latestUserMessageId: latestId,
+      ticketVersion: current.updated_at, outcome: "failed", summary: "再調査が必要です。",
+    })).resolves.toMatchObject({ id: ticketId });
+    expect(rpc).toHaveBeenCalledWith("finish_locked_support_ticket", {
+      p_ticket_id: ticketId,
+      p_lock_token: lockToken,
+      p_ticket_version: current.updated_at,
+      p_latest_user_message_id: latestId,
+      p_outcome: "failed",
+      p_summary: "再調査が必要です。",
+    });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("maps an atomic compare-and-swap miss to no ticket", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [], error: null });
+    getSupabaseMock.mockReturnValue({ rpc } as never);
     await expect(finishLockedSupportTicket({
       ticketId, lockToken,
       latestUserMessageId: "a61fb99e-874b-4111-a95a-4f4cb268e48c",
       ticketVersion: ticket().updated_at,
-      outcome: "decision_required",
+      outcome: "decision_required", summary: "判断が必要です。",
     })).resolves.toBeNull();
-    expect(updateQuery.update).not.toHaveBeenCalled();
-  });
-
-  it("uses lock, state, and snapshot version conditions for a terminal update", async () => {
-    const latestId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
-    const latestQuery = {
-      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: latestId }, error: null }),
-    };
-    const updateQuery = {
-      update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
-      select: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-    };
-    getSupabaseMock.mockReturnValue({
-      from: vi.fn((table: string) => table === "support_messages" ? latestQuery : updateQuery),
-    } as never);
-    const current = ticket();
-    await expect(finishLockedSupportTicket({
-      ticketId, lockToken, latestUserMessageId: latestId,
-      ticketVersion: current.updated_at, outcome: "failed",
-    })).resolves.toBeNull();
-    expect(updateQuery.eq).toHaveBeenCalledWith("automation_lock_token", lockToken);
-    expect(updateQuery.eq).toHaveBeenCalledWith("automation_status", "investigating");
-    expect(updateQuery.eq).toHaveBeenCalledWith("decision_required", false);
-    expect(updateQuery.eq).toHaveBeenCalledWith("status", "in_progress");
-    expect(updateQuery.eq).toHaveBeenCalledWith("updated_at", current.updated_at);
-    expect(updateQuery.update).toHaveBeenCalledWith(expect.objectContaining({
-      automation_status: "failed", automation_lock_token: null,
-    }));
   });
 });
 

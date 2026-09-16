@@ -218,13 +218,9 @@ export async function PATCH(request: NextRequest) {
         latestUserMessageId: readTicketId(record.latestUserMessageId),
         ticketVersion: readTicketVersion(record.ticketVersion),
         outcome: "decision_required",
-      });
-      if (!ticket) throw new SupportRequestError("Ticket changed before decision", 409);
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "owner_decision_required",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before decision", 409);
       return NextResponse.json({ ticket });
     }
 
@@ -239,13 +235,9 @@ export async function PATCH(request: NextRequest) {
         latestUserMessageId: readTicketId(record.latestUserMessageId),
         ticketVersion: readTicketVersion(record.ticketVersion),
         outcome: "failed",
-      });
-      if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);
-      await addSupportWorkLog({
-        ticketId,
-        eventType: "automation_failed",
         summary,
       });
+      if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);
       return NextResponse.json({ ticket });
     }
 

@@ -199,7 +199,9 @@ describe("support automation API", () => {
       latestUserMessageId: messageId,
       ticketVersion: ticket.updated_at,
       outcome: "decision_required",
+      summary: "返金可否の判断が必要です。",
     });
+    expect(addLogMock).not.toHaveBeenCalled();
     expect(appendMock).not.toHaveBeenCalled();
   });
 
@@ -214,15 +216,14 @@ describe("support automation API", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("returns an uncertain failure if the terminal update succeeds but its work log fails", async () => {
-    finishLockedMock.mockResolvedValue({ ...ticket, automation_status: "failed" });
-    addLogMock.mockRejectedValue(new Error("database log unavailable"));
+  it("returns an error when the atomic terminal RPC rolls back", async () => {
+    finishLockedMock.mockRejectedValue(new Error("database log unavailable"));
     const response = await PATCH(request("PATCH", {
       action: "failed", ticketId, lockToken, latestUserMessageId: messageId,
       ticketVersion: ticket.updated_at, summary: "再調査が必要です。",
     }));
     expect(response.status).toBe(500);
     expect(finishLockedMock).toHaveBeenCalledOnce();
-    expect(addLogMock).toHaveBeenCalledOnce();
+    expect(addLogMock).not.toHaveBeenCalled();
   });
 });

@@ -29,4 +29,10 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < supabase-migration-support.sql >/dev/null
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-terminal.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < supabase-migration-support-automation-terminal.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-migration-assertions.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/support-terminal-assertions.sql

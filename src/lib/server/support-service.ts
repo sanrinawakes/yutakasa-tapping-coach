@@ -825,39 +825,17 @@ export async function finishLockedSupportTicket(params: {
   latestUserMessageId: string;
   ticketVersion: string;
   outcome: "failed" | "decision_required";
+  summary: string;
 }): Promise<SupportTicket | null> {
-  const { data: latest, error: latestError } = await getSupabase()
-    .from("support_messages")
-    .select("id")
-    .eq("ticket_id", params.ticketId)
-    .eq("sender_type", "user")
-    .order("created_at", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (latestError) throw latestError;
-  if (latest?.id !== params.latestUserMessageId) return null;
-
-  const now = new Date().toISOString();
-  const update = params.outcome === "decision_required"
-    ? { decision_required: true, automation_status: "blocked_decision" }
-    : { automation_status: "failed" };
-  const { data, error } = await getSupabase()
-    .from("support_tickets")
-    .update({
-      ...update,
-      automation_locked_at: null,
-      automation_lock_token: null,
-      updated_at: now,
-    })
-    .eq("id", params.ticketId)
-    .eq("automation_lock_token", params.lockToken)
-    .eq("automation_status", "investigating")
-    .eq("decision_required", false)
-    .eq("status", "in_progress")
-    .eq("updated_at", params.ticketVersion)
-    .select("*")
-    .maybeSingle();
+  const { data, error } = await getSupabase().rpc("finish_locked_support_ticket", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_ticket_version: params.ticketVersion,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_outcome: params.outcome,
+    p_summary: params.summary,
+  });
   if (error) throw error;
-  return data as SupportTicket | null;
+  const ticket = Array.isArray(data) ? data[0] : data;
+  return (ticket ?? null) as SupportTicket | null;
 }
