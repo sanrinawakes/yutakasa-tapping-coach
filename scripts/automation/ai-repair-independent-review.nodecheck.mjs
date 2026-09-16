@@ -36,7 +36,9 @@ test("review executes trusted code only and never sends API key inside model inp
     const calls = [];
     const result = await runIndependentReview({ env, fetchImpl: async (url, options) => {
       calls.push({ url, options });
-      if (url.endsWith("/models")) return new Response("{}", { status: 200 });
+      if (calls.length === 1) return new Response(JSON.stringify({
+        id: "resp_1234567890ABCDEF", status: "completed",
+      }), { status: 200 });
       const body = JSON.parse(options.body);
       assert.equal(body.tools.length, 0);
       assert.equal(body.store, false);
@@ -59,8 +61,9 @@ test("review executes trusted code only and never sends API key inside model inp
 test("a rejected or incomplete model response cannot pass", async () => {
   const { directory, env } = setup();
   try {
-    const fetchImpl = async (url) => url.endsWith("/models")
-      ? new Response("{}", { status: 200 })
+    let calls = 0;
+    const fetchImpl = async () => (++calls === 1)
+      ? new Response(JSON.stringify({ id: "resp_1234567890ABCDEF", status: "completed" }))
       : new Response(JSON.stringify({ status: "incomplete", output: [] }), { status: 200 });
     await assert.rejects(() => runIndependentReview({ env, fetchImpl }));
     fs.chmodSync(env.AI_REPAIR_DIFF_PATH, 0o644);

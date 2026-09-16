@@ -200,17 +200,15 @@ export async function runRepairObservation({
     automationToken: env.CRON_SECRET,
   };
   let deployment;
-  let snapshot;
   let collectionFailed = false;
   try {
     deployment = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
-    snapshot = await snapshotImpl({ environment, fetchImpl });
   } catch {
     collectionFailed = true;
   }
   const summary = { examined: 0, verified: 0, failed: 0 };
   for (const release of releases) {
-    const observedAt = new Date().toISOString();
+    let observedAt = new Date().toISOString();
     let observation;
     if (collectionFailed) {
       observation = {
@@ -220,16 +218,27 @@ export async function runRepairObservation({
     } else if (release.merge_sha !== deployment.mainSha) {
       observation = { healthy: false, code: "main_sha_changed", deploymentId: deployment.deploymentId };
     } else {
-      let functionalEvidence = null;
       try {
-        const logs = await logsImpl({
-          deploymentId: deployment.deploymentId,
-          token: env.VERCEL_TOKEN,
-          deploymentOnly: true,
-          since: release.merge_recorded_at,
-        });
-        functionalEvidence = await functionalSmokeImpl({ release, deployment });
-        observation = evaluateRepairObservation({ release, deployment, logs, snapshot, functionalEvidence, observedAt });
+        const functionalEvidence = await functionalSmokeImpl({ release, deployment, env, fetchImpl });
+        const deploymentAfterSmoke = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
+        if (deploymentAfterSmoke.mainSha !== deployment.mainSha ||
+            deploymentAfterSmoke.deploymentId !== deployment.deploymentId ||
+            deploymentAfterSmoke.ready !== true) {
+          observation = { healthy: false, code: "production_changed_during_smoke",
+            deploymentId: DEPLOYMENT.test(deploymentAfterSmoke.deploymentId ?? "")
+              ? deploymentAfterSmoke.deploymentId : null };
+        } else {
+          const logs = await logsImpl({
+            deploymentId: deployment.deploymentId,
+            token: env.VERCEL_TOKEN,
+            deploymentOnly: true,
+            since: release.merge_recorded_at,
+          });
+          const snapshot = await snapshotImpl({ environment, fetchImpl });
+          observedAt = new Date().toISOString();
+          observation = evaluateRepairObservation({ release, deployment: deploymentAfterSmoke,
+            logs, snapshot, functionalEvidence, observedAt });
+        }
       } catch {
         observation = { healthy: false, code: "functional_probe_failed", deploymentId: deployment.deploymentId };
       }

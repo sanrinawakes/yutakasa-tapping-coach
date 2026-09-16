@@ -161,6 +161,30 @@ test("manual dispatch cannot certify a scheduled production observation", async 
   assert.equal(calls, 0);
 });
 
+test("production alias movement during browser smoke fails before log or DB health verdict", async () => {
+  let deploymentCalls = 0;
+  let receipt = null;
+  await assert.rejects(() => runRepairObservation({
+    env: { ...SCHEDULE_ENV, SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    fetchImpl: async (url, options) => {
+      if (url.includes("yutakasa_repair_releases?")) {
+        return new Response(JSON.stringify([release]));
+      }
+      receipt = JSON.parse(options.body);
+      return new Response(JSON.stringify([{ status: "failed", healthy_count: 0 }]));
+    },
+    deploymentImpl: async () => (++deploymentCalls === 1) ? deployment :
+      { ...deployment, mainSha: "b".repeat(40), deploymentId: "dpl_Changed123456789" },
+    functionalSmokeImpl: async () => functionalEvidence,
+    logsImpl: async () => { throw new Error("logs must not certify changed production"); },
+    snapshotImpl: async () => { throw new Error("snapshot must not certify changed production"); },
+  }), AiRepairObserveError);
+  assert.equal(deploymentCalls, 2);
+  assert.equal(receipt.p_healthy, false);
+  assert.equal(receipt.p_error_code, "production_changed_during_smoke");
+});
+
 test("six superseded releases are terminalized without starving the newest or oldest", async () => {
   const states = new Map(Array.from({ length: 6 }, (_, index) => [index + 1, "observing"]));
   const observed = [];
