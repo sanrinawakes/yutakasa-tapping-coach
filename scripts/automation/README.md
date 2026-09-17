@@ -91,9 +91,9 @@ a refresh token that expires after seven days. Do not alter folder sharing
 or place OAuth credentials in the API-key variable.
 
 Before enabling this path, bind `assertEvidence` to verified release records
-and `assertLease` to the current monitor owner; apply and verify the
-publication ledger, and add a durable per-file intake
-claim and terminal state so a Drive file is not processed twice. Run a
+and `assertLease` to the current monitor owner; verify the publication ledger
+and connect the existing durable per-file intake claim to the caller so a
+Drive file is not processed twice. Run a
 non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report
 publisher. Missing credentials, missing evidence, unsupported file types, or
@@ -110,10 +110,10 @@ crashes or the result of an external action is unclear, the claim becomes
 `needs_review`; later versions of that file remain blocked until a person
 reconciles the outcome. No automatic retry can process the file twice. Older
 versions return `stale`. The table stores no filename, file content, customer
-email, or raw error text. This ledger has no scheduled entry point, is not
-deployed to the production database, and has not been connected to OAuth,
-content retrieval, PDF publication, or customer notification.
-Apply only `drive-intake-ledger.sql` after a separate production rollout
-decision. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
+email, or raw error text. The intake ledger migration was applied to
+production on 2026-09-17; the table had zero rows and the RPC grants were
+verified at rollout. It still has no scheduled caller and has not been
+connected to OAuth, content retrieval, PDF publication, or customer
+notification. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
 synthetic IDs; do not run it on production. The test fixture rolls back its
 rows so repeated local runs remain independent.
