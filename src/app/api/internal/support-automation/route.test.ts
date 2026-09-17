@@ -79,6 +79,7 @@ describe("support automation API", () => {
 
   afterEach(() => {
     delete process.env.CRON_SECRET;
+    delete process.env.TICKET_CLARIFICATION_ENABLED;
   });
 
   it("rejects an invalid automation secret", async () => {
@@ -136,6 +137,7 @@ describe("support automation API", () => {
   });
 
   it("sends only a fixed, CAS-guarded clarification through the dedicated RPC",async()=>{
+    process.env.TICKET_CLARIFICATION_ENABLED = "true";
     clarifyMock.mockResolvedValue({message_id:messageId,created:true});
     const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
       latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
@@ -144,6 +146,18 @@ describe("support automation API", () => {
     expect(clarifyMock).toHaveBeenCalledWith({ticketId,lockToken,
       latestUserMessageId:messageId,ticketVersion:ticket.updated_at});
     expect(appendMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects clarification at the API when the Vercel flag is absent or not exactly true",async()=>{
+    for (const value of [undefined,"false","TRUE"]) {
+      if (value === undefined) delete process.env.TICKET_CLARIFICATION_ENABLED;
+      else process.env.TICKET_CLARIFICATION_ENABLED=value;
+      const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
+        latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
+      expect(response.status).toBe(409);
+    }
+    expect(renewLockMock).not.toHaveBeenCalled();
+    expect(clarifyMock).not.toHaveBeenCalled();
   });
 
   it("returns a claimed ticket without a second work-log write", async () => {

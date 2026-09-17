@@ -98,7 +98,7 @@ export default function AdminSupportPage() {
   const [replyBody, setReplyBody] = useState("");
   const [resolveWithReply, setResolveWithReply] = useState(true);
   const [replyDraftSource, setReplyDraftSource] = useState<{
-    ticketId: string; latestUserMessageId: string;
+    ticketId: string; latestUserMessageId: string; workId: string;
   } | null>(null);
   const replyRequestId = useRef(crypto.randomUUID());
 
@@ -211,6 +211,7 @@ export default function AdminSupportPage() {
           resolve: resolveWithReply,
           ...(replyDraftSource?.ticketId === selectedId ? {
             expectedLatestUserMessageId: replyDraftSource.latestUserMessageId,
+            draftWorkId: replyDraftSource.workId,
           } : {}),
         }),
       });
@@ -447,7 +448,8 @@ export default function AdminSupportPage() {
                       setReplyBody(detail.reply_draft?.body ?? "");
                       setResolveWithReply(false);
                       setReplyDraftSource({ticketId:selectedId,
-                        latestUserMessageId:detail.reply_draft!.latest_user_message_id});
+                        latestUserMessageId:detail.reply_draft!.latest_user_message_id,
+                        workId:detail.reply_draft!.work_id});
                       replyRequestId.current = crypto.randomUUID();
                     }}>返信欄へ入れる</button>
                   </section>

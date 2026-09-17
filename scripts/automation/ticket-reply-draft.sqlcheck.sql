@@ -11,7 +11,8 @@ BEGIN
     OR has_function_privilege('anon','public.save_yutakasa_ticket_reply_draft(uuid,uuid,integer,text)','EXECUTE')
     OR has_function_privilege('authenticated','public.get_yutakasa_ticket_reply_draft_context(uuid)','EXECUTE')
     OR has_function_privilege('authenticated',
-      'public.append_support_admin_message_checked(uuid,text,uuid,boolean,uuid)','EXECUTE')
+      'public.append_support_admin_message_checked(uuid,text,uuid,boolean,uuid,uuid)','EXECUTE')
+    OR to_regprocedure('public.append_support_admin_message_checked(uuid,text,uuid,boolean,uuid)') IS NOT NULL
     OR has_function_privilege('service_role',
       'public.append_yutakasa_automation_reply(uuid,uuid,uuid,uuid,text,boolean,integer,text,text)',
       'EXECUTE') THEN
@@ -80,12 +81,37 @@ BEGIN
   SELECT count(*) INTO v_count FROM public.support_work_logs w
     WHERE w.ticket_id=v_ticket AND w.event_type='repair_reply_draft';
   IF v_count<>1 THEN RAISE EXCEPTION 'draft work log duplicated'; END IF;
+  SELECT * INTO v_receipt FROM public.append_support_admin_message_checked(
+    v_ticket,'画面と時刻を教えてください。',v_request,FALSE,v_user,v_work);
+  IF NOT v_receipt.created THEN RAISE EXCEPTION 'checked draft reply not created'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.yutakasa_ticket_reply_drafts d
+    WHERE d.work_id=v_work AND d.used_message_id=v_receipt.message_id) THEN
+    RAISE EXCEPTION 'draft consumption receipt missing';
+  END IF;
+  SELECT * INTO v_receipt FROM public.append_support_admin_message_checked(
+    v_ticket,'画面と時刻を教えてください。',v_request,FALSE,v_user,v_work);
+  IF v_receipt.created THEN RAISE EXCEPTION 'checked draft retry duplicated'; END IF;
+  BEGIN
+    PERFORM * FROM public.append_support_admin_message_checked(
+      v_ticket,'画面と時刻を教えてください。',gen_random_uuid(),FALSE,v_user,v_work);
+    RAISE EXCEPTION 'second draft send with new request id accepted';
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
+  END;
+  BEGIN
+    PERFORM * FROM public.append_support_admin_message_checked(
+      v_ticket,'画面と時刻を教えてください。',gen_random_uuid(),TRUE,v_user,v_work);
+    RAISE EXCEPTION 'draft reply resolved without proof';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+  END;
   PERFORM * FROM public.append_support_user_message(
     'ticket-reply-draft-test@example.invalid',v_ticket,'症状が変わりました',
     gen_random_uuid(),FALSE,'[]'::jsonb);
   IF public.get_yutakasa_ticket_reply_draft_context(v_work) IS NOT NULL THEN
     RAISE EXCEPTION 'stale customer context remained available';
   END IF;
+  SELECT * INTO v_receipt FROM public.append_support_admin_message_checked(
+    v_ticket,'画面と時刻を教えてください。',v_request,FALSE,v_user,v_work);
+  IF v_receipt.created THEN RAISE EXCEPTION 'retry after user followup duplicated'; END IF;
   DELETE FROM public.support_tickets WHERE id=v_ticket;
   SELECT count(*) INTO v_count FROM public.yutakasa_ticket_reply_drafts d WHERE d.ticket_id=v_ticket;
   IF v_count<>0 THEN RAISE EXCEPTION 'draft survived ticket deletion'; END IF;
@@ -96,30 +122,12 @@ BEGIN
       'in_progress','manual_review',gen_random_uuid()) RETURNING id INTO v_ticket;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','現在の表示を確認してください',gen_random_uuid()) RETURNING id INTO v_user;
-  SELECT * INTO v_receipt FROM public.append_support_admin_message_checked(
-    v_ticket,'画面と時刻を教えてください。',v_request,FALSE,v_user);
-  IF NOT v_receipt.created THEN RAISE EXCEPTION 'checked reply not created'; END IF;
-  PERFORM * FROM public.append_support_user_message(
-    'ticket-reply-draft-test@example.invalid',v_ticket,'画面が変わりました',
-    gen_random_uuid(),FALSE,'[]'::jsonb);
-  SELECT * INTO v_receipt FROM public.append_support_admin_message_checked(
-    v_ticket,'画面と時刻を教えてください。',v_request,FALSE,v_user);
-  IF v_receipt.created THEN RAISE EXCEPTION 'checked reply retry duplicated'; END IF;
   BEGIN
     PERFORM * FROM public.append_support_admin_message_checked(
-      v_ticket,'画面と時刻を教えてください。',gen_random_uuid(),FALSE,v_user);
-    RAISE EXCEPTION 'stale checked reply accepted';
+      v_ticket,'画面と時刻を教えてください。',gen_random_uuid(),FALSE,v_user,gen_random_uuid());
+    RAISE EXCEPTION 'checked reply accepted without a matching draft';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
   END;
-  BEGIN
-    PERFORM * FROM public.append_support_admin_message_checked(
-      v_ticket,'画面と時刻を教えてください。',gen_random_uuid(),TRUE,v_user);
-    RAISE EXCEPTION 'draft reply resolved without proof';
-  EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-  END;
-  SELECT count(*) INTO v_count FROM public.support_messages m
-    WHERE m.ticket_id=v_ticket AND m.sender_type='admin';
-  IF v_count<>1 THEN RAISE EXCEPTION 'checked reply duplicate count %',v_count; END IF;
 END;
 $$;
 

@@ -124,6 +124,7 @@ describe("AdminSupportPage", () => {
     const send=fetchMock.mock.calls.find((call)=>String(call[0]).endsWith("/messages"));
     expect(JSON.parse(String(send?.[1]?.body))).toMatchObject({
       body:draftBody,resolve:false,expectedLatestUserMessageId:latestUserId,
+      draftWorkId:"a1fc220d-19a8-447a-a19d-feac919af642",
     });
   });
 });

@@ -8,11 +8,17 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_ticket_reply_drafts (
   latest_user_message_id UUID NOT NULL REFERENCES public.support_messages(id) ON DELETE CASCADE,
   pr_number INTEGER NOT NULL REFERENCES public.yutakasa_repair_releases(pr_number) ON DELETE CASCADE,
   body TEXT NOT NULL CHECK (length(trim(body)) BETWEEN 1 AND 1000),
+  used_message_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   UNIQUE (ticket_id, latest_user_message_id, pr_number)
 );
+ALTER TABLE public.yutakasa_ticket_reply_drafts
+  ADD COLUMN IF NOT EXISTS used_message_id UUID;
 CREATE INDEX IF NOT EXISTS yutakasa_ticket_reply_drafts_ticket_idx
   ON public.yutakasa_ticket_reply_drafts(ticket_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS yutakasa_ticket_reply_drafts_used_message_idx
+  ON public.yutakasa_ticket_reply_drafts(used_message_id)
+  WHERE used_message_id IS NOT NULL;
 ALTER TABLE public.yutakasa_ticket_reply_drafts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_ticket_reply_drafts FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.yutakasa_ticket_reply_drafts TO service_role;
@@ -116,31 +122,47 @@ GRANT EXECUTE ON FUNCTION public.save_yutakasa_ticket_reply_draft(UUID,UUID,INTE
 -- When an administrator uses a draft, reject a send if the customer has
 -- written again since that draft. The ticket row lock serializes this check
 -- with the support_messages insert trigger and preserves idempotent retries.
+DROP FUNCTION IF EXISTS public.append_support_admin_message_checked(UUID,TEXT,UUID,BOOLEAN,UUID);
 CREATE OR REPLACE FUNCTION public.append_support_admin_message_checked(
   p_ticket_id UUID,p_body TEXT,p_client_request_id UUID,p_resolve BOOLEAN,
-  p_expected_latest_user_message_id UUID
+  p_expected_latest_user_message_id UUID,p_work_id UUID
 )
 RETURNS TABLE(message_id UUID,created BOOLEAN)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
 DECLARE v_ticket public.support_tickets%ROWTYPE;
 DECLARE v_existing public.support_messages%ROWTYPE;
+DECLARE v_draft public.yutakasa_ticket_reply_drafts%ROWTYPE;
 DECLARE v_latest UUID;
+DECLARE v_message_id UUID;
+DECLARE v_created BOOLEAN;
 BEGIN
   IF p_ticket_id IS NULL OR p_client_request_id IS NULL
-    OR p_expected_latest_user_message_id IS NULL OR p_body IS NULL
+    OR p_expected_latest_user_message_id IS NULL OR p_work_id IS NULL OR p_body IS NULL
     OR length(trim(p_body)) NOT BETWEEN 1 AND 10000
     OR p_resolve IS DISTINCT FROM FALSE THEN
     RAISE EXCEPTION 'invalid checked support reply' USING ERRCODE='22023';
   END IF;
   SELECT * INTO v_ticket FROM public.support_tickets t WHERE t.id=p_ticket_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'support ticket missing' USING ERRCODE='P0002'; END IF;
+  SELECT * INTO v_draft FROM public.yutakasa_ticket_reply_drafts d
+    WHERE d.work_id=p_work_id AND d.ticket_id=p_ticket_id
+      AND d.latest_user_message_id=p_expected_latest_user_message_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'reply draft missing or changed' USING ERRCODE='P0001';
+  END IF;
   SELECT * INTO v_existing FROM public.support_messages m
     WHERE m.ticket_id=p_ticket_id AND m.client_request_id=p_client_request_id;
   IF FOUND THEN
-    IF v_existing.sender_type<>'admin' OR v_existing.body IS DISTINCT FROM p_body THEN
+    IF v_existing.sender_type<>'admin' OR v_existing.body IS DISTINCT FROM p_body
+      OR v_draft.used_message_id IS DISTINCT FROM v_existing.id THEN
       RAISE EXCEPTION 'checked support reply conflict' USING ERRCODE='23505';
     END IF;
     RETURN QUERY SELECT v_existing.id,FALSE; RETURN;
+  END IF;
+  IF v_draft.used_message_id IS NOT NULL OR v_ticket.automation_status<>'manual_review'
+    OR v_ticket.status<>'in_progress' OR v_ticket.category<>'technical'
+    OR v_ticket.decision_required THEN
+    RAISE EXCEPTION 'reply draft already used or ticket changed' USING ERRCODE='P0001';
   END IF;
   SELECT m.id INTO v_latest FROM public.support_messages m
     WHERE m.ticket_id=p_ticket_id AND m.sender_type='user'
@@ -148,13 +170,20 @@ BEGIN
   IF v_latest IS DISTINCT FROM p_expected_latest_user_message_id THEN
     RAISE EXCEPTION 'customer message changed' USING ERRCODE='P0001';
   END IF;
-  RETURN QUERY SELECT r.message_id,r.created FROM public.append_support_admin_message(
-    p_ticket_id,p_body,p_client_request_id,p_resolve) r;
+  SELECT r.message_id,r.created INTO v_message_id,v_created
+    FROM public.append_support_admin_message(
+      p_ticket_id,p_body,p_client_request_id,p_resolve) r;
+  IF v_message_id IS NULL OR v_created IS DISTINCT FROM TRUE THEN
+    RAISE EXCEPTION 'reply draft send was not created' USING ERRCODE='23505';
+  END IF;
+  UPDATE public.yutakasa_ticket_reply_drafts d SET used_message_id=v_message_id
+    WHERE d.work_id=p_work_id;
+  RETURN QUERY SELECT v_message_id,TRUE;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.append_support_admin_message_checked(UUID,TEXT,UUID,BOOLEAN,UUID)
+REVOKE ALL ON FUNCTION public.append_support_admin_message_checked(UUID,TEXT,UUID,BOOLEAN,UUID,UUID)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.append_support_admin_message_checked(UUID,TEXT,UUID,BOOLEAN,UUID)
+GRANT EXECUTE ON FUNCTION public.append_support_admin_message_checked(UUID,TEXT,UUID,BOOLEAN,UUID,UUID)
   TO service_role;
 
 -- A generic production smoke and a linked PR do not establish before/after

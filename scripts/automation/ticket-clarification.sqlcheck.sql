@@ -24,15 +24,18 @@ DECLARE v_version TIMESTAMPTZ;
 DECLARE v_first RECORD;
 DECLARE v_retry RECORD;
 DECLARE v_count INTEGER;
+DECLARE v_created RECORD;
 BEGIN
   INSERT INTO public.subscribers(email) VALUES('clarification-test@example.invalid');
-  INSERT INTO public.support_tickets(user_email,category,subject,status,
-    automation_status,automation_lock_token,automation_locked_at,client_request_id)
-    VALUES('clarification-test@example.invalid','technical','使えない',
-      'in_progress','investigating',v_lock,clock_timestamp(),gen_random_uuid())
-    RETURNING id,updated_at INTO v_ticket,v_version;
-  INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
-    VALUES(v_ticket,'user','使えない',gen_random_uuid()) RETURNING id INTO v_user;
+  SELECT * INTO v_created FROM public.create_support_ticket_with_message(
+    'clarification-test@example.invalid','technical','使えない','使えない',
+    gen_random_uuid(),FALSE,'[]'::jsonb);
+  v_ticket:=v_created.ticket_id;
+  v_user:=v_created.message_id;
+  SELECT count(*) INTO v_count FROM public.support_messages m WHERE m.ticket_id=v_ticket;
+  IF v_count<>2 THEN RAISE EXCEPTION 'real ticket lacks receipt message'; END IF;
+  SELECT t.updated_at INTO v_version FROM public.claim_support_ticket_with_log(v_ticket,v_lock) t;
+  IF v_version IS NULL THEN RAISE EXCEPTION 'real ticket claim failed'; END IF;
   SELECT * INTO v_first FROM public.append_yutakasa_ticket_clarification(
     v_ticket,v_lock,v_user,v_version);
   IF NOT v_first.created OR v_first.message_id IS NULL THEN
@@ -71,6 +74,10 @@ BEGIN
     RETURNING id,updated_at INTO v_ticket,v_version;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','使えない',gen_random_uuid()) RETURNING id INTO v_user;
+  INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
+    VALUES(v_ticket,'system',
+      'お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。',
+      gen_random_uuid());
   BEGIN
     PERFORM * FROM public.append_yutakasa_ticket_clarification(
       v_ticket,v_lock,v_user,v_version);
@@ -85,6 +92,10 @@ BEGIN
     RETURNING id,updated_at INTO v_ticket,v_version;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','使えない',gen_random_uuid()) RETURNING id INTO v_user;
+  INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
+    VALUES(v_ticket,'system',
+      'お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。',
+      gen_random_uuid());
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','動かない',gen_random_uuid());
   BEGIN

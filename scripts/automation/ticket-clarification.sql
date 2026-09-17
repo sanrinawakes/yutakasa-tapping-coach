@@ -24,6 +24,8 @@ DECLARE v_existing public.yutakasa_ticket_clarifications%ROWTYPE;
 DECLARE v_reply_id UUID;
 DECLARE v_body CONSTANT TEXT :=
   'お問い合わせありがとうございます。状況を確認するため、問題が起きた画面、直前に行った操作、表示されたエラー文（あれば）、発生した日時を教えてください。パスワードや認証コードは送らないでください。';
+DECLARE v_ack CONSTANT TEXT :=
+  'お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。';
 BEGIN
   IF p_ticket_id IS NULL OR p_lock_token IS NULL OR
     p_latest_user_message_id IS NULL OR p_ticket_version IS NULL THEN
@@ -48,7 +50,7 @@ BEGIN
       'チャットが使えない','送信できない','保存できない','画面が開かない','表示されない') OR
     EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=p_ticket_id) OR
     EXISTS(SELECT 1 FROM public.support_messages m
-      WHERE m.ticket_id=p_ticket_id AND m.sender_type<>'user') OR
+      WHERE m.ticket_id=p_ticket_id AND m.sender_type='admin') OR
     EXISTS(SELECT 1 FROM public.support_work_logs w
       WHERE w.ticket_id=p_ticket_id AND w.event_type='automation_clarification_sent') THEN
     RAISE EXCEPTION 'clarification not safe for this ticket' USING ERRCODE='P0001';
@@ -59,7 +61,9 @@ BEGIN
   IF NOT FOUND OR v_first_user.id IS DISTINCT FROM p_latest_user_message_id OR
     v_first_user.body NOT IN ('使えない','動かない','エラー','ログインできない',
       'チャットが使えない','送信できない','保存できない','画面が開かない','表示されない') OR
-    (SELECT count(*) FROM public.support_messages m WHERE m.ticket_id=p_ticket_id)<>1 THEN
+    (SELECT count(*) FROM public.support_messages m WHERE m.ticket_id=p_ticket_id)<>2 OR
+    (SELECT count(*) FROM public.support_messages m WHERE m.ticket_id=p_ticket_id
+      AND m.sender_type='system' AND m.body=v_ack)<>1 THEN
     RAISE EXCEPTION 'clarification needs more investigation' USING ERRCODE='P0001';
   END IF;
   INSERT INTO public.support_messages(ticket_id,sender_type,sender_email,body,client_request_id)

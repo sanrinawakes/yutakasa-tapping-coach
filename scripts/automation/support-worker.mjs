@@ -10,6 +10,7 @@ const GENERIC_TECHNICAL_REPORTS = new Set([
   "使えない", "動かない", "エラー", "ログインできない", "チャットが使えない",
   "送信できない", "保存できない", "画面が開かない", "表示されない",
 ]);
+const INITIAL_SUPPORT_ACK = "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_API_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_BYTES = 8 * 1024 * 1024;
@@ -124,7 +125,11 @@ export function planTicket(entry, { ignorePriorEscalation = false,
   const attachmentFree = entry.ticket.has_attachments === false ||
     (entry.ticket.has_attachments === undefined && entry.messages.every((message) =>
       Array.isArray(message.attachments) && message.attachments.length === 0));
-  if (clarificationEnabled && attachmentFree && entry.messages.length === 1 &&
+  const firstReportOnly = entry.messages.length === 2 &&
+    entry.messages.filter((message) => message.sender_type === "user").length === 1 &&
+    entry.messages.filter((message) => message.sender_type === "system" &&
+      message.body === INITIAL_SUPPORT_ACK).length === 1;
+  if (clarificationEnabled && attachmentFree && firstReportOnly &&
       GENERIC_TECHNICAL_REPORTS.has(entry.ticket.subject) &&
       GENERIC_TECHNICAL_REPORTS.has(latest.body) &&
       !entry.work_logs.some((log) => log.event_type === "automation_clarification_sent")) {

@@ -183,21 +183,25 @@ describe("support automation leases", () => {
 
   it("uses an atomic latest-message check for a reviewed draft and does not resend on retry", async () => {
     const latestId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
+    const workId = "a1fc220d-19a8-447a-a19d-feac919af642";
     const rpc = vi.fn().mockResolvedValue({data:[{message_id:ticketId,created:false}],error:null});
     const from = vi.fn();
     getSupabaseMock.mockReturnValue({rpc,from} as never);
     await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
       clientRequestId:"74e6508f-c0ff-4689-ab68-dac8fe324ac9",
-      expectedLatestUserMessageId:latestId,resolve:false}))
+      expectedLatestUserMessageId:latestId,draftWorkId:workId,resolve:false}))
       .resolves.toEqual({message_id:ticketId,created:false});
     expect(rpc).toHaveBeenCalledWith("append_support_admin_message_checked",{
       p_ticket_id:ticketId,p_body:"現在の表示を教えてください。",
       p_client_request_id:"74e6508f-c0ff-4689-ab68-dac8fe324ac9",
-      p_resolve:false,p_expected_latest_user_message_id:latestId,
+      p_resolve:false,p_expected_latest_user_message_id:latestId,p_work_id:workId,
     });
     expect(from).not.toHaveBeenCalled();
     await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
-      expectedLatestUserMessageId:latestId,resolve:true})).rejects.toThrow();
+      expectedLatestUserMessageId:latestId,resolve:false})).rejects.toThrow();
+    expect(rpc).toHaveBeenCalledTimes(1);
+    await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
+      expectedLatestUserMessageId:latestId,draftWorkId:workId,resolve:true})).rejects.toThrow();
   });
 
   it("asks a fixed in-app clarification through the guarded RPC without email",async()=>{

@@ -608,9 +608,9 @@ export async function getAdminSupportTicket(
   ]);
   if (logError) throw logError;
 
-  const latestUser = [...messages].reverse().find(
-    (message) => message.sender_type === "user"
-  );
+  const latestUser = messages.filter((message) => message.sender_type === "user")
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+      right.id.localeCompare(left.id))[0];
   let replyDraft: {
     work_id: string;
     latest_user_message_id: string;
@@ -619,12 +619,14 @@ export async function getAdminSupportTicket(
     created_at: string;
   } | null = null;
   if (latestUser && ticket.automation_status === "manual_review" &&
+      ticket.status === "in_progress" &&
       ticket.category === "technical" && !ticket.decision_required) {
     const { data: draft, error: draftError } = await getSupabase()
       .from("yutakasa_ticket_reply_drafts")
       .select("work_id,latest_user_message_id,pr_number,body,created_at")
       .eq("ticket_id", ticketId)
       .eq("latest_user_message_id", latestUser.id)
+      .is("used_message_id", null)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -649,10 +651,14 @@ export async function appendAdminSupportMessage(params: {
   clientRequestId?: string;
   resolve?: boolean;
   expectedLatestUserMessageId?: string;
+  draftWorkId?: string;
 }) {
   const body = normalizeSupportText(params.body, MAX_SUPPORT_MESSAGE_LENGTH);
   const clientRequestId = params.clientRequestId || randomUUID();
-  const checked = Boolean(params.expectedLatestUserMessageId);
+  const checked = Boolean(params.expectedLatestUserMessageId && params.draftWorkId);
+  if (Boolean(params.expectedLatestUserMessageId) !== Boolean(params.draftWorkId)) {
+    throw new SupportRequestError("返信案の指定が正しくありません。", 400);
+  }
   if (checked && params.resolve) {
     throw new SupportRequestError("確認待ちの返信案で対応完了にはできません。", 400);
   }
@@ -663,7 +669,8 @@ export async function appendAdminSupportMessage(params: {
       p_body: body,
       p_client_request_id: clientRequestId,
       p_resolve: Boolean(params.resolve),
-      ...(checked ? { p_expected_latest_user_message_id: params.expectedLatestUserMessageId } : {}),
+      ...(checked ? { p_expected_latest_user_message_id: params.expectedLatestUserMessageId,
+        p_work_id: params.draftWorkId } : {}),
     }
   );
   if (checked && (error?.code === "P0001" || error?.code === "23505")) {
