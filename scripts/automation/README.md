@@ -87,3 +87,22 @@ non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report
 publisher. Missing credentials, missing evidence, unsupported file types, or
 failed Drive operations must remain action-required.
+
+`drive-intake-ledger.sql` and `drive-intake-ledger.mjs` provide that dormant
+per-file claim. The key is an opaque Drive file ID plus its modified time;
+when a Drive version is available it is recorded and must match on repeat
+claims. A changed version at an unchanged modified time fails closed. One
+worker gets a two-minute lease and UUID claim token. A second worker sees
+`busy`. The owner must renew its lease before each external action and mark
+`processed` only after all required effects are confirmed. If the worker
+crashes or the result of an external action is unclear, the claim becomes
+`needs_review`; later versions of that file remain blocked until a person
+reconciles the outcome. No automatic retry can process the file twice. Older
+versions return `stale`. The table stores no filename, file content, customer
+email, or raw error text. This ledger has no scheduled entry point, is not
+deployed to the production database, and has not been connected to OAuth,
+content retrieval, PDF publication, or customer notification.
+Apply only `drive-intake-ledger.sql` after a separate production rollout
+decision. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
+synthetic IDs; do not run it on production. The test fixture rolls back its
+rows so repeated local runs remain independent.
