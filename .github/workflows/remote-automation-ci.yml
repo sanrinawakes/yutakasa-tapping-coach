@@ -48,6 +48,8 @@ jobs:
         run: npm run typecheck
       - name: Application tests
         run: npm test -- --maxWorkers=2
+      - name: Install Japanese PDF renderer
+        run: sudo apt-get update && sudo apt-get install -y python3-reportlab fonts-ipafont-gothic
       - name: Monitor tests
         run: node --test scripts/automation/*.nodecheck.mjs
       - name: Atomic support repair bridge database tests

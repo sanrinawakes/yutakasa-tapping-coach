@@ -48,3 +48,42 @@ Automatic merge remains independently gated by `YUTAKASA_AUTO_MERGE_ENABLED`. Th
 No automatic customer reply is installed for technical repair tickets. The generic production chat smoke and three healthy observations do not prove that a customer's particular symptom has cleared. Once the release is verified, `ticket-repair-reconcile.yml` moves the linked work and ticket to `manual_review` with a fixed audit log; a release still pending after 24 hours follows the same path. The job runs every ten minutes and processes up to 100 due work items per run, failing visibly when a full page remains. A future customer reply requires ticket-specific reproduction and post-fix proof, an owner-approved message, and a separate idempotent delivery path. The old support `reply` API returns HTTP 409.
 
 The built-in GitHub Actions `GITHUB_TOKEN` cannot be used by Railway, and using it to create a PR would suppress the required PR workflow triggers. Retain a scoped dispatch token for Railway and a scoped repair token or GitHub App installation token for PR creation.
+
+## Drive content and result PDF handoff (inactive)
+
+`drive-intake-content.mjs` can fetch one unchanged, supported file from the
+existing `受付` folder after checking its parent, modified time, size, and
+checksum. `drive-result.mjs` renders a Japanese PDF from a structured release
+record and uploads it to the existing `処理結果` folder. A durable exclusive
+lease and a separate release-evidence check are required callbacks. Apply
+`drive-result-ledger.sql` before activation: an event ID has one durable
+publication reservation, and a timed-out POST leaves `posting` or `uncertain`
+state. Later runs may confirm an existing Drive file but cannot issue another
+POST for that event. The upload uses an event-ID-only stable filename, checks
+the reservation before writing, and confirms the file's parent, name, size,
+and hashes through Drive readback. These
+modules have no scheduled or CLI entry point and do not run in the current
+monitor. A new Drive item still raises `drive_intake_items`; it is not marked
+processed or healthy.
+
+The current `GOOGLE_DRIVE_API_KEY` is for public metadata only. Content and
+upload require OAuth on the actual `181wyc@gmail.com` Drive account:
+`GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, and
+`GOOGLE_DRIVE_REFRESH_TOKEN` must be stored as monitor-service-only Railway
+secrets after the account holder authorizes offline access. Existing and
+future, not-yet-selected My Drive files require a grant covering continuing
+access; a `drive.file` grant for files picked once does not establish that
+coverage. The `https://www.googleapis.com/auth/drive` scope is restricted,
+so review Google's production OAuth requirements with the account owner
+before issuing a long-lived token. An External/Testing consent screen yields
+a refresh token that expires after seven days. Do not alter folder sharing
+or place OAuth credentials in the API-key variable.
+
+Before enabling this path, bind `assertEvidence` to verified release records
+and `assertLease` to the current monitor owner; apply and verify the
+publication ledger, and add a durable per-file intake
+claim and terminal state so a Drive file is not processed twice. Run a
+non-customer synthetic file through the real OAuth account, confirm Drive
+readback and three monitor observations, and then enable the verified report
+publisher. Missing credentials, missing evidence, unsupported file types, or
+failed Drive operations must remain action-required.
