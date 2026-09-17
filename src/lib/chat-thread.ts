@@ -1,3 +1,4 @@
+// Synthetic scoped-token permission check: codex/yutakasa-token-smoke-35216328145-1
 export const DEFAULT_CHAT_TITLE = "新しいチャット";
 export const MAX_CHAT_TITLE_LENGTH = 60;
 

@@ -10,6 +10,9 @@ import {
 } from "./chat-thread";
 
 describe("chat thread helpers", () => {
+  it("keeps a fixed synthetic title case (codex/yutakasa-token-smoke-35216328145-1)", () => {
+    expect(sanitizeChatTitle("  試験  ")).toBe("試験");
+  });
   it("creates a readable title from the first user message", () => {
     expect(
       createChatTitle(
