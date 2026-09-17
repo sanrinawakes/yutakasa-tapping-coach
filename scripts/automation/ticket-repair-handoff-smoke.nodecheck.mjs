@@ -32,11 +32,15 @@ function env(overrides = {}) {
   };
 }
 
-function fixture({ changeAfterHandoff = false, failTicketDelete = false } = {}) {
+function fixture({ changeAfterHandoff = false, claimJobBeforeCleanup = false,
+  changeAccountBeforeCleanup = false, failCleanup = false,
+  cleanupRpcMissing = false, supportCreateFails = false,
+  detailFails = false } = {}) {
   const state = { account: null, ticket: null, messages: [], logs: [], job: null,
     calls: [], deletes: [], providerCalls: [] };
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
   const supportTicketImpl = async (_env, _fetch, email, token) => {
+    if (supportCreateFails) throw new Error("synthetic support request failed");
     assert.match(token, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
     state.ticket = { id: TICKET_ID, user_email: email, category: "technical",
       subject: TEST_SUPPORT_SUBJECT, client_request_id: CLIENT_ID, status: "open",
@@ -60,6 +64,7 @@ function fixture({ changeAfterHandoff = false, failTicketDelete = false } = {}) 
     if (url.host === "yutakasa-tapping-coach.vercel.app") {
       assert.equal(url.pathname, "/api/internal/support-automation");
       if (init.method === "GET") {
+        if (detailFails) return response({ error: "detail unavailable" }, 500);
         assert.equal(url.searchParams.get("ticketId"), TICKET_ID);
         assert.equal(init.headers["x-automation-lock-token"], state.ticket.automation_lock_token);
         return response({ ticket: { id: TICKET_ID,
@@ -105,26 +110,40 @@ function fixture({ changeAfterHandoff = false, failTicketDelete = false } = {}) 
     const search = url.searchParams;
     if (init.method === "POST" && table === "subscribers") {
       const body = JSON.parse(init.body);
-      state.account = { id: ACCOUNT_ID, ...body };
+      state.account = { id: ACCOUNT_ID, subscription_started_at: null,
+        subscription_last_event_at: null, updated_at: BASE_TIME, ...body };
       return response([state.account], 201);
     }
     if (init.method === "POST" && table === "rpc/list_due_yutakasa_ticket_repair_jobs") {
       return response(state.job ? [{ work_id: state.job.work_id }] : []);
     }
-    if (init.method === "DELETE" && table === "support_tickets") {
-      if (failTicketDelete) return response([]);
-      assert.equal(search.get("updated_at"), `eq.${state.ticket.updated_at}`);
-      assert.equal(search.get("automation_status"), `eq.${state.ticket.automation_status}`);
-      state.deletes.push("ticket");
-      const deleted = state.ticket;
+    if (init.method === "POST" && table === "rpc/cleanup_yutakasa_ticket_handoff_smoke") {
+      const body = JSON.parse(init.body);
+      if (body.p_run_id === null) {
+        return cleanupRpcMissing ? response({ code: "PGRST202" }, 404)
+          : response({ code: "22023" }, 400);
+      }
+      assert.equal(body.p_account_id, state.account?.id ?? null);
+      assert.equal(body.p_account_updated_at, state.account?.updated_at ?? null);
+      assert.equal(body.p_ticket_id, state.ticket?.id ?? null);
+      assert.equal(body.p_ticket_updated_at, state.ticket?.updated_at ?? null);
+      assert.equal(body.p_work_id, state.job?.work_id ?? body.p_work_id);
+      if (claimJobBeforeCleanup && state.job) {
+        state.job.status = "investigating";
+        state.job.attempt_count = 1;
+        state.job.claimed_run_id = 123;
+      }
+      if (changeAccountBeforeCleanup && state.account) {
+        state.account.first_payment_date = "2026-09-17T08:30:03.000Z";
+      }
+      if (failCleanup || state.job?.status === "investigating" ||
+          state.account?.first_payment_date !== null) return response({ code: "P0001" }, 400);
+      const ticketDeleted = Boolean(state.ticket);
+      if (ticketDeleted) state.deletes.push("ticket");
       state.ticket = null; state.messages = []; state.logs = []; state.job = null;
-      return response([{ id: deleted.id }]);
-    }
-    if (init.method === "DELETE" && table === "subscribers") {
       state.deletes.push("subscriber");
-      const deleted = state.account;
       state.account = null;
-      return response([{ id: deleted.id }]);
+      return response([{ ticket_deleted: ticketDeleted, subscriber_deleted: true }]);
     }
     if (init.method !== "GET") throw new Error(`unexpected DB method: ${init.method}`);
     if (table === "subscribers") {
@@ -179,6 +198,15 @@ test("production SHA mismatch stops before synthetic writes", async () => {
   assert.equal(f.state.calls.length, 0);
 });
 
+test("missing cleanup RPC stops before synthetic account creation", async () => {
+  const f = fixture({ cleanupRpcMissing: true });
+  await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
+    { code: "handoff_smoke_cleanup_preflight_failed" });
+  assert.equal(f.state.account, null);
+  assert.equal(f.state.ticket, null);
+  assert.deepEqual(f.state.calls.map((call) => call.method), ["POST"]);
+});
+
 test("claim and handoff create one queued job, then remove only the synthetic rows", async () => {
   const f = fixture();
   const result = await runTicketRepairHandoffSmoke({ env: env(), ...f });
@@ -201,11 +229,44 @@ test("an operator message blocks cleanup before any deletion", async () => {
   assert.ok(f.state.account);
 });
 
-test("an unconfirmed ticket delete never reaches subscriber deletion", async () => {
-  const f = fixture({ failTicketDelete: true });
+test("an unconfirmed atomic cleanup preserves ticket and subscriber", async () => {
+  const f = fixture({ failCleanup: true });
   await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
     { code: "handoff_smoke_cleanup_incomplete" });
   assert.deepEqual(f.state.deletes, []);
   assert.ok(f.state.ticket);
   assert.ok(f.state.account);
+});
+
+test("a repair job claimed between read and cleanup is never cascaded", async () => {
+  const f = fixture({ claimJobBeforeCleanup: true });
+  await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
+    { code: "handoff_smoke_cleanup_incomplete" });
+  assert.deepEqual(f.state.deletes, []);
+  assert.equal(f.state.job.status, "investigating");
+});
+
+test("a payment marker changed between read and cleanup protects the subscriber", async () => {
+  const f = fixture({ changeAccountBeforeCleanup: true });
+  await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
+    { code: "handoff_smoke_cleanup_incomplete" });
+  assert.deepEqual(f.state.deletes, []);
+  assert.ok(f.state.account.first_payment_date);
+});
+
+test("a failed support creation cleans up its account-only partial state", async () => {
+  const f = fixture({ supportCreateFails: true });
+  await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
+    /synthetic support request failed/u);
+  assert.deepEqual(f.state.deletes, ["subscriber"]);
+  assert.equal(f.state.account, null);
+});
+
+test("a failed claimed-detail read cleans up an investigating ticket", async () => {
+  const f = fixture({ detailFails: true });
+  await assert.rejects(() => runTicketRepairHandoffSmoke({ env: env(), ...f }),
+    { code: "handoff_smoke_support_http_500" });
+  assert.deepEqual(f.state.deletes, ["ticket", "subscriber"]);
+  assert.equal(f.state.ticket, null);
+  assert.equal(f.state.account, null);
 });

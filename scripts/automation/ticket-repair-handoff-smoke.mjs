@@ -83,6 +83,28 @@ function sessionToken(secret, email) {
   return `${content}.${createHmac("sha256", secret).update(content).digest("base64url")}`;
 }
 
+async function verifyCleanupRpc(env, fetchImpl) {
+  // This deliberately invalid call must fail before any write. It proves the
+  // deployed PostgREST schema exposes the cleanup RPC to service_role.
+  const url = new URL("/rest/v1/rpc/cleanup_yutakasa_ticket_handoff_smoke", env.SUPABASE_URL);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ p_run_id: null, p_account_id: null,
+      p_account_updated_at: null, p_ticket_id: null,
+      p_ticket_updated_at: null, p_work_id: null, p_lock_token: null }),
+    redirect: "error", signal: AbortSignal.timeout(15_000),
+  }).catch(() => fail("handoff_smoke_cleanup_preflight_failed"));
+  if (response.status !== 400) fail("handoff_smoke_cleanup_preflight_failed");
+  const raw = await response.text().catch(() => fail("handoff_smoke_cleanup_preflight_failed"));
+  if (Buffer.byteLength(raw) > 4_096) fail("handoff_smoke_cleanup_preflight_failed");
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { fail("handoff_smoke_cleanup_preflight_failed"); }
+  if (parsed?.code !== "22023") fail("handoff_smoke_cleanup_preflight_failed");
+}
+
 async function preflight(env, fetchImpl) {
   const checks = [
     ["subscribers", { email: "like.yutakasa-auto-smoke*", select: "id", limit: "1" }],
@@ -165,16 +187,21 @@ async function supportEvidence(env, fetchImpl, ticketId, email, workId, lockToke
 async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken) {
   const accounts = await rows(env, fetchImpl, "subscribers", {
     email: `eq.${email}`,
-    select: "id,email,status,subscription_status,first_payment_date,myasp_data", limit: "2",
+    select: "id,email,name,status,subscription_status,first_payment_date,subscription_started_at,subscription_last_event_at,myasp_data,updated_at", limit: "2",
   });
   if (accounts.length > 1) fail("handoff_smoke_account_ambiguous");
   const account = accounts[0] ?? null;
   if (account && (!UUID.test(account.id ?? "") || account.email !== email ||
+      account.name !== "System monitor test identity (no customer, no payment)" ||
       account.status !== "active" || account.subscription_status !== "active" ||
-      account.first_payment_date !== null ||
+      account.first_payment_date !== null || account.subscription_started_at !== null ||
+      account.subscription_last_event_at !== null ||
       account.myasp_data?.automation_test_identity !== MARKER ||
       account.myasp_data?.source !== "system_monitor_no_payment" ||
-      account.myasp_data?.smoke_run_id !== runId)) fail("handoff_smoke_account_changed");
+      account.myasp_data?.smoke_run_id !== runId ||
+      !Number.isFinite(Date.parse(account.updated_at ?? "")))) {
+    fail("handoff_smoke_account_changed");
+  }
   if ((await rows(env, fetchImpl, "chat_threads", {
     user_email: `eq.${email}`, select: "id", limit: "1",
   })).length !== 0 || (await rows(env, fetchImpl, "otp_codes", {
@@ -182,40 +209,35 @@ async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken
   })).length !== 0) fail("handoff_smoke_unexpected_identity_data");
 
   const existingTicket = await ticketForEmail(env, fetchImpl, email);
+  let current = null;
   if (existingTicket) {
     if (!account || !UUID.test(existingTicket.id) ||
         (ticketId && existingTicket.id !== ticketId)) fail("handoff_smoke_ticket_ambiguous");
     // Re-read exact messages, work logs and job immediately before a CAS delete.
     // Any operator change or claim leaves the ticket in place for investigation.
     const evidence = await supportEvidence(env, fetchImpl, existingTicket.id, email, workId, lockToken);
-    const current = await ticketForEmail(env, fetchImpl, email);
+    current = await ticketForEmail(env, fetchImpl, email);
     if (!current || current.id !== existingTicket.id ||
         current.updated_at !== evidence.ticket.updated_at ||
         current.automation_status !== evidence.ticket.automation_status) {
       fail("handoff_smoke_ticket_changed");
     }
-    const deleted = await rows(env, fetchImpl, "support_tickets", {
-      id: `eq.${current.id}`, user_email: `eq.${email}`,
-      client_request_id: `eq.${current.client_request_id}`,
-      status: `eq.${current.status}`, automation_status: `eq.${current.automation_status}`,
-      decision_required: "eq.false", updated_at: `eq.${current.updated_at}`,
-      automation_lock_token: current.automation_lock_token
-        ? `eq.${current.automation_lock_token}` : "is.null",
-      select: "id",
-    }, "DELETE");
-    if (deleted.length !== 1 || deleted[0].id !== current.id) {
-      fail("handoff_smoke_ticket_delete_unconfirmed");
-    }
-    ticketId = current.id;
   }
-  if (account) {
-    const deleted = await rows(env, fetchImpl, "subscribers", {
-      id: `eq.${account.id}`, email: `eq.${email}`,
-      "myasp_data->>smoke_run_id": `eq.${runId}`, select: "id",
-    }, "DELETE");
-    if (deleted.length !== 1 || deleted[0].id !== account.id) {
-      fail("handoff_smoke_account_delete_unconfirmed");
-    }
+  // One database transaction locks job -> ticket -> subscriber, validates
+  // exact synthetic contents and deletes both rows. A concurrent AI claim
+  // can change the job without touching ticket.updated_at, so HTTP DELETE
+  // with a ticket timestamp alone would be unsafe here.
+  const cleaned = await rows(env, fetchImpl, "rpc/cleanup_yutakasa_ticket_handoff_smoke",
+    {}, "POST", {
+      p_run_id: runId, p_account_id: account?.id ?? null,
+      p_account_updated_at: account?.updated_at ?? null,
+      p_ticket_id: current?.id ?? null,
+      p_ticket_updated_at: current?.updated_at ?? null,
+      p_work_id: workId, p_lock_token: lockToken,
+    });
+  if (cleaned.length !== 1 || cleaned[0].ticket_deleted !== Boolean(current) ||
+      cleaned[0].subscriber_deleted !== Boolean(account)) {
+    fail("handoff_smoke_cleanup_receipt_invalid");
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -252,6 +274,7 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
   if (before?.ready !== true || before.mainSha !== env.GITHUB_SHA) {
     fail("handoff_smoke_production_not_at_main");
   }
+  await verifyCleanupRpc(env, fetchImpl);
   await preflight(env, fetchImpl);
   const runId = randomUUID();
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
@@ -262,7 +285,7 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
   let completed = false;
   try {
     const account = await rows(env, fetchImpl, "subscribers", {
-      select: "id,email,status,subscription_status,first_payment_date,myasp_data",
+      select: "id,email,name,status,subscription_status,first_payment_date,subscription_started_at,subscription_last_event_at,myasp_data,updated_at",
     }, "POST", {
       email, name: "System monitor test identity (no customer, no payment)",
       status: "active", subscription_status: "active", first_payment_date: null,

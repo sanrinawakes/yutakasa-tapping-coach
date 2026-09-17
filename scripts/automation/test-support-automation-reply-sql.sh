@@ -14,7 +14,8 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-for file in scripts/support-migration-harness.sql supabase-migration-support.sql \
+for file in scripts/support-migration-harness.sql supabase-migration-license.sql \
+  supabase-migration-support.sql \
   supabase-migration-support-automation-claim.sql \
   scripts/automation/repair-release-ledger.sql \
   scripts/automation/repair-release-ledger.sqlcheck.sql \
@@ -38,6 +39,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   scripts/automation/ticket-reply-draft.sqlcheck.sql \
   scripts/automation/ticket-clarification.sql \
   scripts/automation/ticket-clarification.sqlcheck.sql \
+  scripts/automation/ticket-repair-handoff-smoke-cleanup.sql \
+  scripts/automation/ticket-repair-handoff-smoke-cleanup.sqlcheck.sql \
   scripts/automation/ticket-table-grants-remediation.sql \
   scripts/automation/ticket-table-grants-remediation.sql; do
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"
