@@ -155,7 +155,15 @@ export async function readRegressionTriggerHead({ runId, token,
       run?.path !== ".github/workflows/ticket-repair-regression-evidence.yml" ||
       run?.head_branch !== "main" || run?.repository?.full_name !== REPO ||
       !SHA.test(run?.head_sha ?? "") ||
-      listing?.total_count !== 1 || !Array.isArray(listing?.artifacts) ||
+      !Array.isArray(listing?.artifacts) ||
+      (listing?.total_count === 0 && listing.artifacts.length !== 0)) {
+    fail("regression_trigger_untrusted");
+  }
+  // The preparation job also succeeds for ordinary PRs, while its comparison
+  // job is skipped. Such runs have no evidence artifact and must not be
+  // interpreted as a failed support repair or as merge authorization.
+  if (listing.total_count === 0) return null;
+  if (listing.total_count !== 1 ||
       listing.artifacts.length !== 1 || listing.artifacts[0]?.name !== ARTIFACT_NAME ||
       listing.artifacts[0]?.expired !== false ||
       listing.artifacts[0]?.workflow_run?.id !== runId ||

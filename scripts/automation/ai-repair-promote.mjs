@@ -380,6 +380,7 @@ export async function promoteAiRepair({
   const runId=env.REPAIR_REGRESSION_RUN_ID
     ? Number(env.REPAIR_REGRESSION_RUN_ID):null;
   const trigger=runId===null?null:await triggerImpl({runId,token:env.GH_TOKEN,fetchImpl});
+  if (runId !== null && trigger === null) return {status:"unrelated_regression_run"};
   if(trigger&&trigger.baseSha!==env.REPAIR_TRIGGER_SHA)fail("regression_trigger_main_changed");
   const sha=trigger?.headSha??env.REPAIR_TRIGGER_SHA;
   const rehearsal=env.YUTAKASA_AUTO_MERGE_ENABLED!=="true"&&
