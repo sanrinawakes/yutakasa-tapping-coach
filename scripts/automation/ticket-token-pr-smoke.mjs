@@ -79,8 +79,9 @@ function statePath(env) {
 function stateFields(state) {
   if (!state || typeof state !== "object" || Array.isArray(state) ||
       Object.keys(state).sort().join(",") !==
-        "baseSha,body,branch,headSha,prNumber,repository,title" ||
+        "baseSha,body,branch,createAttempted,headSha,prNumber,repository,title" ||
       state.repository !== REPO || !BRANCH.test(state.branch ?? "") ||
+      typeof state.createAttempted !== "boolean" ||
       !SHA.test(state.baseSha ?? "") ||
       (state.headSha !== null && !SHA.test(state.headSha ?? "")) ||
       (state.prNumber !== null && (!Number.isSafeInteger(state.prNumber) || state.prNumber < 1)) ||
@@ -150,6 +151,15 @@ async function findPr(env, fetchImpl, state) {
       (state.prNumber && pr.number !== state.prNumber) ||
       pr.merged_at !== null) fail("smoke_pr_identity_changed");
   return pr;
+}
+
+async function findPrBounded(env, fetchImpl, state, sleep) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const pr = await findPr(env, fetchImpl, state);
+    if (pr) return pr;
+    if (attempt < 3) await sleep(5_000);
+  }
+  return null;
 }
 
 export function inspectChecks({ runs, status, branch, sha }) {
@@ -231,7 +241,7 @@ export async function publishTokenPrSmoke({ env = process.env,
   const plan = checkRun(env, baseSha, git(["status", "--porcelain"], { cwd: root }) === "");
   verifyMainProtection(await api(env, fetchImpl, "/rules/branches/main"));
   const file = statePath(env);
-  const state = { repository: REPO, branch: plan.branch, baseSha,
+  const state = { repository: REPO, branch: plan.branch, baseSha, createAttempted: false,
     headSha: null, prNumber: null, title: plan.title, body: plan.body };
   writeState(file, state, true);
   const temp = fs.mkdtempSync(path.join(path.dirname(file), "yutakasa-token-smoke-"));
@@ -267,12 +277,14 @@ export async function publishTokenPrSmoke({ env = process.env,
       `HEAD:refs/heads/${state.branch}`], { cwd: root,
       env: { ...checkedEnvironment(env), GIT_ASKPASS: askpass } });
     // A failed create may have succeeded remotely. Never retry blindly.
+    state.createAttempted = true;
+    writeState(file, state);
     try {
       command("gh", ["pr", "create", "--repo", REPO, "--draft", "--base", "main",
         "--head", state.branch, "--title", state.title, "--body-file", bodyFile],
       { cwd: root, env: checkedEnvironment(env) });
     } catch { /* resolve the one possible remote result by branch identity */ }
-    const pr = await findPr(env, fetchImpl, state);
+    const pr = await findPrBounded(env, fetchImpl, state, sleep);
     if (!pr || pr.state !== "open" || pr.draft !== true) fail("smoke_draft_pr_unconfirmed");
     state.prNumber = pr.number;
     writeState(file, state);
@@ -286,7 +298,8 @@ export async function publishTokenPrSmoke({ env = process.env,
 }
 
 export async function cleanupTokenPrSmoke({ env = process.env,
-  fetchImpl = globalThis.fetch, deleteRef = deleteUnchangedBranch } = {}) {
+  fetchImpl = globalThis.fetch, deleteRef = deleteUnchangedBranch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   // Cleanup is allowed even if the one-shot variable was reset mid-run.
   if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
       env.GITHUB_REPOSITORY !== REPO || env.GITHUB_REF !== "refs/heads/main" ||
@@ -301,7 +314,11 @@ export async function cleanupTokenPrSmoke({ env = process.env,
   }
   const expectedBranch = `codex/yutakasa-token-smoke-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`;
   if (state.branch !== expectedBranch) fail("smoke_cleanup_identity_mismatch");
-  const pr = await findPr(env, fetchImpl, state);
+  const pr = state.createAttempted ?
+    await findPrBounded(env, fetchImpl, state, sleep) : await findPr(env, fetchImpl, state);
+  if (!pr && (state.createAttempted || state.prNumber !== null)) {
+    fail("smoke_pr_creation_uncertain");
+  }
   if (pr) {
     if (pr.state === "open") {
       if (pr.draft !== true) fail("smoke_pr_not_draft");

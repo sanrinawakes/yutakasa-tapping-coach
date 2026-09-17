@@ -25,8 +25,11 @@ The final `always()` step resolves only the PR with that exact branch, title,
 body, base, and recorded head SHA. It closes an open draft, atomically deletes
 the branch with a Git force-with-lease requiring that exact head SHA, and reads
 back the closed PR and absent branch.
-A failed or uncertain create is looked up by branch rather than retried. If
-someone changes the PR or branch, cleanup fails without deleting it; an
+A failed or uncertain create is looked up by branch rather than retried.
+Both publication and cleanup make four bounded lookups. If creation was
+attempted but no exact PR appears, cleanup fails and leaves the branch for
+investigation. If someone changes the PR or branch, cleanup fails without
+deleting it; an
 operator must investigate the leftover. A hard runner termination before the
 final step can also leave the branch or PR and requires an explicit cleanup.
 

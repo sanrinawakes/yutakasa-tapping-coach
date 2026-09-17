@@ -73,7 +73,8 @@ function stateFile() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "yutakasa-token-smoke-check-"));
   const file = path.join(directory, "state.json");
   fs.writeFileSync(file, `${JSON.stringify({ repository: repo, branch,
-    baseSha, headSha, prNumber: 99, title, body })}\n`, { mode: 0o600 });
+    baseSha, createAttempted: true, headSha, prNumber: 99, title, body })}\n`,
+  { mode: 0o600 });
   return { directory, file };
 }
 
@@ -148,5 +149,24 @@ test("missing state is a no-op even when the scoped token is unavailable", async
       SMOKE_STATE_PATH: path.join(directory, "missing.json") },
     fetchImpl: async () => assert.fail("no remote call") });
     assert.deepEqual(result, { ok: true, status: "nothing_created" });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("uncertain PR creation leaves the branch for manual inspection", async () => {
+  const { directory, file } = stateFile();
+  let lookups = 0;
+  const fakeFetch = async (url, init) => {
+    assert.equal(new URL(url).pathname.endsWith("/pulls"), true);
+    assert.equal(init.method, "GET");
+    lookups += 1;
+    return new Response("[]", { status: 200 });
+  };
+  try {
+    await assert.rejects(() => cleanupTokenPrSmoke({
+      env: { ...env, SMOKE_STATE_PATH: file }, fetchImpl: fakeFetch,
+      sleep: async () => {}, deleteRef: async () => assert.fail("must not delete"),
+    }), (error) => error instanceof TokenPrSmokeError &&
+      error.code === "smoke_pr_creation_uncertain");
+    assert.equal(lookups, 4);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
