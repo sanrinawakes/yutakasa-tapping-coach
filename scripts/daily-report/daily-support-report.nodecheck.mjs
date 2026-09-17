@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   buildDailyReport,
   collectMonitorSummary,
+  collectRepairProgress,
   DailyReportError,
   reportWindow,
   reportingDate,
@@ -19,6 +20,7 @@ const MESSAGE_ID = "22222222-2222-4222-8222-222222222222";
 const LOG_ID = "33333333-3333-4333-8333-333333333333";
 const RESEND_ID = "44444444-4444-4444-8444-444444444444";
 const RESEND_ID_2 = "55555555-5555-4555-8555-555555555555";
+const REPAIR_SHA = "a".repeat(40);
 const env = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "a-service-role-test-key-with-length",
@@ -61,6 +63,7 @@ function source() {
 }
 
 function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
+  repairReleases = [], repairStatus = 200, githubResponse,
   resendBehavior = async (_url, init) =>
   json({ id: resendIdFor(JSON.parse(init.body).to[0]) }),
   resendRetrieveBehavior,
@@ -80,6 +83,9 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
     requests.push({ url, init });
+    if (url.host === "api.github.com") {
+      return githubResponse ? githubResponse(url, init) : json({ message: "not configured" }, 503);
+    }
     if (url.host === "api.resend.com") {
       if (url.pathname === "/emails") return resendBehavior(url, init);
       if (resendRetrieveBehavior) return resendRetrieveBehavior(url, init);
@@ -130,6 +136,12 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
       const end = bounds.find((value) => value.startsWith("lt.")).slice(3);
       const filtered = monitorRuns.filter((row) => row.run_kind !== "recheck" && row.finished_at >= start && row.finished_at < end);
       return json(filtered.slice(Number(url.searchParams.get("offset")), Number(url.searchParams.get("offset")) + Number(url.searchParams.get("limit"))));
+    }
+    if (url.pathname === "/rest/v1/yutakasa_repair_releases") {
+      if (repairStatus !== 200) return json({ code: "not_available" }, repairStatus);
+      const offset = Number(url.searchParams.get("offset"));
+      const limit = Number(url.searchParams.get("limit"));
+      return json(repairReleases.slice(offset, offset + limit));
     }
     if (url.pathname === "/rest/v1/support_tickets") {
       if (url.searchParams.has("status")) {
@@ -462,6 +474,92 @@ test("known work events explain progress; unknown event types never leak raw tex
   assert.match(text, /利用者へ回答/);
   assert.equal(text.includes("PRIVATE LOG"), false);
   assert.equal(text.includes("PRIVATE METADATA"), false);
+});
+
+test("ticket repair states remain reportable after the ticket bridge migration", async () => {
+  const records = source();
+  records.tickets[0].automation_status = "awaiting_repair";
+  records.openTickets[0].automation_status = "awaiting_repair";
+  const client = testFetch({ records });
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  const email = JSON.parse(client.requests.find(({ url }) => url.pathname === "/emails").init.body).text;
+  assert.match(email, /自動処理:修正PR待ち/);
+  records.tickets[0].automation_status = "manual_review";
+  records.openTickets[0].automation_status = "manual_review";
+  assert.match(buildDailyReport("2026-09-16", records, NOW).text, /自動処理:運営確認待ち/);
+});
+
+test("repair report verifies exact GitHub head checks and private release ledger without customer content", async () => {
+  const release = { pr_number: 42, head_sha: REPAIR_SHA, merge_sha: null,
+    status: "pending_merge", created_at: "2026-09-16T02:00:00Z", merge_recorded_at: null,
+    deployment_id: null, healthy_count: 0, verified_at: null,
+    title: "PRIVATE CUSTOMER TITLE" };
+  const checks = ["source-repair-verify", "ai-repair-independent-review"].map((name, index) => ({
+    id: index + 1, name, head_sha: REPAIR_SHA, app: { slug: "github-actions" },
+    status: "completed", conclusion: "success", output: { title: "PRIVATE CHECK OUTPUT" },
+  }));
+  const client = testFetch({ repairReleases: [release], githubResponse: async (url) => {
+    if (url.pathname.endsWith("/pulls/42")) return json({ number: 42,
+      head: { sha: REPAIR_SHA, repo: { full_name: "sanrinawakes/yutakasa-tapping-coach" } },
+      base: { ref: "main" }, title: "PRIVATE CUSTOMER TITLE" });
+    if (url.pathname.endsWith("/check-runs")) return json({ total_count: 2, check_runs: checks });
+    if (url.pathname.endsWith("/status")) return json({ sha: REPAIR_SHA,
+      statuses: [{ context: "Vercel", state: "success", description: "Deployment has completed" }] });
+    throw new Error(`unexpected ${url}`);
+  } });
+  const progress = await collectRepairProgress({ supabaseUrl: env.SUPABASE_URL,
+    serviceKey: env.SUPABASE_SERVICE_ROLE_KEY }, reportWindow("2026-09-16"), client.fetchImpl);
+  assert.deepEqual(progress.entries.map((row) => row.ci), ["passed"]);
+  assert.equal(progress.createdCount, 1);
+  assert.equal(progress.mergedCount, 0);
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.repairProgressState, "observed");
+  const email = JSON.parse(client.requests.find(({ url }) => url.pathname === "/emails").init.body).text;
+  assert.match(email, /自動修正PR（専用台帳）: 前日登録1件、前日マージ記録0件、前日本番検証完了0件/);
+  assert.match(email, /PR #42 \| マージ待ち \| CI: 必須チェック成功/);
+  assert.equal(email.includes("PRIVATE CUSTOMER TITLE"), false);
+  assert.equal(email.includes("PRIVATE CHECK OUTPUT"), false);
+  assert.equal(client.requests.filter(({ url }) => url.host === "api.github.com").length, 6);
+});
+
+test("GitHub or release-ledger failure is reported as unverified without blocking the support email", async () => {
+  const release = { pr_number: 42, head_sha: REPAIR_SHA, merge_sha: null,
+    status: "pending_merge", created_at: "2026-09-16T02:00:00Z", merge_recorded_at: null,
+    deployment_id: null, healthy_count: 0, verified_at: null };
+  const githubDown = testFetch({ repairReleases: [release] });
+  const first = await runDailySupportReport({ env, now: NOW, fetchImpl: githubDown.fetchImpl });
+  assert.equal(first.ok, true);
+  const firstEmail = JSON.parse(githubDown.requests.find(({ url }) => url.pathname === "/emails").init.body).text;
+  assert.match(firstEmail, /PR #42 \| マージ待ち \| CI: CI未確認/);
+  const ledgerDown = testFetch({ repairStatus: 503 });
+  const second = await runDailySupportReport({ env, now: NOW, fetchImpl: ledgerDown.fetchImpl });
+  assert.equal(second.ok, true);
+  assert.equal(second.repairProgressState, "unavailable");
+  const secondEmail = JSON.parse(ledgerDown.requests.find(({ url }) => url.pathname === "/emails").init.body).text;
+  assert.match(secondEmail, /自動修正PR: 専用台帳を取得できません/);
+});
+
+test("only a ledger release with production observation evidence is counted as verified", async () => {
+  const release = { pr_number: 43, head_sha: REPAIR_SHA, merge_sha: "b".repeat(40),
+    status: "verified", created_at: "2026-09-15T02:00:00Z",
+    merge_recorded_at: "2026-09-16T02:00:00Z", deployment_id: "dpl_12345678",
+    healthy_count: 3, verified_at: "2026-09-16T03:00:00Z" };
+  const client = testFetch({ repairReleases: [release] });
+  const progress = await collectRepairProgress({ supabaseUrl: env.SUPABASE_URL,
+    serviceKey: env.SUPABASE_SERVICE_ROLE_KEY }, reportWindow("2026-09-16"), client.fetchImpl);
+  assert.equal(progress.mergedCount, 1);
+  assert.equal(progress.verifiedCount, 1);
+  assert.equal(progress.activeCount, 0);
+  assert.equal(progress.entries[0].ci, "unknown");
+  const report = buildDailyReport("2026-09-16", source(), NOW, { state: "missing" }, progress);
+  assert.match(report.text, /前日本番検証完了1件/);
+  assert.match(report.text, /PR #43 \| 本番検証済み \| CI: CI未確認/);
+  const malformed = testFetch({ repairReleases: [{ ...release, deployment_id: null }] });
+  const unverified = await collectRepairProgress({ supabaseUrl: env.SUPABASE_URL,
+    serviceKey: env.SUPABASE_SERVICE_ROLE_KEY }, reportWindow("2026-09-16"), malformed.fetchImpl);
+  assert.deepEqual(unverified, { state: "unavailable" });
 });
 
 test("the last closed day is sent immediately and one older missed day is recovered per run", async () => {

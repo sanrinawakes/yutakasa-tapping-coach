@@ -24,11 +24,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const CATEGORY = new Set(["technical", "login", "quality", "how_to", "feature", "billing", "other"]);
 const TICKET_STATUS = new Set(["open", "in_progress", "waiting_user", "resolved"]);
-const AUTOMATION_STATUS = new Set(["queued", "investigating", "blocked_decision", "completed", "failed"]);
+const AUTOMATION_STATUS = new Set(["queued", "investigating", "awaiting_repair", "manual_review", "blocked_decision", "completed", "failed"]);
 const MESSAGE_SENDER = new Set(["user", "admin", "system"]);
 const MONITOR_STATUS = new Set(["healthy", "action_required", "failed", "abandoned"]);
 const MONITOR_REASON = /^[A-Za-z0-9][A-Za-z0-9_]{0,127}$/u;
 const EXPECTED_MONITOR_SLOTS = 144;
+const REPAIR_STATUS = new Set(["pending_merge", "observing", "verified", "failed", "abandoned"]);
+const SHA = /^[a-f0-9]{40}$/u;
+const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]{8,160}$/u;
+const GITHUB_REPO = "sanrinawakes/yutakasa-tapping-coach";
+const MAX_REPAIR_ITEMS = 5;
+const REQUIRED_REPAIR_CHECKS = ["source-repair-verify", "ai-repair-independent-review"];
 
 export class DailyReportError extends Error {
   constructor(code) {
@@ -403,6 +409,130 @@ function monitorSummaryLines(summary) {
   return lines;
 }
 
+function repairTimestampInWindow(value, window) {
+  return validTimestamp(value) && Date.parse(value) >= Date.parse(window.start) &&
+    Date.parse(value) < Date.parse(window.end);
+}
+
+function validateRepairRelease(row) {
+  if (!Number.isSafeInteger(row?.pr_number) || row.pr_number < 1 ||
+      !SHA.test(row.head_sha) || !REPAIR_STATUS.has(row.status) ||
+      !validTimestamp(row.created_at) ||
+      (row.merge_sha !== null && !SHA.test(row.merge_sha)) ||
+      (row.merge_recorded_at !== null && !validTimestamp(row.merge_recorded_at)) ||
+      (row.verified_at !== null && !validTimestamp(row.verified_at)) ||
+      (row.deployment_id !== null && !DEPLOYMENT_ID.test(row.deployment_id)) ||
+      !Number.isSafeInteger(row.healthy_count) || row.healthy_count < 0 ||
+      ((row.status === "pending_merge" || row.status === "abandoned") !== (row.merge_sha === null)) ||
+      (row.merge_sha !== null && row.merge_recorded_at === null) ||
+      (row.status === "verified" && (!row.verified_at || !row.deployment_id || row.healthy_count < 3))) {
+    fail("repair_release_invalid");
+  }
+}
+
+async function githubRepairJson(pathname, fetchImpl) {
+  let response;
+  try {
+    response = await fetchImpl(`https://api.github.com/repos/${GITHUB_REPO}${pathname}`, {
+      method: "GET", redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+  } catch { fail("github_request_failed"); }
+  if (!response.ok) fail(`github_http_${response.status}`);
+  return boundedJson(response, "github_response");
+}
+
+async function repairCiStatus(release, fetchImpl) {
+  try {
+    const [pr, checks, statuses] = await Promise.all([
+      githubRepairJson(`/pulls/${release.pr_number}`, fetchImpl),
+      githubRepairJson(`/commits/${release.head_sha}/check-runs?per_page=100`, fetchImpl),
+      githubRepairJson(`/commits/${release.head_sha}/status`, fetchImpl),
+    ]);
+    if (pr?.number !== release.pr_number || pr?.head?.sha !== release.head_sha ||
+        pr?.head?.repo?.full_name !== GITHUB_REPO || pr?.base?.ref !== "main") return "mismatch";
+    if (!Number.isSafeInteger(checks?.total_count) || checks.total_count > 100 ||
+        !Array.isArray(checks.check_runs) || checks.check_runs.length !== checks.total_count ||
+        statuses?.sha !== release.head_sha || !Array.isArray(statuses.statuses)) return "unknown";
+    const states = REQUIRED_REPAIR_CHECKS.map((name) => {
+      const matching = checks.check_runs.filter((check) =>
+        check?.name === name && check?.head_sha === release.head_sha &&
+        check?.app?.slug === "github-actions" && Number.isSafeInteger(check?.id));
+      const latest = matching.sort((a, b) => b.id - a.id)[0];
+      if (!latest || latest.status !== "completed") return "pending";
+      return latest.conclusion === "success" ? "passed" : "failed";
+    });
+    const vercel = statuses.statuses.find((status) => status?.context === "Vercel");
+    states.push(!vercel || vercel.state === "pending" ? "pending" :
+      vercel.state === "success" && vercel.description === "Deployment has completed" ? "passed" : "failed");
+    return states.includes("failed") ? "failed" : states.includes("pending") ? "pending" : "passed";
+  } catch { return "unknown"; }
+}
+
+export async function collectRepairProgress(config, window, fetchImpl = globalThis.fetch) {
+  try {
+    const rows = [];
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const query = new URLSearchParams({
+        select: "pr_number,head_sha,merge_sha,status,created_at,merge_recorded_at,deployment_id,healthy_count,verified_at",
+        order: "pr_number.asc", limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE),
+      });
+      const batch = await supabaseRequest(config, `rest/v1/yutakasa_repair_releases?${query}`, { fetchImpl });
+      if (!Array.isArray(batch) || batch.length > PAGE_SIZE) fail("repair_releases_invalid");
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+      if (page === MAX_PAGES - 1) fail("repair_release_page_limit_exceeded");
+    }
+    const ids = new Set();
+    for (const row of rows) {
+      validateRepairRelease(row);
+      if (ids.has(row.pr_number)) fail("repair_release_duplicate");
+      ids.add(row.pr_number);
+    }
+    const isActive = (row) => ["pending_merge", "observing", "failed"].includes(row.status);
+    const relevant = rows.filter((row) => isActive(row) ||
+      repairTimestampInWindow(row.created_at, window) ||
+      repairTimestampInWindow(row.merge_recorded_at, window) ||
+      repairTimestampInWindow(row.verified_at, window));
+    const listed = relevant.sort((a, b) => b.pr_number - a.pr_number).slice(0, MAX_REPAIR_ITEMS);
+    const entries = await Promise.all(listed.map(async (row) => ({
+      prNumber: row.pr_number, status: row.status, healthyCount: row.healthy_count,
+      ci: await repairCiStatus(row, fetchImpl),
+    })));
+    return {
+      state: "observed",
+      createdCount: rows.filter((row) => repairTimestampInWindow(row.created_at, window)).length,
+      mergedCount: rows.filter((row) => repairTimestampInWindow(row.merge_recorded_at, window)).length,
+      verifiedCount: rows.filter((row) => repairTimestampInWindow(row.verified_at, window)).length,
+      activeCount: rows.filter(isActive).length,
+      relevantCount: relevant.length,
+      entries,
+    };
+  } catch { return { state: "unavailable" }; }
+}
+
+function repairProgressLines(progress) {
+  if (progress?.state !== "observed") {
+    return ["自動修正PR: 専用台帳を取得できません。PR・CI・本番確認の結果は未確認です。"];
+  }
+  const lines = [
+    `自動修正PR（専用台帳）: 前日登録${progress.createdCount}件、前日マージ記録${progress.mergedCount}件、前日本番検証完了${progress.verifiedCount}件。集計時点の未完了${progress.activeCount}件。`,
+  ];
+  if (progress.relevantCount === 0) lines.push("前日の記録と集計時点の未完了PRは0件です。これは他の手動PRを含みません。");
+  const labels = { pending_merge: "マージ待ち", observing: "本番観測中",
+    verified: "本番検証済み", failed: "本番観測失敗", abandoned: "中止" };
+  const ciLabels = { passed: "必須チェック成功", failed: "必須チェック失敗",
+    pending: "必須チェック未完了", unknown: "CI未確認", mismatch: "台帳とGitHub不一致" };
+  for (const item of progress.entries) {
+    lines.push(`PR #${item.prNumber} | ${labels[item.status]}${item.status === "observing" ? `（正常観測${item.healthyCount}/3件）` : ""} | CI: ${ciLabels[item.ci]} | https://github.com/${GITHUB_REPO}/pull/${item.prNumber}`);
+  }
+  if (progress.relevantCount > progress.entries.length) {
+    lines.push(`ほか${progress.relevantCount - progress.entries.length}件。詳細表示は最大${MAX_REPAIR_ITEMS}件です。`);
+  }
+  lines.push("CIは表示したPRのGitHubチェックを確認した時点の結果です。本番検証済みは専用台帳の3回連続観測の記録を指します。");
+  return lines;
+}
+
 function countBy(rows, key) {
   const counts = new Map();
   for (const row of rows) counts.set(row[key], (counts.get(row[key]) || 0) + 1);
@@ -419,7 +549,7 @@ function lastEventTime(ticketId, source) {
   return values.sort().at(-1);
 }
 
-export function buildDailyReport(date, source, preparedAt = new Date(), monitorSummary = { state: "unavailable" }) {
+export function buildDailyReport(date, source, preparedAt = new Date(), monitorSummary = { state: "unavailable" }, repairProgress = { state: "unavailable" }) {
   const window = reportWindow(date);
   validateSource(source, window);
   const messages = countBy(source.messages, "sender_type");
@@ -438,7 +568,8 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
   };
   const statusLabels = { open: "未対応", in_progress: "対応中", waiting_user: "利用者回答待ち", resolved: "解決済み" };
   const automationLabels = {
-    queued: "待機", investigating: "調査中", blocked_decision: "運営判断待ち",
+    queued: "待機", investigating: "調査中", awaiting_repair: "修正PR待ち",
+    manual_review: "運営確認待ち", blocked_decision: "運営判断待ち",
     completed: "完了", failed: "自動処理失敗",
   };
   const lines = [
@@ -454,6 +585,7 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     `問い合わせへの作業記録: ${source.workLogs.length}件`,
     `前日の対象チケットで要運営判断: ${sorted.filter((row) => row.decision_required).length}件`,
     ...monitorSummaryLines(monitorSummary),
+    ...repairProgressLines(repairProgress),
     "",
     `前日のやりとり・作業時系列: ${events.length}件`,
   ];
@@ -762,11 +894,12 @@ async function runReportDate(config, date, now, fetchImpl) {
     return { ok, reportDateJst: date, skipped: ok ? "already_accepted" : "awaiting_reconciliation_or_lease", deliveries };
   }
   const window = reportWindow(date);
-  const [source, monitorSummary] = await Promise.all([
+  const [source, monitorSummary, repairProgress] = await Promise.all([
     collectReportSource(config, window, fetchImpl),
     collectMonitorSummary(config, window, fetchImpl),
+    collectRepairProgress(config, window, fetchImpl),
   ]);
-  const report = buildDailyReport(date, source, now, monitorSummary);
+  const report = buildDailyReport(date, source, now, monitorSummary, repairProgress);
   const deliveries = [];
   for (const [index, recipient] of config.recipients.entries()) {
     const reserved = await reserveDelivery(config, date, recipient, report, fetchImpl);
@@ -787,6 +920,7 @@ async function runReportDate(config, date, now, fetchImpl) {
     currentOpenCount: source.openTickets.length,
     monitorState: monitorSummary.state,
     monitorCompletedCount: monitorSummary.completedCount ?? null,
+    repairProgressState: repairProgress.state,
     deliveries,
   };
 }
