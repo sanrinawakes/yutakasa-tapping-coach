@@ -38,4 +38,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
           JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID: ${{ vars.YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
         run: node scripts/automation/ai-repair-one-shot-smoke.mjs

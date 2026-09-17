@@ -53,4 +53,6 @@ jobs:
           OBSERVE_MODE: ${{ inputs.mode }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED: ${{ vars.YUTAKASA_REPAIR_FUNCTIONAL_SMOKE_ENABLED }}
+          YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID: ${{ vars.YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
         run: node scripts/automation/ai-repair-observe.mjs
