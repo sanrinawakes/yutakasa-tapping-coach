@@ -28,6 +28,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   scripts/automation/ticket-repair-bridge.sql \
   scripts/automation/ticket-repair-bridge.sqlcheck.sql \
   scripts/automation/ticket-repair-handoff-reconcile.sqlcheck.sql \
+  scripts/automation/support-automation-manual-review.sql \
+  scripts/automation/support-automation-manual-review.sqlcheck.sql \
   scripts/automation/drive-result-ledger.sql \
   scripts/automation/drive-result-ledger.sqlcheck.sql \
   scripts/automation/drive-intake-ledger.sql \

@@ -46,8 +46,14 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < supabase-migration-support-automation-claim.sql >/dev/null
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/automation/support-automation-manual-review.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/automation/support-automation-manual-review.sql >/dev/null
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-migration-assertions.sql
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-terminal-assertions.sql
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/support-claim-assertions.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/automation/support-automation-manual-review.sqlcheck.sql

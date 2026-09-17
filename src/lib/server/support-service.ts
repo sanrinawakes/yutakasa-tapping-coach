@@ -973,7 +973,7 @@ export async function finishLockedSupportTicket(params: {
   lockToken: string;
   latestUserMessageId: string;
   ticketVersion: string;
-  outcome: "failed" | "decision_required";
+  outcome: "failed" | "decision_required" | "manual_review";
   summary: string;
 }): Promise<SupportTicket | null> {
   const { data, error } = await getSupabase().rpc("finish_locked_support_ticket", {
