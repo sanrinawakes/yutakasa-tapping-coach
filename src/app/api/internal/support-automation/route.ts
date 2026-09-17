@@ -220,7 +220,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ ticket });
     }
 
-    if (action === "failed") {
+    if (action === "failed" || action === "manual_review") {
       const summary = normalizeSupportText(record.summary, 5001);
       if (!summary || summary.length > 5000) {
         throw new SupportRequestError("Failure summary is invalid");
@@ -230,7 +230,7 @@ export async function PATCH(request: NextRequest) {
         lockToken,
         latestUserMessageId: readTicketId(record.latestUserMessageId),
         ticketVersion: readTicketVersion(record.ticketVersion),
-        outcome: "failed",
+        outcome: action,
         summary,
       });
       if (!ticket) throw new SupportRequestError("Ticket changed before failure update", 409);

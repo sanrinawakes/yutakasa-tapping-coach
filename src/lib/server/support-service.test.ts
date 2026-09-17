@@ -108,6 +108,7 @@ describe("support automation leases", () => {
     await expect(listPendingAutomatedSupportTickets(100)).resolves.toEqual([]);
     expect(recoveryQuery.update).toHaveBeenCalled();
     expect(listQuery.not).toHaveBeenCalledWith("user_email", "ilike", "yutakasa-auto-smoke+%@example.invalid");
+    expect(listQuery.in).toHaveBeenCalledWith("automation_status", ["queued", "failed"]);
     expect(listQuery.not.mock.invocationCallOrder[0]).toBeLessThan(listQuery.limit.mock.invocationCallOrder[0]);
     expect(listQuery.limit).toHaveBeenCalledWith(25);
   });

@@ -27,6 +27,7 @@ function entry(overrides = {}) {
       id: TICKET_ID,
       category: "technical",
       subject: "送信できない",
+      has_attachments: false,
       status: "open",
       decision_required: false,
       automation_status: "queued",
@@ -87,6 +88,8 @@ function fakeApi(statuses = {}, claimedEntry = entry()) {
               ? "investigating"
               : body.action === "decision_required"
                 ? "blocked_decision"
+                : body.action === "manual_review"
+                  ? "manual_review"
                 : "failed",
             automation_lock_token: body.action === "claim" ? body.lockToken : null,
             decision_required: body.action === "decision_required",
@@ -255,7 +258,7 @@ test("only an attachment-free, first generic technical report qualifies for a fi
     messages:[{id:MESSAGE_ID,sender_type:"user",body:"使えない",
       created_at:"2026-09-16T01:00:00Z"}]}),{clarificationEnabled:true}).kind,"decision_required");
   assert.equal(planTicket({...generic,ticket:{...generic.ticket,has_attachments:true}},
-    {clarificationEnabled:true}).kind,"technical_handoff");
+    {clarificationEnabled:true}).kind,"manual_review");
   assert.equal(planTicket({...generic,
     work_logs:[{event_type:"automation_clarification_sent",metadata:{}}]},
     {clarificationEnabled:true}).kind,"technical_handoff");
@@ -263,6 +266,62 @@ test("only an attachment-free, first generic technical report qualifies for a fi
     messages:[...generic.messages,{id:NEW_MESSAGE_ID,sender_type:"user",body:"動かない",
       created_at:"2026-09-16T01:10:00Z"}]},
     {clarificationEnabled:true}).kind,"technical_handoff");
+});
+
+test("technical tickets with attachments go to manual review before repair handoff", async () => {
+  const attached = entry({ ticket: { has_attachments: true } });
+  assert.equal(planTicket(attached).kind, "manual_review");
+  const api = fakeApi({}, attached);
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [attached],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "manual_review"]);
+  assert.equal(result.manualReviews, 1);
+  assert.equal(result.technicalHandoffs, 0);
+  assert.equal(result.uncertain, 0);
+  assert.equal(result.ok, true);
+  assert.throws(() => validateTicketContext(context([{ ...attached,
+    ticket: { ...attached.ticket, automation_status: "manual_review" } }])),
+  { code: "support_context_ticket_invalid" });
+  assert.equal(api.calls.some((call) => call.action === "handoff" ||
+    call.eventType === "remote_support_escalated" || call.action === "reply"), false);
+});
+
+test("missing attachment evidence cannot enter the repair bridge", async () => {
+  const unknown = entry({ ticket: { has_attachments: undefined } });
+  assert.equal(planTicket(unknown).kind, "manual_review");
+  const api = fakeApi({}, unknown);
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [unknown],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "manual_review"]);
+  assert.equal(result.manualReviews, 1);
+  assert.equal(result.technicalHandoffs, 0);
+});
+
+test("queue attachment arrays and claimed detail flag produce the same repair decision", async () => {
+  const queued = entry({ ticket: { has_attachments: undefined } });
+  queued.messages[0].attachments = [];
+  const claimed = entry();
+  assert.equal(planTicket(queued).kind, "technical_handoff");
+  const api = fakeApi({}, claimed);
+  const result = await processSupportTickets({ automationToken: TOKEN, tickets: [queued],
+    fetchImpl: api.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(api.calls.map((call) => call.action), ["claim", "get", "log", "handoff"]);
+  assert.equal(result.technicalHandoffs, 1);
+  assert.equal(result.staleContexts, 0);
+
+  const attachedQueue = entry({ ticket: { has_attachments: undefined } });
+  attachedQueue.messages[0].attachments = [{ id: RECEIPT_ID }];
+  const attachedDetail = entry({ ticket: { has_attachments: true } });
+  assert.equal(planTicket(attachedQueue).kind, "manual_review");
+  const inconsistent = entry({ ticket: { has_attachments: false } });
+  inconsistent.messages[0].attachments = [{ id: RECEIPT_ID }];
+  assert.equal(planTicket(inconsistent).kind, "manual_review");
+  const attachedApi = fakeApi({}, attachedDetail);
+  const attachedResult = await processSupportTickets({ automationToken: TOKEN,
+    tickets: [attachedQueue], fetchImpl: attachedApi.fetchImpl, repairBridgeEnabled: true });
+  assert.deepEqual(attachedApi.calls.map((call) => call.action), ["claim", "get", "log", "manual_review"]);
+  assert.equal(attachedResult.manualReviews, 1);
+  assert.equal(attachedResult.staleContexts, 0);
 });
 
 test("fixed clarification uses claimed version and finishes once without a model or free-form body",async()=>{

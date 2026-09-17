@@ -260,6 +260,24 @@ describe("support automation API", () => {
     expect(appendMock).not.toHaveBeenCalled();
   });
 
+  it("puts a claimed ticket in guarded manual review without sending a reply", async () => {
+    finishLockedMock.mockResolvedValue({ ...ticket, automation_status: "manual_review" });
+    const response = await PATCH(request("PATCH", {
+      action: "manual_review", ticketId, lockToken,
+      latestUserMessageId: messageId, ticketVersion: ticket.updated_at,
+      summary: "添付ファイルがあるため担当者の確認が必要です。",
+    }));
+    expect(response.status).toBe(200);
+    expect(finishLockedMock).toHaveBeenCalledWith({
+      ticketId, lockToken, latestUserMessageId: messageId,
+      ticketVersion: ticket.updated_at, outcome: "manual_review",
+      summary: "添付ファイルがあるため担当者の確認が必要です。",
+    });
+    expect(addLogMock).not.toHaveBeenCalled();
+    expect(appendMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
   it("does not log or overwrite a terminal state when the guarded update loses ownership", async () => {
     finishLockedMock.mockResolvedValue(null);
     const response = await PATCH(request("PATCH", {

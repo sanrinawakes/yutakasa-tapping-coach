@@ -122,14 +122,21 @@ export function planTicket(entry, { ignorePriorEscalation = false,
   if (entry.ticket.category !== "technical") {
     return { kind: "manual_review", latestUserMessageId: latest.id };
   }
-  const attachmentFree = entry.ticket.has_attachments === false ||
-    (entry.ticket.has_attachments === undefined && entry.messages.every((message) =>
-      Array.isArray(message.attachments) && message.attachments.length === 0));
+  // Queue snapshots include message attachments; claimed details expose only
+  // has_attachments. A missing or contradictory signal must never reach the
+  // repair RPC, which rejects tickets with attachments.
+  const attachmentFree = entry.ticket.has_attachments !== true &&
+    entry.messages.every((message) => message.attachments === undefined
+      ? entry.ticket.has_attachments === false
+      : Array.isArray(message.attachments) && message.attachments.length === 0);
+  if (!attachmentFree) {
+    return { kind: "manual_review", latestUserMessageId: latest.id };
+  }
   const firstReportOnly = entry.messages.length === 2 &&
     entry.messages.filter((message) => message.sender_type === "user").length === 1 &&
     entry.messages.filter((message) => message.sender_type === "system" &&
       message.body === INITIAL_SUPPORT_ACK).length === 1;
-  if (clarificationEnabled && attachmentFree && firstReportOnly &&
+  if (clarificationEnabled && firstReportOnly &&
       GENERIC_TECHNICAL_REPORTS.has(entry.ticket.subject) &&
       GENERIC_TECHNICAL_REPORTS.has(latest.body) &&
       !entry.work_logs.some((log) => log.event_type === "automation_clarification_sent")) {
@@ -275,6 +282,11 @@ function validateApiResult(body, payload) {
   } else if (body.action === "failed") {
     if (ticket.automation_status !== "failed" || ticket.automation_lock_token !== null) {
       fail("support_api_failed_confirmation_invalid");
+    }
+  } else if (body.action === "manual_review") {
+    if (ticket.automation_status !== "manual_review" ||
+        ticket.automation_lock_token !== null || ticket.decision_required !== false) {
+      fail("support_api_manual_review_confirmation_invalid");
     }
   } else {
     fail("support_api_action_invalid");
@@ -506,7 +518,7 @@ export async function processSupportTickets({
               ticketVersion: claimedSnapshot.ticket.updated_at,
               summary: "料金、契約、法的対応、個人情報などの運営判断が必要です。顧客への返信と変更は行っていません。",
             } : {
-              action: "failed",
+              action: freshPlan.kind === "manual_review" ? "manual_review" : "failed",
               ticketId,
               lockToken,
               latestUserMessageId: freshPlan.latestUserMessageId,
