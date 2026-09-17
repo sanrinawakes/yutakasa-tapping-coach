@@ -170,7 +170,8 @@ export async function runRepairObservation({
     ? runProductionFunctionalSmoke(args) : null,
   staleCleanupImpl = reapStaleSyntheticIdentities,
 } = {}) {
-  if (env.GITHUB_EVENT_NAME !== "schedule" ||
+  if (!(env.GITHUB_EVENT_NAME === "schedule" && !env.OBSERVE_MODE ||
+        env.GITHUB_EVENT_NAME === "workflow_dispatch" && env.OBSERVE_MODE === "observe") ||
       typeof env.GITHUB_RUN_ID !== "string" ||
       !/^[1-9][0-9]{0,17}$/u.test(env.GITHUB_RUN_ID) ||
       !Number.isSafeInteger(Number(env.GITHUB_RUN_ID))) {

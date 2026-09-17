@@ -40,6 +40,30 @@ const functionalEvidence = {
   clientErrors: 0,
 };
 
+test("observer accepts only a named fallback dispatch, never a probe or unrelated event", async () => {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(String(url));
+    return new Response("[]");
+  };
+  const valid = await runRepairObservation({
+    env: { ...SCHEDULE_ENV, GITHUB_EVENT_NAME: "workflow_dispatch", OBSERVE_MODE: "observe",
+      SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(32) },
+    fetchImpl,
+  });
+  assert.deepEqual(valid, { examined: 0, verified: 0, failed: 0 });
+  assert.equal(seen.length, 1);
+  for (const altered of [
+    { GITHUB_EVENT_NAME: "workflow_dispatch", OBSERVE_MODE: "probe" },
+    { GITHUB_EVENT_NAME: "push", OBSERVE_MODE: "observe" },
+    { GITHUB_EVENT_NAME: "schedule", OBSERVE_MODE: "observe" },
+  ]) {
+    await assert.rejects(() => runRepairObservation({ env: { ...SCHEDULE_ENV, ...altered },
+      fetchImpl: () => assert.fail("unexpected database read") }),
+    (error) => error instanceof AiRepairObserveError && error.code === "repair_observation_not_scheduled");
+  }
+});
+
 test("observation requires exact production SHA, bounded zero logs, DB parity, and fresh evidence", () => {
   const input = { release, deployment, logs, snapshot, functionalEvidence, observedAt: NOW };
   assert.deepEqual(evaluateRepairObservation(input), { healthy: true, code: null, deploymentId: DEPLOYMENT });

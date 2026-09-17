@@ -3,6 +3,14 @@ name: Observe merged AI repair
 on:
   schedule:
     - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run the guarded production observer from Railway fallback
+        required: true
+        type: choice
+        options:
+          - observe
 
 permissions:
   contents: read
@@ -14,7 +22,14 @@ concurrency:
 
 jobs:
   observe:
-    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach'
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' &&
+        vars.YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED != 'true') ||
+       (github.event_name == 'workflow_dispatch' &&
+        vars.YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED == 'true' &&
+        inputs.mode == 'observe'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -35,6 +50,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          OBSERVE_MODE: ${{ inputs.mode }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           AI_REPAIR_FUNCTIONAL_SMOKE_ENABLED: ${{ vars.YUTAKASA_REPAIR_FUNCTIONAL_SMOKE_ENABLED }}
         run: node scripts/automation/ai-repair-observe.mjs

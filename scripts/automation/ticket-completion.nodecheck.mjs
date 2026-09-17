@@ -9,7 +9,7 @@ const workId="123e4567-e89b-42d3-a456-426614174000";
 const sha="a".repeat(40);
 const deploymentId="dpl_Abcdefghijklmnop";
 const context={work_id:workId,pr_number:78,merge_sha:sha,
-  deployment_id:deploymentId,scenario_key:"chat_send_reload_persistence",notice_ready:true};
+  deployment_id:deploymentId,scenario_key:"chat_title_zero_width",notice_ready:true};
 const env={GITHUB_REPOSITORY:"sanrinawakes/yutakasa-tapping-coach",
   GITHUB_REF:"refs/heads/main",GITHUB_EVENT_NAME:"schedule",
   TICKET_COMPLETION_ENABLED:"true",TICKET_RECONCILE_ENABLED:"true",
@@ -19,6 +19,8 @@ const env={GITHUB_REPOSITORY:"sanrinawakes/yutakasa-tapping-coach",
 
 test("completion context accepts only bound, supported metadata",()=>{
   assert.deepEqual(validateCompletionContext(context,workId),context);
+  assert.throws(()=>validateCompletionContext({...context,scenario_key:"chat_send_reload_persistence"},workId),
+    TicketCompletionError);
   assert.throws(()=>validateCompletionContext({...context,scenario_key:"generic_smoke"},workId),
     TicketCompletionError);
   assert.throws(()=>validateCompletionContext({...context,ticket_id:workId},workId),
