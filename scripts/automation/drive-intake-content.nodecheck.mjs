@@ -12,6 +12,7 @@ const FILE = {
   modifiedTime: "2026-09-17T00:00:00.000Z",
 };
 const CREDENTIALS = {
+  YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
   GOOGLE_DRIVE_CLIENT_ID: "test-client",
   GOOGLE_DRIVE_CLIENT_SECRET: "test-secret",
   GOOGLE_DRIVE_REFRESH_TOKEN: "test-refresh",
@@ -75,10 +76,22 @@ test("API key alone cannot read private file content", async () => {
   let calls = 0;
   await expectCode(() => fetchDriveIntakeContent({
     file: FILE,
-    credentials: { GOOGLE_DRIVE_API_KEY: "key-only" },
+    credentials: { YUTAKASA_DRIVE_PROCESSING_ENABLED: "true", GOOGLE_DRIVE_API_KEY: "key-only" },
     fetchImpl: async () => { calls += 1; },
   }), "drive_credential_missing_or_invalid_google_drive_client_id");
   assert.equal(calls, 0);
+});
+
+test("content read stays disabled without an exact processing flag", async () => {
+  for (const value of [undefined, "false", "TRUE", "1", true]) {
+    let calls = 0;
+    await expectCode(() => fetchDriveIntakeContent({
+      file: FILE,
+      credentials: { ...CREDENTIALS, YUTAKASA_DRIVE_PROCESSING_ENABLED: value },
+      fetchImpl: async () => { calls += 1; },
+    }), "drive_processing_disabled");
+    assert.equal(calls, 0);
+  }
 });
 
 test("moved, changed, and invalid source files fail before media download", async () => {

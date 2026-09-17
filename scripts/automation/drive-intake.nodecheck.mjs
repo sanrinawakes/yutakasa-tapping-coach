@@ -8,6 +8,7 @@ import {
   DRIVE_INTAKE_FOLDER_ID,
   DriveIntakeError,
   collectDriveIntakeMetadata,
+  getDriveOAuthAccessToken,
   pollDriveIntakeToFile,
 } from "./drive-intake.mjs";
 
@@ -98,6 +99,64 @@ async function errorCode(run, expected) {
       !error.message.includes(ACCESS_TOKEN),
   );
 }
+
+test("OAuth helper is dormant by default and never falls back to an API key", async () => {
+  for (const value of [undefined, "false", "TRUE", "1", true]) {
+    let calls = 0;
+    await errorCode(() => getDriveOAuthAccessToken({
+      credentials: {
+        ...CREDENTIALS,
+        ...API_KEY_CREDENTIALS,
+        YUTAKASA_DRIVE_PROCESSING_ENABLED: value,
+      },
+      fetchImpl: async () => { calls += 1; },
+    }), "drive_processing_disabled");
+    assert.equal(calls, 0);
+  }
+  let calls = 0;
+  await errorCode(() => getDriveOAuthAccessToken({
+    credentials: {
+      ...API_KEY_CREDENTIALS,
+      YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
+    },
+    fetchImpl: async () => { calls += 1; },
+  }), "drive_credential_missing_or_invalid_google_drive_client_id");
+  assert.equal(calls, 0);
+});
+
+test("OAuth helper refreshes only with the explicit flag and hides token failures", async () => {
+  const credentials = {
+    ...CREDENTIALS,
+    ...API_KEY_CREDENTIALS,
+    YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
+  };
+  let calls = 0;
+  const token = await getDriveOAuthAccessToken({
+    credentials,
+    fetchImpl: async (url, init) => {
+      calls += 1;
+      assert.equal(url, "https://oauth2.googleapis.com/token");
+      assert.equal(init.method, "POST");
+      assert.equal(init.redirect, "error");
+      assert.equal(init.body.get("client_id"), CREDENTIALS.GOOGLE_DRIVE_CLIENT_ID);
+      assert.equal(init.body.get("client_secret"), CREDENTIALS.GOOGLE_DRIVE_CLIENT_SECRET);
+      assert.equal(init.body.get("refresh_token"), CREDENTIALS.GOOGLE_DRIVE_REFRESH_TOKEN);
+      assert.equal(init.body.get("grant_type"), "refresh_token");
+      assert.equal(init.headers["X-Goog-Api-Key"], undefined);
+      return json({ access_token: ACCESS_TOKEN, token_type: "Bearer" });
+    },
+  });
+  assert.equal(token, ACCESS_TOKEN);
+  assert.equal(calls, 1);
+  await errorCode(() => getDriveOAuthAccessToken({
+    credentials,
+    fetchImpl: async () => json({ error: CREDENTIALS.GOOGLE_DRIVE_REFRESH_TOKEN }, 401),
+  }), "drive_token_http_failure");
+  await errorCode(() => getDriveOAuthAccessToken({
+    credentials,
+    fetchImpl: async () => json({ access_token: ACCESS_TOKEN, token_type: "Basic" }),
+  }), "drive_token_schema_invalid");
+});
 
 test("OAuth refresh and bounded pagination return sorted metadata only", async () => {
   const requestedTokens = [];

@@ -66,6 +66,16 @@ modules have no scheduled or CLI entry point and do not run in the current
 monitor. A new Drive item still raises `drive_intake_items`; it is not marked
 processed or healthy.
 
+Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
+flag in their credential source. PDF publication additionally requires
+`YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED=true`. Both default off. The shared
+OAuth refresh helper rejects a missing or differently spelled processing flag
+before requesting a token; the metadata-only API-key monitor is unchanged.
+Neither flag is configured in the production Railway service. Do not enable
+them merely because OAuth credentials have been issued: no scheduled caller
+currently binds a per-file claim to a verified diagnosis, release record,
+and result PDF. A file in `受付` remains an actionable unprocessed item.
+
 The current `GOOGLE_DRIVE_API_KEY` is for public metadata only. Content and
 upload require OAuth on the actual `181wyc@gmail.com` Drive account:
 `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, and
