@@ -2,7 +2,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useRouter } from "next/navigation";
 import SupportPage from "./page";
-import technicalScenarios from "@/lib/support-technical-scenarios.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(),
@@ -17,22 +16,17 @@ describe("SupportPage", () => {
     routerMock.mockReturnValue({ push: vi.fn() } as unknown as ReturnType<typeof useRouter>);
   });
 
-  it("fills the exact reproducible title symptom without changing ordinary reports", async () => {
+  it("keeps internal repair scenarios out of the customer ticket form", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ tickets: [] })));
     render(<SupportPage />);
     expect(await screen.findByText("問い合わせはまだありません")).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "新規問い合わせ" }));
-    await user.click(screen.getByRole("button", {
+    expect(screen.queryByRole("button", {
       name: "ゼロ幅スペースの入力で見出しが空白になる",
-    }));
-    expect(screen.getByLabelText("件名")).toHaveValue(
-      technicalScenarios.chat_title_zero_width.subject);
-    expect(screen.getByLabelText("内容")).toHaveValue(
-      technicalScenarios.chat_title_zero_width.body);
-    await user.type(screen.getByLabelText("内容"), " Chromeの場合だけ");
-    expect(screen.getByLabelText("内容")).not.toHaveValue(
-      technicalScenarios.chat_title_zero_width.body);
+    })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("件名"), "会話履歴が表示されない");
+    expect(screen.getByLabelText("件名")).toHaveValue("会話履歴が表示されない");
   });
 
   it("creates a ticket with screenshots and opens the persisted conversation", async () => {
