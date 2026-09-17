@@ -34,6 +34,7 @@ const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]{8,160}$/u;
 const GITHUB_REPO = "sanrinawakes/yutakasa-tapping-coach";
 const MAX_REPAIR_ITEMS = 5;
+const SYNTHETIC_SUPPORT_EMAIL = /^yutakasa-auto-smoke\+.*@example\.invalid$/iu;
 const REQUIRED_REPAIR_CHECKS = ["source-repair-verify", "ai-repair-independent-review"];
 
 export class DailyReportError extends Error {
@@ -201,7 +202,7 @@ async function listTicketsByIds(config, ids, fetchImpl) {
   for (let index = 0; index < ordered.length; index += 100) {
     const batch = ordered.slice(index, index + 100);
     const query = new URLSearchParams({
-      select: "id,category,status,decision_required,automation_status,created_at,updated_at",
+      select: "id,user_email,category,status,decision_required,automation_status,created_at,updated_at",
       id: `in.(${batch.join(",")})`,
       limit: "100",
     });
@@ -217,7 +218,7 @@ async function listCurrentOpenTickets(config, fetchImpl) {
   let afterId = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const query = new URLSearchParams({
-      select: "id,status,decision_required,automation_status,updated_at",
+      select: "id,user_email,status,decision_required,automation_status,updated_at",
       status: "in.(open,in_progress,waiting_user)",
       order: "id.asc",
       limit: String(PAGE_SIZE),
@@ -279,6 +280,7 @@ export function validateSource(source, window) {
   const ticketIds = new Set();
   for (const row of source.tickets) {
     if (!UUID.test(row?.id) || ticketIds.has(row.id) || !CATEGORY.has(row.category) ||
+        typeof row.user_email !== "string" || !row.user_email ||
         !TICKET_STATUS.has(row.status) || !AUTOMATION_STATUS.has(row.automation_status) ||
         typeof row.decision_required !== "boolean" || !validTimestamp(row.created_at) ||
         !validTimestamp(row.updated_at)) fail("source_ticket_invalid");
@@ -288,6 +290,7 @@ export function validateSource(source, window) {
   const openTicketIds = new Set();
   for (const row of source.openTickets) {
     if (!UUID.test(row?.id) || openTicketIds.has(row.id) ||
+        typeof row.user_email !== "string" || !row.user_email ||
         !["open", "in_progress", "waiting_user"].includes(row.status) ||
         !AUTOMATION_STATUS.has(row.automation_status) ||
         typeof row.decision_required !== "boolean" || !validTimestamp(row.updated_at)) {
@@ -314,7 +317,21 @@ export async function collectReportSource(config, window, fetchImpl = globalThis
   ]);
   if ([...ids].some((id) => !UUID.test(id))) fail("source_ticket_id_invalid");
   const tickets = await listTicketsByIds(config, ids, fetchImpl);
-  return validateSource({ createdTickets, updatedTickets, messages, workLogs, tickets, openTickets }, window);
+  // Test tickets can be present briefly during a production E2E. Exclude their
+  // complete activity, including messages and work logs, from owner reports.
+  const syntheticIds = new Set(tickets.filter((row) =>
+    typeof row.user_email === "string" && SYNTHETIC_SUPPORT_EMAIL.test(row.user_email)
+  ).map((row) => row.id));
+  return validateSource({
+    createdTickets: createdTickets.filter((row) => !syntheticIds.has(row.id)),
+    updatedTickets: updatedTickets.filter((row) => !syntheticIds.has(row.id)),
+    messages: messages.filter((row) => !syntheticIds.has(row.ticket_id)),
+    workLogs: workLogs.filter((row) => !syntheticIds.has(row.ticket_id)),
+    tickets: tickets.filter((row) => !syntheticIds.has(row.id)),
+    openTickets: openTickets.filter((row) =>
+      typeof row.user_email !== "string" || !SYNTHETIC_SUPPORT_EMAIL.test(row.user_email)
+    ),
+  }, window);
 }
 
 export function summarizeMonitorRows(rows, window) {

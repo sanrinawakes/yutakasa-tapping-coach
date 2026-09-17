@@ -56,7 +56,7 @@ function source() {
     createdTickets: [{ id: ticket.id, created_at: ticket.created_at, updated_at: ticket.updated_at }],
     updatedTickets: [{ id: ticket.id, created_at: ticket.created_at, updated_at: ticket.updated_at }],
     tickets: [ticket],
-    openTickets: [{ id: TICKET_ID, status: ticket.status, automation_status: ticket.automation_status, decision_required: false, updated_at: ticket.updated_at }],
+    openTickets: [{ id: TICKET_ID, user_email: ticket.user_email, status: ticket.status, automation_status: ticket.automation_status, decision_required: false, updated_at: ticket.updated_at }],
     messages: [{ id: MESSAGE_ID, ticket_id: TICKET_ID, sender_type: "user", created_at: "2026-09-16T02:00:00.000Z", body: "PRIVATE MESSAGE" }],
     workLogs: [{ id: LOG_ID, ticket_id: TICKET_ID, created_at: "2026-09-16T03:00:00.000Z", event_type: "PRIVATE EVENT TYPE", summary: "PRIVATE LOG", metadata: { secret: "PRIVATE METADATA" } }],
   };
@@ -286,6 +286,23 @@ test("daily text contains only metadata and separates acceptance by recipient", 
   assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 2);
 });
 
+test("daily report excludes a synthetic ticket, its messages and work logs", async () => {
+  const records = source();
+  const syntheticEmail = "yutakasa-auto-smoke+74e6508f-c0ff-4689-ab68-dac8fe324ac9@example.invalid";
+  records.tickets[0].user_email = syntheticEmail;
+  records.openTickets[0].user_email = syntheticEmail;
+  const client = testFetch({ records });
+  const result = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.ticketCount, 0);
+  assert.equal(result.messageCount, 0);
+  assert.equal(result.workLogCount, 0);
+  assert.equal(result.currentOpenCount, 0);
+  const sends = client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails");
+  assert.equal(sends.length, 2);
+  assert.doesNotMatch(JSON.parse(sends[0].init.body).text, new RegExp(TICKET_ID));
+});
+
 test("provider bounce is stored as an adverse delivery and is never automatically resent", async () => {
   const client = testFetch({ resendRetrieveBehavior: async (url) => {
     const first = url.pathname.endsWith(RESEND_ID);
@@ -410,6 +427,7 @@ test("zero activity still creates a truthful daily report", () => {
 test("an old unresolved ticket is counted even on a day with no new activity", () => {
   const empty = { createdTickets: [], updatedTickets: [], messages: [], workLogs: [], tickets: [],
     openTickets: [{ id: TICKET_ID, status: "waiting_user", decision_required: true,
+      user_email: "member@example.com",
       automation_status: "blocked_decision", updated_at: "2026-09-11T00:00:00.000Z" }] };
   const report = buildDailyReport("2026-09-16", empty, NOW);
   assert.match(report.text, /前日に動きがあったチケット: 0件/);
@@ -421,6 +439,7 @@ test("an old unresolved ticket is counted even on a day with no new activity", (
 test("current unresolved pagination retrieves the 501st row", async () => {
   const openTickets = Array.from({ length: 501 }, (_, index) => ({
     id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`,
+    user_email: `member-${index}@example.com`,
     status: "open", decision_required: false, automation_status: "queued",
     updated_at: "2026-09-11T00:00:00.000Z",
   }));

@@ -54,6 +54,7 @@ describe("support automation leases", () => {
       update: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       or: vi.fn().mockReturnThis(),
       select: vi.fn().mockResolvedValue({ data: [{ id: ticketId }], error: null }),
     };
@@ -71,6 +72,7 @@ describe("support automation leases", () => {
     expect(ticketQuery.or).toHaveBeenCalledWith(
       "automation_locked_at.is.null,automation_locked_at.lt.2026-08-02T00:30:00.000Z"
     );
+    expect(ticketQuery.not).toHaveBeenCalledWith("user_email", "ilike", "yutakasa-auto-smoke+%@example.invalid");
     expect(workLogQuery.insert).toHaveBeenCalledWith([
       expect.objectContaining({
         ticket_id: ticketId,
@@ -84,6 +86,7 @@ describe("support automation leases", () => {
       update: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       or: vi.fn().mockReturnThis(),
       select: vi.fn().mockResolvedValue({ data: [], error: null }),
     };
@@ -91,6 +94,7 @@ describe("support automation leases", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({ data: [], error: null }),
     };
@@ -102,6 +106,8 @@ describe("support automation leases", () => {
 
     await expect(listPendingAutomatedSupportTickets(100)).resolves.toEqual([]);
     expect(recoveryQuery.update).toHaveBeenCalled();
+    expect(listQuery.not).toHaveBeenCalledWith("user_email", "ilike", "yutakasa-auto-smoke+%@example.invalid");
+    expect(listQuery.not.mock.invocationCallOrder[0]).toBeLessThan(listQuery.limit.mock.invocationCallOrder[0]);
     expect(listQuery.limit).toHaveBeenCalledWith(25);
   });
 
@@ -420,6 +426,42 @@ describe("support attachment delivery", () => {
     expect(payload.text).toContain("アプリ内履歴には追加されません");
   });
 
+  it("does not notify staff for an exact synthetic smoke ticket or follow-up in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: [{ ticket_id: ticketId, message_id: ticketId, created: true }], error: null })
+      .mockResolvedValueOnce({ data: [{ message_id: ticketId, created: true }], error: null });
+    const from = vi.fn();
+    getSupabaseMock.mockReturnValue({ rpc, from } as never);
+    const userEmail = "yutakasa-auto-smoke+74e6508f-c0ff-4689-ab68-dac8fe324ac9@example.invalid";
+
+    await createSupportTicket({ ...newTicketInput(), userEmail, files: [] });
+    await appendUserSupportMessage({ userEmail, ticketId, body: "追加です。", clientRequestId: ticketId, files: [] });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress staff notifications for a non-UUID address in the reserved namespace", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: "email-id" }));
+    vi.stubGlobal("fetch", fetchMock);
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: [{ ticket_id: ticketId, message_id: ticketId, created: true }], error: null }),
+    } as never);
+
+    await createSupportTicket({ ...newTicketInput(), userEmail: "yutakasa-auto-smoke+not-a-uuid@example.invalid", files: [] });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("sets the user as reply-to on follow-up notifications to the admin", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
@@ -564,5 +606,31 @@ describe("support attachment delivery", () => {
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({ to: ["member@example.com"] });
     expect(payload).not.toHaveProperty("reply_to");
+  });
+
+  it("does not email an exact synthetic smoke identity after an admin reply", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const ticketQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: {
+          user_email: "yutakasa-auto-smoke+74e6508f-c0ff-4689-ab68-dac8fe324ac9@example.invalid",
+          subject: "合成テスト",
+        },
+        error: null,
+      }),
+    };
+    getSupabaseMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: [{ message_id: ticketId, created: true }], error: null }),
+      from: vi.fn().mockReturnValue(ticketQuery),
+    } as never);
+
+    await appendAdminSupportMessage({ ticketId, body: "テスト回答です。", clientRequestId: ticketId });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
