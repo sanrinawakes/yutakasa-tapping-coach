@@ -66,6 +66,8 @@ jobs:
         run: bash scripts/automation/test-ticket-clarification-smoke-sql.sh
       - name: Synthetic linked PR cleanup database tests
         run: bash scripts/automation/test-ticket-repair-bridge-e2e-smoke-sql.sh
+      - name: Completed synthetic repair cleanup database tests
+        run: bash scripts/automation/test-ticket-full-auto-rehearsal-cleanup-sql.sh
       - name: Production build
         run: npm run build
       - name: Docker build
