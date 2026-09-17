@@ -18,17 +18,18 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   supabase-migration-support-automation-claim.sql \
   scripts/automation/repair-release-ledger.sql \
   scripts/automation/repair-release-ledger.sqlcheck.sql \
+  scripts/automation/ticket-table-grants.test-defaults.sql \
   scripts/automation/support-automation-reply.sql \
   scripts/automation/support-automation-reply-old-schema.sqlcheck.sql \
   scripts/automation/support-automation-reply.sql \
   scripts/automation/support-automation-reply.sqlcheck.sql \
   scripts/automation/ticket-repair-bridge.sql \
   scripts/automation/ticket-repair-bridge.sqlcheck.sql \
+  scripts/automation/ticket-repair-handoff-reconcile.sqlcheck.sql \
   scripts/automation/drive-result-ledger.sql \
   scripts/automation/drive-result-ledger.sqlcheck.sql \
   scripts/automation/drive-intake-ledger.sql \
   scripts/automation/drive-intake-ledger.sqlcheck.sql \
-  scripts/automation/ticket-table-grants.test-defaults.sql \
   scripts/automation/ticket-reply-draft.sql \
   scripts/automation/ticket-reply-draft.sqlcheck.sql \
   scripts/automation/ticket-clarification.sql \

@@ -1,5 +1,24 @@
 BEGIN;
 DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname='yutakasa_ticket_repair_jobs'
+      AND c.relrowsecurity) OR
+    has_table_privilege('anon','public.yutakasa_ticket_repair_jobs','SELECT') OR
+    has_table_privilege('authenticated','public.yutakasa_ticket_repair_jobs','SELECT') OR
+    NOT has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','SELECT') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','INSERT') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','UPDATE') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','DELETE') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','TRUNCATE') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','REFERENCES') OR
+    has_table_privilege('service_role','public.yutakasa_ticket_repair_jobs','TRIGGER') THEN
+    RAISE EXCEPTION 'private ticket repair job permissions invalid';
+  END IF;
+END;
+$$;
+DO $$
 DECLARE
   v_ticket UUID;
   v_user UUID;

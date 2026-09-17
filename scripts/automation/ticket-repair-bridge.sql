@@ -29,7 +29,10 @@ CREATE INDEX IF NOT EXISTS yutakasa_ticket_repair_jobs_queue_idx
   ON public.yutakasa_ticket_repair_jobs(status,created_at);
 ALTER TABLE public.yutakasa_ticket_repair_jobs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_ticket_repair_jobs FROM PUBLIC, anon, authenticated;
-GRANT SELECT ON public.yutakasa_ticket_repair_jobs TO service_role;
+-- Supabase may grant ALL to service_role by default. RPCs retain writes
+-- through their SECURITY DEFINER owner, while the API key gets read only.
+REVOKE ALL ON TABLE public.yutakasa_ticket_repair_jobs FROM service_role;
+GRANT SELECT ON TABLE public.yutakasa_ticket_repair_jobs TO service_role;
 
 CREATE OR REPLACE FUNCTION public.begin_yutakasa_ticket_repair(
   p_ticket_id UUID, p_lock_token UUID, p_latest_user_message_id UUID,
@@ -191,18 +194,23 @@ BEGIN
   SELECT * INTO v_job FROM public.yutakasa_ticket_repair_jobs j
     WHERE j.work_id=p_work_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'repair work missing' USING ERRCODE='P0002'; END IF;
-  IF v_job.status='pr_open' AND v_job.pr_number=p_pr_number AND v_job.head_sha=p_head_sha THEN
-    RETURN QUERY SELECT v_job.pr_number,v_job.head_sha; RETURN;
-  END IF;
   SELECT * INTO v_ticket FROM public.support_tickets t
     WHERE t.id=v_job.ticket_id FOR UPDATE;
-  IF v_job.status<>'investigating' OR v_job.claimed_run_id<>p_run_id
+  IF NOT FOUND OR v_job.claimed_run_id<>p_run_id
     OR v_ticket.automation_status<>'awaiting_repair' OR v_ticket.decision_required
-    OR v_ticket.status<>'in_progress'
+    OR v_ticket.status<>'in_progress' OR v_ticket.category<>'technical'
+    OR EXISTS (SELECT 1 FROM public.support_attachments a
+      WHERE a.ticket_id=v_job.ticket_id)
     OR v_job.latest_user_message_id IS DISTINCT FROM (
       SELECT m.id FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
       AND m.sender_type='user' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
-    ) THEN
+  ) THEN
+    RAISE EXCEPTION 'repair PR link stale' USING ERRCODE='P0001';
+  END IF;
+  IF v_job.status='pr_open' AND v_job.pr_number=p_pr_number AND v_job.head_sha=p_head_sha THEN
+    RETURN QUERY SELECT v_job.pr_number,v_job.head_sha; RETURN;
+  END IF;
+  IF v_job.status<>'investigating' THEN
     RAISE EXCEPTION 'repair PR link stale' USING ERRCODE='P0001';
   END IF;
   INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,status)
@@ -274,7 +282,9 @@ BEGIN
       SELECT m.id FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
       AND m.sender_type='user' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
     ) THEN
-    UPDATE public.support_tickets t SET automation_status='manual_review',
+    UPDATE public.support_tickets t SET
+      automation_status=CASE WHEN v_ticket.decision_required
+        THEN 'blocked_decision' ELSE 'manual_review' END,
       updated_at=clock_timestamp() WHERE t.id=v_job.ticket_id;
   END IF;
   INSERT INTO public.support_work_logs(ticket_id,event_type,summary,metadata)
@@ -327,7 +337,9 @@ BEGIN
       SELECT m.id FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
       AND m.sender_type='user' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
     ) THEN
-    UPDATE public.support_tickets t SET automation_status='manual_review',
+    UPDATE public.support_tickets t SET
+      automation_status=CASE WHEN v_ticket.decision_required
+        THEN 'blocked_decision' ELSE 'manual_review' END,
       updated_at=clock_timestamp() WHERE t.id=v_job.ticket_id;
   END IF;
   INSERT INTO public.support_work_logs(ticket_id,event_type,summary,metadata)
@@ -361,7 +373,9 @@ BEGIN
         SELECT m.id FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
         AND m.sender_type='user' ORDER BY m.created_at DESC,m.id DESC LIMIT 1
       ) THEN
-      UPDATE public.support_tickets t SET automation_status='manual_review',
+      UPDATE public.support_tickets t SET
+        automation_status=CASE WHEN v_ticket.decision_required
+          THEN 'blocked_decision' ELSE 'manual_review' END,
         updated_at=clock_timestamp() WHERE t.id=v_job.ticket_id;
     END IF;
     INSERT INTO public.support_work_logs(ticket_id,event_type,summary,metadata)

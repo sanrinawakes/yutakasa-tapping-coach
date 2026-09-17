@@ -1,6 +1,26 @@
 BEGIN;
 
 DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname='yutakasa_repair_ticket_links'
+      AND c.relrowsecurity) OR
+    has_table_privilege('anon','public.yutakasa_repair_ticket_links','SELECT') OR
+    has_table_privilege('authenticated','public.yutakasa_repair_ticket_links','SELECT') OR
+    NOT has_table_privilege('service_role','public.yutakasa_repair_ticket_links','SELECT') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','INSERT') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','UPDATE') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','DELETE') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','TRUNCATE') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','REFERENCES') OR
+    has_table_privilege('service_role','public.yutakasa_repair_ticket_links','TRIGGER') THEN
+    RAISE EXCEPTION 'private repair ticket link permissions invalid';
+  END IF;
+END;
+$$;
+
+DO $$
 DECLARE
   v_old REGPROCEDURE;
   v_wrong_delete_count INTEGER;
