@@ -285,6 +285,8 @@ export async function publishVerifiedDriveResult({
   if (reservation === "conflict") fail("drive_result_event_conflict");
   if (listed.files.length === 1) {
     const fileId = verifyFile(listed.files[0], expected);
+    await requireCheck(assertLease, undefined, "drive_result_lease_required");
+    await requireCheck(assertEvidence, report, "drive_result_evidence_required");
     if (await ledger.confirm({ eventId, sha256, fileId }) !== true) {
       fail("drive_result_ledger_confirm_failed");
     }
@@ -292,6 +294,9 @@ export async function publishVerifiedDriveResult({
   }
   if (reservation !== "reserved") fail("drive_result_publication_pending");
   await requireCheck(assertLease, undefined, "drive_result_lease_required");
+  // Rendering, OAuth refresh, and Drive listing can outlive the release
+  // evidence checked at entry. Recheck immediately before the only POST.
+  await requireCheck(assertEvidence, report, "drive_result_evidence_required");
   const metadata = {
     name,
     mimeType: "application/pdf",

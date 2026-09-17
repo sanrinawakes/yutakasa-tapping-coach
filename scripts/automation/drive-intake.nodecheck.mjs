@@ -69,7 +69,7 @@ function driveFetch(pages, onRequest = () => {}) {
     assert.equal(parsed.searchParams.get("spaces"), "drive");
     assert.equal(parsed.searchParams.get("corpora"), "user");
     assert.equal(parsed.searchParams.get("pageSize"), "1000");
-    assert.equal(parsed.searchParams.get("fields"), "kind,nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)");
+    assert.equal(parsed.searchParams.get("fields"), "kind,nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,version)");
     assert.equal(init.method, "GET");
     assert.equal(init.redirect, "error");
     assert.equal(init.headers.Authorization, `Bearer ${ACCESS_TOKEN}`);
@@ -215,6 +215,32 @@ test("public folder API key reads metadata without OAuth or user corpus", async 
   assert.equal(pageCount, 1);
   assert.deepEqual(result.files.map(({ id }) => id), ["public-child"]);
   assert.ok(!JSON.stringify(result).includes(API_KEY_CREDENTIALS.GOOGLE_DRIVE_API_KEY));
+});
+
+test("Drive version is retained for revision-safe per-file claims", async () => {
+  const result = await collectDriveIntakeMetadata({
+    credentials: CREDENTIALS,
+    fetchImpl: driveFetch([page([{ ...file("versioned"), version: "42" }])]),
+  });
+  assert.equal(result.files[0].version, "42");
+  await errorCode(() => collectDriveIntakeMetadata({
+    credentials: CREDENTIALS,
+    fetchImpl: driveFetch([page([{ ...file("invalid-version"), version: "private" }])]),
+  }), "drive_file_schema_invalid");
+});
+
+test("processing flag makes listing use user OAuth even when a public API key remains", async () => {
+  const result = await collectDriveIntakeMetadata({
+    credentials: {
+      ...CREDENTIALS,
+      ...API_KEY_CREDENTIALS,
+      YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
+    },
+    fetchImpl: driveFetch([page([file("private-child")])], (_url, init) => {
+      assert.equal(init.headers?.["X-Goog-Api-Key"], undefined);
+    }),
+  });
+  assert.equal(result.files[0].id, "private-child");
 });
 
 test("invalid API key fails closed without falling back to OAuth", async () => {

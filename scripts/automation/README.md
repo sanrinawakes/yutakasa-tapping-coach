@@ -70,6 +70,20 @@ modules have no scheduled or CLI entry point and do not run in the current
 monitor. A new Drive item still raises `drive_intake_items`; it is not marked
 processed or healthy.
 
+`drive-intake-runtime.mjs` adds a disabled per-file caller: it claims a Drive
+revision, renews that claim while it verifies the source bytes, binds the
+source SHA-256 to a stable event ID and an independently verified release
+record, then invokes the existing PDF publication ledger before marking the
+source processed. An error or uncertain upload becomes `needs_review`;
+another run cannot repeat the upload. The caller has no CLI, cron wiring, or
+production release-evidence loader. The old automation did not diagnose Drive
+files automatically, and this module does not invent such a diagnosis. Do not
+enable the flags until the release-evidence loader and verifier are implemented
+and exercised with a synthetic file. Drive metadata now carries its revision
+version when Google supplies it. The processing caller requires that version
+and stops before a claim if Google omits it, so an edited file cannot be
+silently treated as an already processed revision.
+
 Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
 flag in their credential source. PDF publication additionally requires
 `YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED=true`. Both default off. The OAuth

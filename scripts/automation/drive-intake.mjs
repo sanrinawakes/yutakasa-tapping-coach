@@ -44,7 +44,8 @@ function requiredCredential(source, key) {
 }
 
 function validateCredentials(source) {
-  if (source?.GOOGLE_DRIVE_API_KEY !== undefined) {
+  if (source?.YUTAKASA_DRIVE_PROCESSING_ENABLED !== "true" &&
+      source?.GOOGLE_DRIVE_API_KEY !== undefined) {
     const apiKey = requiredCredential(source, "GOOGLE_DRIVE_API_KEY");
     if (apiKey.length > 512 || /\s/u.test(apiKey)) {
       fail("drive_credential_missing_or_invalid_google_drive_api_key");
@@ -181,7 +182,9 @@ function validateFile(file) {
     file.mimeType.length === 0 ||
     file.mimeType.length > 256 ||
     typeof file.modifiedTime !== "string" ||
-    !Number.isFinite(Date.parse(file.modifiedTime))
+    !Number.isFinite(Date.parse(file.modifiedTime)) ||
+    (file.version !== undefined &&
+      (typeof file.version !== "string" || !/^[0-9]{1,20}$/u.test(file.version)))
   ) {
     fail("drive_file_schema_invalid");
   }
@@ -190,6 +193,7 @@ function validateFile(file) {
     name: file.name,
     mimeType: file.mimeType,
     modifiedTime: file.modifiedTime,
+    ...(file.version === undefined ? {} : { version: file.version }),
   };
 }
 
@@ -240,7 +244,7 @@ export async function collectDriveIntakeMetadata({
     url.searchParams.set("pageSize", String(PAGE_SIZE));
     url.searchParams.set(
       "fields",
-      "kind,nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)",
+      "kind,nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,version)",
     );
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 

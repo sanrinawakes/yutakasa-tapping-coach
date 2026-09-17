@@ -191,6 +191,27 @@ test("same event and same bytes recover an ambiguous upload without a second POS
   assert.equal(calls.some((url) => url.includes("/upload/")), false);
 });
 
+test("expired evidence cannot confirm an existing PDF or complete its event", async () => {
+  let checks = 0;
+  let posts = 0;
+  const publicationLedger = makeLedger();
+  await expectCode(() => publishVerifiedDriveResult({
+    report: REPORT,
+    credentials: CREDENTIALS,
+    renderPdf: async () => PDF,
+    fetchImpl: fakeDrive({
+      existing: true,
+      onCall: (url) => { if (url.includes("/upload/")) posts += 1; },
+    }),
+    assertEvidence: async () => { checks += 1; return checks === 1; },
+    assertLease: async () => true,
+    publicationLedger,
+  }), "drive_result_evidence_required");
+  assert.equal(checks, 2);
+  assert.equal(posts, 0);
+  assert.equal(publicationLedger.rows.get(REPORT.eventId).status, "posting");
+});
+
 test("same-name file whose app properties are hidden blocks a duplicate upload", async () => {
   const calls = [];
   const expectedFile = savedFile({
@@ -312,6 +333,26 @@ test("release evidence must be bound before any rendering or API request", async
     assertLease: async () => true,
   }), "drive_result_evidence_required");
   assert.equal(calls, 0);
+});
+
+test("release evidence revoked during preparation blocks the upload POST", async () => {
+  let checks = 0;
+  let posts = 0;
+  const publicationLedger = makeLedger();
+  await expectCode(() => publishVerifiedDriveResult({
+    report: REPORT,
+    credentials: CREDENTIALS,
+    renderPdf: async () => PDF,
+    fetchImpl: fakeDrive({
+      onCall: (url) => { if (url.includes("/upload/")) posts += 1; },
+    }),
+    assertEvidence: async () => { checks += 1; return checks === 1; },
+    assertLease: async () => true,
+    publicationLedger,
+  }), "drive_result_evidence_required");
+  assert.equal(checks, 2);
+  assert.equal(posts, 0);
+  assert.equal(publicationLedger.rows.get(REPORT.eventId).status, "posting");
 });
 
 test("API key alone cannot authorize write", async () => {

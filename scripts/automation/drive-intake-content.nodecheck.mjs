@@ -114,6 +114,19 @@ test("moved, changed, and invalid source files fail before media download", asyn
   }
 });
 
+test("snapshot version mismatch blocks content read before media download", async () => {
+  let mediaCalls = 0;
+  await expectCode(() => fetchDriveIntakeContent({
+    file: { ...FILE, version: "41" },
+    credentials: CREDENTIALS,
+    fetchImpl: fakeFetch({
+      metadata: { version: "42" },
+      onCall: (url) => { if (url.includes("alt=media")) mediaCalls += 1; },
+    }),
+  }), "drive_intake_content_metadata_mismatch");
+  assert.equal(mediaCalls, 0);
+});
+
 test("body-size limit and checksum mismatch are never processed", async () => {
   await expectCode(() => fetchDriveIntakeContent({
     file: FILE,
