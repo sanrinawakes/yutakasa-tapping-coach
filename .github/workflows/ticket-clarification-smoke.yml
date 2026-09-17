@@ -1,0 +1,53 @@
+name: One-shot synthetic ticket clarification smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The other production synthetic smoke scans the same reserved address family.
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  clarify:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_CLARIFICATION_SMOKE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: ${{ runner.temp }}/yutakasa-clarification-smoke-state.json
+      YUTAKASA_CLARIFICATION_SMOKE_ENABLED: ${{ vars.YUTAKASA_CLARIFICATION_SMOKE_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify cleanup SQL and fail-closed orchestration locally
+        run: |
+          bash scripts/automation/test-ticket-clarification-smoke-sql.sh
+          node --test scripts/automation/ticket-clarification-smoke.nodecheck.mjs
+      - name: Verify deployed main and exercise isolated clarification
+        env:
+          GITHUB_ACTIONS: 'true'
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+        run: timeout 8m node scripts/automation/ticket-clarification-smoke.mjs
+      - name: Rescue synthetic cleanup after an interrupted smoke
+        if: always()
+        env:
+          GITHUB_ACTIONS: 'true'
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+        run: timeout 4m node scripts/automation/ticket-clarification-smoke.mjs --cleanup-only
