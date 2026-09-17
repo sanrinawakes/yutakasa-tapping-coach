@@ -1,0 +1,85 @@
+name: Ticket repair production candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      work_id:
+        description: Opaque repair work UUID; never customer text
+        required: true
+        type: string
+      pr_number:
+        description: Merged repair PR number
+        required: true
+        type: string
+      scenario_key:
+        description: Fixed technical scenario
+        required: true
+        type: choice
+        options:
+          - chat_send_reload_persistence
+          - chat_stream_completion
+      before_after_run_id:
+        description: Completed ticket regression evidence Actions run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+# The production E2E creates and removes a synthetic subscriber. Serialize it
+# with the scheduled observer and the one-shot production smoke.
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix scripts/automation
+      - name: Download the immutable regression candidate from its exact run
+        uses: actions/download-artifact@v4
+        with:
+          name: ticket-regression-evidence
+          run-id: ${{ inputs.before_after_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/regression-candidate
+      - run: node --test scripts/automation/ticket-repair-production-candidate.nodecheck.mjs
+      - name: Verify release binding and measure the isolated production chat
+        env:
+          WORK_ID: ${{ inputs.work_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SCENARIO_KEY: ${{ inputs.scenario_key }}
+          BEFORE_AFTER_RUN_ID: ${{ inputs.before_after_run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          CANDIDATE_PATH: ${{ runner.temp }}/regression-candidate/ticket-regression-evidence.json
+          EVIDENCE_PATH: ${{ runner.temp }}/ticket-production-candidate.json
+        run: node scripts/automation/ticket-repair-production-candidate.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ticket-production-candidate
+          path: ${{ runner.temp }}/ticket-production-candidate.json
+          if-no-files-found: error
+          retention-days: 7
