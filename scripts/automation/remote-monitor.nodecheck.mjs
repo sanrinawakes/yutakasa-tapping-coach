@@ -98,6 +98,26 @@ function regularMode(filePath) {
   return stat.mode & 0o777;
 }
 
+test("Vercel log failures retain only bounded diagnostic codes", async () => {
+  const root = tempRoot();
+  try {
+    for (const [message, expected] of [
+      ["log_gemini_current_query_timeout", "log_gemini_current_query_timeout"],
+      ["private customer body", "vercel_log_snapshot_failed"],
+    ]) {
+      await assert.rejects(preflightRemoteMonitor({
+        secrets: SECRETS,
+        tempRoot: root,
+        snapshotImpl: async () => snapshot(),
+        ...evidence(),
+        logsImpl: async () => { throw new Error(message); },
+      }), (error) => error instanceof RemoteMonitorError && error.code === expected);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("preflight and complete keep secrets private, produce anonymous no-op, and clean up", async () => {
   const root = tempRoot();
   const calls = [];

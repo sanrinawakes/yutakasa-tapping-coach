@@ -63,7 +63,7 @@ function checkCandidate({ pr, files, runsByWorkflow, vercelStatus, expectedSha, 
     pr?.head?.repo?.full_name !== REPO ||
     !(ANOMALY_BRANCH.test(pr?.head?.ref ?? "") || TICKET_BRANCH.test(pr?.head?.ref ?? "")) ||
     pr?.mergeable !== true || !["clean", "draft"].includes(pr?.mergeable_state) ||
-    (pr.draft && pr.mergeable_state !== "draft") ||
+    (pr.draft && !["draft", "clean"].includes(pr.mergeable_state)) ||
     (!pr.draft && pr.mergeable_state !== "clean") ||
     !Number.isSafeInteger(pr?.changed_files) || pr.changed_files < 2 || pr.changed_files > 20 ||
     !Array.isArray(files) || files.length !== pr.changed_files
@@ -192,10 +192,28 @@ export async function prepareReleaseLedger(env, fetchImpl, number, sha, proof) {
   const rows = await releaseLedgerRequest(env, fetchImpl, "GET", `?pr_number=eq.${number}&select=pr_number,head_sha,merge_sha,status,ticket_before_after_run_id,ticket_regression_artifact_sha256`, null);
   if (!Array.isArray(rows) || rows.length > 1) fail("release_ledger_rows_invalid");
   if (rows.length === 1) {
-    if (rows[0].pr_number !== number || rows[0].head_sha !== sha ||
-        rows[0].merge_sha !== null || rows[0].status !== "pending_merge" ||
-        rows[0].ticket_before_after_run_id !== proof.beforeAfterRunId ||
-        rows[0].ticket_regression_artifact_sha256 !== proof.artifactSha256) {
+    const row = rows[0];
+    if (row.pr_number !== number || row.head_sha !== sha ||
+        row.merge_sha !== null || row.status !== "pending_merge") {
+      fail("release_ledger_conflict");
+    }
+    if (row.ticket_before_after_run_id === null &&
+        row.ticket_regression_artifact_sha256 === null) {
+      const updated = await releaseLedgerRequest(env, fetchImpl, "PATCH",
+        `?pr_number=eq.${number}&head_sha=eq.${sha}&status=eq.pending_merge&merge_sha=is.null&ticket_before_after_run_id=is.null&ticket_regression_artifact_sha256=is.null`,
+        { ticket_before_after_run_id: proof.beforeAfterRunId,
+          ticket_regression_artifact_sha256: proof.artifactSha256 });
+      if (!Array.isArray(updated) || updated.length !== 1 ||
+          updated[0].pr_number !== number || updated[0].head_sha !== sha ||
+          updated[0].status !== "pending_merge" || updated[0].merge_sha !== null ||
+          updated[0].ticket_before_after_run_id !== proof.beforeAfterRunId ||
+          updated[0].ticket_regression_artifact_sha256 !== proof.artifactSha256) {
+        fail("release_ledger_provenance_unconfirmed");
+      }
+      return;
+    }
+    if (row.ticket_before_after_run_id !== proof.beforeAfterRunId ||
+        row.ticket_regression_artifact_sha256 !== proof.artifactSha256) {
       fail("release_ledger_conflict");
     }
     return;

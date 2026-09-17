@@ -262,12 +262,15 @@ export async function collectRemoteLogs({
           "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
           filter, "--token", token,
         ], {
-          timeout: 50_000,
+          timeout: 90_000,
           maxBuffer: 8 * 1024 * 1024,
           encoding: "utf8",
           env: childEnv,
         }));
-      } catch {
+      } catch (error) {
+        if (error?.killed || error?.signal === "SIGTERM") {
+          fail(`log_${name}_${scope}_query_timeout`);
+        }
         fail(`log_${name}_${scope}_query_failed`);
       }
       const parsed = parseBoundedLogQuery(stdout, { filterName: name });

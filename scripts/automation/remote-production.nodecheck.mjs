@@ -128,6 +128,14 @@ test("log queries discard content and reject truncated results", async () => {
     }),
     /log_fiveXx_project_truncated/u,
   );
+  await assert.rejects(collectRemoteLogs({
+    deploymentId: id,
+    token: "x".repeat(30),
+    runCommand: async (_command, _args, options) => {
+      assert.equal(options.timeout, 90_000);
+      throw Object.assign(new Error("private CLI output must stay private"), { killed: true });
+    },
+  }), /log_fiveXx_project_query_timeout/u);
 });
 
 test("repair observations read only the current deployment after merge", async () => {
