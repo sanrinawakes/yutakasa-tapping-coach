@@ -26,6 +26,14 @@ const CLAIM_ID = "11111111-1111-4111-8111-111111111111";
 const EVENT_ID = driveResultEventId(FILE);
 const REPORT = { eventId: EVENT_ID };
 
+test("a changed Drive version gets a distinct immutable result event", () => {
+  assert.notEqual(
+    driveResultEventId({ ...FILE, version: "42" }),
+    driveResultEventId({ ...FILE, version: "43" }),
+  );
+  assert.notEqual(driveResultEventId(FILE), driveResultEventId({ ...FILE, version: "42" }));
+});
+
 function fakeLedger(state = "acquired") {
   const calls = [];
   return {
@@ -134,6 +142,23 @@ test("release record for another revision becomes review without upload", async 
     "finish", FILE.id, CLAIM_ID,
     { status: "needs_review", failureCode: "processing_failed" },
   ]);
+});
+
+test("release record with a different Drive version cannot publish", async () => {
+  const versioned = { ...FILE, version: "42" };
+  const { args, ledger, calls } = harness({
+    snapshot: { ...SNAPSHOT, files: [versioned] },
+    loadVerifiedResult: async (key) => ({
+      ...key, driveVersion: "41",
+      report: { eventId: driveResultEventId(versioned) },
+    }),
+  });
+  await expectCode(() => processVerifiedDriveIntake(args),
+    "drive_runtime_release_binding_invalid");
+  assert.equal(calls.some(([name]) => name === "publish"), false);
+  assert.deepEqual(ledger.calls.at(-1)[3], {
+    status: "needs_review", failureCode: "processing_failed",
+  });
 });
 
 test("source changed while reading uses fixed review reason", async () => {

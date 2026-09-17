@@ -51,7 +51,10 @@ function checkedSnapshot(snapshot) {
 export function driveResultEventId(file) {
   checkedFile(file);
   return "drive_" + createHash("sha256")
-    .update(JSON.stringify([file.id, new Date(file.modifiedTime).toISOString()]))
+    .update(JSON.stringify([
+      file.id, new Date(file.modifiedTime).toISOString(),
+      ...(file.version === undefined ? [] : [file.version]),
+    ]))
     .digest("hex").slice(0, 32);
 }
 
@@ -163,11 +166,13 @@ export async function processVerifiedDriveIntake({
       const eventId = driveResultEventId(file);
       const binding = await loadVerifiedResult({
         fileId: file.id, modifiedTime: file.modifiedTime,
+        driveVersion: file.version ?? null,
         contentSha256: content.sha256, eventId,
       });
       if (binding?.contentSha256 !== content.sha256 ||
           binding?.fileId !== file.id ||
           binding?.modifiedTime !== file.modifiedTime ||
+          binding?.driveVersion !== (file.version ?? null) ||
           binding?.report?.eventId !== eventId) {
         fail("drive_runtime_release_binding_invalid");
       }
@@ -181,6 +186,7 @@ export async function processVerifiedDriveIntake({
           try {
             return await verifyReleaseEvidence({
               fileId: file.id, modifiedTime: file.modifiedTime,
+              driveVersion: file.version ?? null,
               contentSha256: content.sha256, eventId, report,
             }) === true;
           } catch {
