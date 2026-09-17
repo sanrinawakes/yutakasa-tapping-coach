@@ -26,6 +26,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   scripts/automation/ticket-repair-bridge.sqlcheck.sql \
   scripts/automation/drive-result-ledger.sql \
   scripts/automation/drive-result-ledger.sqlcheck.sql \
+  scripts/automation/drive-intake-ledger.sql \
+  scripts/automation/drive-intake-ledger.sqlcheck.sql \
   scripts/automation/ticket-reply-draft.sql \
   scripts/automation/ticket-reply-draft.sqlcheck.sql \
   scripts/automation/ticket-clarification.sql \
@@ -33,6 +35,7 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"
 done
 YUTAKASA_TEST_PG_CONTAINER="$container" node scripts/automation/drive-result-ledger-concurrency.mjs
+YUTAKASA_TEST_PG_CONTAINER="$container" node scripts/automation/drive-intake-ledger-concurrency.mjs
 docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
   < scripts/automation/ticket-reply-draft.concurrent.setup.sql
 first_result=$(mktemp)
