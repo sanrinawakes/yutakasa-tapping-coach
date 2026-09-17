@@ -1,0 +1,33 @@
+name: Verify capped Terra API access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yutakasa-terra-api-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify the pinned project and call Terra once
+        env:
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+        run: node scripts/automation/openai-terra-probe.mjs
