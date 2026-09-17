@@ -149,6 +149,19 @@ async function refreshAccessToken(credentials, fetchImpl) {
   return result.access_token;
 }
 
+// File content and writes require user OAuth. The API key used by the
+// metadata-only monitor must never be accepted as a write credential.
+export async function getDriveOAuthAccessToken({
+  credentials = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  return refreshAccessToken({
+    clientId: requiredCredential(credentials, "GOOGLE_DRIVE_CLIENT_ID"),
+    clientSecret: requiredCredential(credentials, "GOOGLE_DRIVE_CLIENT_SECRET"),
+    refreshToken: requiredCredential(credentials, "GOOGLE_DRIVE_REFRESH_TOKEN"),
+  }, fetchImpl);
+}
+
 function validateFile(file) {
   if (
     !file ||
