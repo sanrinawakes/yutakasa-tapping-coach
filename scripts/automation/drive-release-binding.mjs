@@ -1,6 +1,7 @@
 import { DriveIntakeError } from "./drive-intake.mjs";
 import { verifyDriveReleaseEvidence } from "./drive-release-evidence.mjs";
 import { collectRemoteDeployment } from "./remote-production.mjs";
+import { driveResultEventId } from "./drive-intake-runtime.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const RESPONSE_LIMIT = 256 * 1024;
@@ -98,6 +99,34 @@ async function readBinding(config, eventId, fetchImpl) {
   }, "drive_evidence_binding", fetchImpl);
 }
 
+async function readBindingHeader(config, key, fetchImpl) {
+  if (!key || typeof key !== "object" ||
+      !/^drive_[a-f0-9]{32}$/u.test(key.eventId ?? "") ||
+      key.eventId !== driveResultEventId({
+        id: key.fileId, name: "bound-source", mimeType: "application/pdf",
+        modifiedTime: key.modifiedTime, version: key.driveVersion,
+      })) fail("drive_evidence_event_invalid");
+  const result = await getJson(supabaseUrl(config, "yutakasa_drive_release_bindings", {
+    select: "event_id,file_id,modified_time,drive_version,content_sha256,status",
+    event_id: `eq.${key.eventId}`,
+    limit: "2",
+  }), {
+    apikey: config.serviceKey,
+    Authorization: `Bearer ${config.serviceKey}`,
+  }, "drive_evidence_binding", fetchImpl);
+  if (!Array.isArray(result) || result.length > 1) fail("drive_evidence_binding_invalid");
+  if (result.length === 0 || result[0]?.status !== "verified") return null;
+  const binding = result[0];
+  if (binding.event_id !== key.eventId || binding.file_id !== key.fileId ||
+      binding.drive_version !== key.driveVersion ||
+      !Number.isFinite(Date.parse(binding.modified_time)) ||
+      Date.parse(binding.modified_time) !== Date.parse(key.modifiedTime) ||
+      !/^[a-f0-9]{64}$/u.test(binding.content_sha256 ?? "")) {
+    fail("drive_evidence_binding_invalid");
+  }
+  return { eventId: key.eventId, contentSha256: binding.content_sha256 };
+}
+
 async function readRelease(config, prNumber, fetchImpl) {
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) fail("drive_evidence_release_invalid");
   return oneRow(config, "yutakasa_repair_releases", {
@@ -158,7 +187,7 @@ async function readChecks(config, headSha, fetchImpl) {
 
 // The owner-controlled binding table is read-only to service_role. These
 // callbacks fit processVerifiedDriveIntake; absent approval rows fail closed.
-// There is deliberately no report writer, Drive access, or scheduled entry.
+// There is deliberately no report writer or Drive access in this adapter.
 export function createDriveReleaseEvidenceAdapter({
   secrets = process.env,
   fetchImpl = globalThis.fetch,
@@ -169,6 +198,9 @@ export function createDriveReleaseEvidenceAdapter({
   if (typeof fetchImpl !== "function" || typeof deploymentImpl !== "function" ||
       typeof now !== "function") fail("drive_evidence_config_invalid");
   return {
+    async inspectVerifiedBinding(key) {
+      return readBindingHeader(config, key, fetchImpl);
+    },
     async loadVerifiedResult(key) {
       const binding = await readBinding(config, key?.eventId, fetchImpl);
       if (binding.status !== "verified" ||

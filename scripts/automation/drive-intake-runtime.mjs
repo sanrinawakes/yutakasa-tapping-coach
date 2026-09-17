@@ -102,10 +102,9 @@ function heartbeat({ assertLease, ledger, file, claimId, intervalMs }) {
   };
 }
 
-// Deliberately has no CLI or scheduled entry point. The release record loader
-// must be implemented against authoritative ticket/release evidence before a
-// production caller can use this. It receives only an opaque ID and hash, never
-// the customer's bytes or filename.
+// No direct CLI entry point. The scheduled caller remains flag-gated and
+// requires an independently verified binding to authoritative release evidence.
+// It receives only an opaque ID and hash, never the customer's bytes or filename.
 export async function processVerifiedDriveIntake({
   snapshot,
   credentials = process.env,

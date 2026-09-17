@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { acquireMonitorLease, MonitorLedgerError } from "./monitor-ledger.mjs";
+import { DriveIntakeError } from "./drive-intake.mjs";
 import { runLeasedMonitor } from "./remote-monitor.mjs";
 
 const secrets = {
@@ -220,6 +221,96 @@ test("reconcile fallback is disabled by default and makes no database or GitHub 
     reconcileDispatchImpl:async()=>assert.fail("fallback must remain off"),
     alertImpl:async()=>assert.fail("no alert")});
   assert.equal(result.ticketReconcileDispatches,0);
+});
+
+test("Drive scheduler runs only under the monitor lease and keeps intake actionable", async () => {
+  const events = [];
+  const receipt = {
+    scanned: 1, unbound: 0, processed: 1, alreadyProcessed: 0, blocked: 0, deferred: 0,
+  };
+  const result = await runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_DRIVE_SCHEDULED_ENABLED: "true" },
+    leaseImpl: async () => ({
+      assertActive: async () => { events.push("lease"); },
+      finish: async (value) => {
+        events.push("finish");
+        assert.equal(value.status, "action_required");
+        assert.deepEqual(value.reasonCodes, ["drive_intake_items"]);
+      },
+      stop: async () => { events.push("stop"); },
+      recordDispatch: async () => { events.push("record"); },
+    }),
+    monitorImpl: async () => ({
+      actionRequired: true, reasonCodes: ["drive_intake_items"],
+      deploymentId: "dpl_123", driveStartCount: 1, driveFinalCount: 1,
+    }),
+    driveScheduleImpl: async ({ assertLease }) => {
+      events.push("drive");
+      assert.equal(await assertLease(), true);
+      return receipt;
+    },
+    alertImpl: async () => { events.push("alert"); },
+  });
+  assert.deepEqual(result.driveSchedule, receipt);
+  assert.deepEqual(events, ["drive", "lease", "finish", "stop", "alert", "record"]);
+});
+
+test("Drive scheduler remains off without its exact flag", async () => {
+  await runLeasedMonitor({
+    secrets,
+    leaseImpl: async () => ({
+      assertActive: async () => {}, finish: async () => {}, stop: async () => {},
+      recordDispatch: async () => {},
+    }),
+    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [] }),
+    driveScheduleImpl: async () => assert.fail("Drive scheduler must remain off"),
+    alertImpl: async () => assert.fail("healthy monitor must not alert"),
+  });
+});
+
+test("Drive item arriving after monitor snapshot still prevents a healthy verdict", async () => {
+  let saved;
+  const result = await runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_DRIVE_SCHEDULED_ENABLED: "true" },
+    leaseImpl: async () => ({
+      assertActive: async () => {}, finish: async (value) => { saved = value; },
+      stop: async () => {}, recordDispatch: async () => {},
+    }),
+    monitorImpl: async () => ({
+      actionRequired: false, reasonCodes: [], deploymentId: "dpl_123",
+      driveStartCount: 0, driveFinalCount: 0,
+    }),
+    driveScheduleImpl: async () => ({
+      scanned: 1, unbound: 1, processed: 0, alreadyProcessed: 0,
+      blocked: 0, deferred: 0,
+    }),
+    alertImpl: async () => {},
+  });
+  assert.equal(saved.status, "action_required");
+  assert.deepEqual(saved.reasonCodes, ["drive_intake_items"]);
+  assert.equal(result.actionRequired, true);
+});
+
+test("Drive scheduler failure records only a fixed code and never healthy", async () => {
+  let saved;
+  const alerts = [];
+  await assert.rejects(runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_DRIVE_SCHEDULED_ENABLED: "true" },
+    leaseImpl: async () => ({
+      assertActive: async () => {}, finish: async (value) => { saved = value; },
+      stop: async () => {}, recordDispatch: async () => {},
+    }),
+    monitorImpl: async () => ({
+      actionRequired: true, reasonCodes: ["drive_intake_items"],
+      deploymentId: "dpl_123", driveFinalCount: 1,
+    }),
+    driveScheduleImpl: async () => { throw new DriveIntakeError("drive_schedule_version_missing"); },
+    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); },
+  }), (error) => error instanceof DriveIntakeError &&
+    error.code === "drive_schedule_version_missing");
+  assert.equal(saved.status, "failed");
+  assert.deepEqual(saved.reasonCodes, ["drive_schedule_version_missing"]);
+  assert.deepEqual(alerts, [["drive_schedule_version_missing"]]);
 });
 
 test("due review is actionable, dispatches once after lease release, then alerts",async()=>{
