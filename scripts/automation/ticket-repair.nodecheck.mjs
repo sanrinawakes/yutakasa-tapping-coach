@@ -89,9 +89,11 @@ test("ticket job rechecks private context, makes a fixed-body PR, then links CAS
 
 test("scheduled recovery sends no customer reply and moves verified or expired work to review",async()=>{
   const called=[];
+  let drafts=0;
   const result=await reconcileTicketRepairs({env:{GITHUB_EVENT_NAME:"schedule",
-    TICKET_RECONCILE_ENABLED:"true",SUPABASE_URL:env.SUPABASE_URL,
+    GITHUB_REPOSITORY:env.GITHUB_REPOSITORY,TICKET_RECONCILE_ENABLED:"true",SUPABASE_URL:env.SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY:env.SUPABASE_SERVICE_ROLE_KEY},
+  draftImpl:async()=>{drafts+=1;return {status:"drafted"};},
   fetchImpl:async(url,init)=>{
     called.push({url:String(url),body:JSON.parse(init.body)});
     if(String(url).endsWith("recover_yutakasa_ticket_repair_jobs"))
@@ -102,7 +104,8 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
       return new Response(JSON.stringify([{status:"manual_review"}]),{status:200});
     throw new Error("unexpected request");
   }});
-  assert.deepEqual(result,{examined:1,manualReviews:1,recoveredClaims:0});
+  assert.deepEqual(result,{examined:1,manualReviews:1,drafted:1,draftFailures:0,recoveredClaims:0});
+  assert.equal(drafts,1);
   assert.equal(called.some((item)=>item.url.includes("append_verified")),false);
   assert.deepEqual(called[2].body,{p_work_id:workId});
   await assert.rejects(()=>reconcileTicketRepairs({env:{},fetchImpl:async()=>{

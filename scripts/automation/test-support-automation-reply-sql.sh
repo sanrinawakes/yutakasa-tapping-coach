@@ -13,7 +13,9 @@ for _ in $(seq 1 60); do
      docker exec "$container" psql -X -q -U postgres -d yutakasa -c 'SELECT 1' >/dev/null 2>&1; then break; fi
   sleep 1
 done
+
 for file in scripts/support-migration-harness.sql supabase-migration-support.sql \
+  supabase-migration-support-automation-claim.sql \
   scripts/automation/repair-release-ledger.sql \
   scripts/automation/repair-release-ledger.sqlcheck.sql \
   scripts/automation/support-automation-reply.sql \
@@ -23,7 +25,45 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   scripts/automation/ticket-repair-bridge.sql \
   scripts/automation/ticket-repair-bridge.sqlcheck.sql \
   scripts/automation/drive-result-ledger.sql \
-  scripts/automation/drive-result-ledger.sqlcheck.sql; do
+  scripts/automation/drive-result-ledger.sqlcheck.sql \
+  scripts/automation/ticket-reply-draft.sql \
+  scripts/automation/ticket-reply-draft.sqlcheck.sql \
+  scripts/automation/ticket-clarification.sql \
+  scripts/automation/ticket-clarification.sqlcheck.sql; do
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"
 done
 YUTAKASA_TEST_PG_CONTAINER="$container" node scripts/automation/drive-result-ledger-concurrency.mjs
+docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  < scripts/automation/ticket-reply-draft.concurrent.setup.sql
+first_result=$(mktemp)
+second_result=$(mktemp)
+trap 'rm -f "$first_result" "$second_result"; cleanup' EXIT
+set +e
+docker exec "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  -c "BEGIN; SELECT 1 FROM public.support_tickets WHERE id='10000000-0000-4000-8000-000000000001' FOR UPDATE; SELECT pg_sleep(2); SELECT * FROM public.append_support_admin_message_checked('10000000-0000-4000-8000-000000000001','画面と時刻を教えてください。','50000000-0000-4000-8000-000000000001',FALSE,'20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001'); COMMIT;" \
+  > "$first_result" 2>&1 &
+first_pid=$!
+docker exec "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
+  -c "SELECT * FROM public.append_support_admin_message_checked('10000000-0000-4000-8000-000000000001','画面と時刻を教えてください。','50000000-0000-4000-8000-000000000002',FALSE,'20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001');" \
+  > "$second_result" 2>&1 &
+second_pid=$!
+wait "$first_pid"
+first_status=$?
+wait "$second_pid"
+second_status=$?
+set -e
+if [[ "$first_status" -eq "$second_status" ]]; then
+  cat "$first_result" "$second_result" >&2
+  echo 'Expected exactly one concurrent draft send to succeed' >&2
+  exit 1
+fi
+message_count=$(docker exec "$container" psql -X -q -U postgres -d yutakasa -Atc \
+  "SELECT count(*) FROM public.support_messages WHERE ticket_id='10000000-0000-4000-8000-000000000001' AND sender_type='admin'")
+consumed_count=$(docker exec "$container" psql -X -q -U postgres -d yutakasa -Atc \
+  "SELECT count(*) FROM public.yutakasa_ticket_reply_drafts WHERE work_id='30000000-0000-4000-8000-000000000001' AND used_message_id IS NOT NULL")
+if [[ "$message_count" != '1' || "$consumed_count" != '1' ]]; then
+  cat "$first_result" "$second_result" >&2
+  echo "Concurrent draft result invalid: messages=$message_count consumed=$consumed_count" >&2
+  exit 1
+fi
+echo 'Concurrent draft send: 1 created, 1 rejected, 1 customer message in DB'

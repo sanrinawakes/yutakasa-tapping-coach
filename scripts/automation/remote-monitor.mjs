@@ -563,6 +563,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
         automationToken,
         fetchImpl: options.supportFetchImpl ?? globalThis.fetch,
         repairBridgeEnabled: secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true",
+        clarificationEnabled: secrets.TICKET_CLARIFICATION_ENABLED === "true",
         beforeMutation: options.leaseGuard ?? (async () => {}),
       });
     }

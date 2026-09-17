@@ -37,11 +37,23 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     if (record.resolve !== undefined && typeof record.resolve !== "boolean") {
       throw new SupportRequestError("完了状態が正しくありません。");
     }
+    const parsedLatestUserMessageId = record.expectedLatestUserMessageId === undefined
+      ? undefined : parseClientRequestId(record.expectedLatestUserMessageId);
+    const parsedDraftWorkId = record.draftWorkId === undefined
+      ? undefined : parseClientRequestId(record.draftWorkId);
+    if (record.expectedLatestUserMessageId !== undefined && !parsedLatestUserMessageId) {
+      throw new SupportRequestError("返信案の元になった問い合わせが正しくありません。");
+    }
+    if (record.draftWorkId !== undefined && !parsedDraftWorkId) {
+      throw new SupportRequestError("返信案の作業IDが正しくありません。");
+    }
     const result = await appendAdminSupportMessage({
       ticketId: id,
       body,
       clientRequestId: requestId,
       resolve: record.resolve === true,
+      expectedLatestUserMessageId: parsedLatestUserMessageId ?? undefined,
+      draftWorkId: parsedDraftWorkId ?? undefined,
     });
     return NextResponse.json(result, { status: result.created ? 201 : 200 });
   } catch (error) {

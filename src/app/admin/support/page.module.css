@@ -101,6 +101,25 @@
   font: inherit;
 }
 
+.replyDraft {
+  padding: 14px;
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.replyDraft p,
+.replyDraft blockquote {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+
+.replyDraft blockquote {
+  padding-left: 12px;
+  border-left: 3px solid #d97706;
+}
+
 .error {
   margin-top: 12px;
   padding: 11px 14px;
