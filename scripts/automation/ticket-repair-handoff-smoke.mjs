@@ -277,7 +277,7 @@ export async function cleanupTicketRepairSmoke(env, fetchImpl, email, runId, tic
   }
 }
 
-/** A main-only production probe; no AI, GitHub dispatch, email, or payment call. */
+/** The default main-only CLI path has no AI, GitHub, email, or payment call. */
 export async function runTicketRepairHandoffSmoke({ env = process.env,
   fetchImpl = globalThis.fetch, deploymentImpl = collectRemoteDeployment,
   supportTicketImpl = checkSyntheticSupportTicket,
