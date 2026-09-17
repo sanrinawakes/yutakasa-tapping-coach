@@ -314,6 +314,26 @@ test("release evidence must be bound before any rendering or API request", async
   assert.equal(calls, 0);
 });
 
+test("release evidence revoked during preparation blocks the upload POST", async () => {
+  let checks = 0;
+  let posts = 0;
+  const publicationLedger = makeLedger();
+  await expectCode(() => publishVerifiedDriveResult({
+    report: REPORT,
+    credentials: CREDENTIALS,
+    renderPdf: async () => PDF,
+    fetchImpl: fakeDrive({
+      onCall: (url) => { if (url.includes("/upload/")) posts += 1; },
+    }),
+    assertEvidence: async () => { checks += 1; return checks === 1; },
+    assertLease: async () => true,
+    publicationLedger,
+  }), "drive_result_evidence_required");
+  assert.equal(checks, 2);
+  assert.equal(posts, 0);
+  assert.equal(publicationLedger.rows.get(REPORT.eventId).status, "posting");
+});
+
 test("API key alone cannot authorize write", async () => {
   let calls = 0;
   await expectCode(() => publishVerifiedDriveResult({

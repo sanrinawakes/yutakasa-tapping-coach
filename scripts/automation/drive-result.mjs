@@ -292,6 +292,9 @@ export async function publishVerifiedDriveResult({
   }
   if (reservation !== "reserved") fail("drive_result_publication_pending");
   await requireCheck(assertLease, undefined, "drive_result_lease_required");
+  // Rendering, OAuth refresh, and Drive listing can outlive the release
+  // evidence checked at entry. Recheck immediately before the only POST.
+  await requireCheck(assertEvidence, report, "drive_result_evidence_required");
   const metadata = {
     name,
     mimeType: "application/pdf",
