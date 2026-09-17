@@ -58,6 +58,20 @@ test("disabled auto merge never calls GitHub", async () => {
   assert.equal(calls, 0);
 });
 
+test("a successful unrelated regression workflow skips promotion without GitHub writes", async () => {
+  let calls = 0;
+  const result = await promoteAiRepair({
+    env: { YUTAKASA_AUTO_MERGE_ENABLED: "true",
+      GITHUB_REPOSITORY: "sanrinawakes/yutakasa-tapping-coach",
+      GH_TOKEN: "x".repeat(40), REPAIR_TRIGGER_SHA: "b".repeat(40),
+      REPAIR_REGRESSION_RUN_ID: "1234567" },
+    triggerImpl: async () => null,
+    fetchImpl: async () => { calls += 1; throw new Error("unexpected GitHub request"); },
+  });
+  assert.deepEqual(result, { status: "unrelated_regression_run" });
+  assert.equal(calls, 0);
+});
+
 test("main protection requires both exact check contexts and up-to-date enforcement", () => {
   const rules = [{ type: "required_status_checks", parameters: {
     strict_required_status_checks_policy: true,

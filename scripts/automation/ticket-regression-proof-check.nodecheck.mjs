@@ -87,6 +87,18 @@ test("a trusted evidence workflow recovers the PR head from its digest-checked a
     decodeImpl: async () => artifact }), { headSha, baseSha, workId, prNumber });
 });
 
+test("a completed unrelated PR regression run has no artifact and cannot authorize promotion", async () => {
+  const fetchImpl = async (url) => {
+    if (url.includes(`/actions/runs/${runId}/artifacts`)) {
+      return Response.json({ total_count: 0, artifacts: [] });
+    }
+    if (url.includes(`/actions/runs/${runId}`)) return Response.json(run);
+    assert.fail(`unexpected ${url}`);
+  };
+  assert.equal(await readRegressionTriggerHead({ runId, token: "x".repeat(40),
+    fetchImpl, archiveImpl: async () => assert.fail("archive must not be read") }), null);
+});
+
 test("promotion sees pending evidence until exact successful run and test source exist", async () => {
   const token = "x".repeat(40);
   const fetchImpl = async (url) => {
