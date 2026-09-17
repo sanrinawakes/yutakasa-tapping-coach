@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_ticket_clarifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE public.yutakasa_ticket_clarifications ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.yutakasa_ticket_clarifications FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.yutakasa_ticket_clarifications FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.yutakasa_ticket_clarifications TO service_role;
 
 CREATE OR REPLACE FUNCTION public.append_yutakasa_ticket_clarification(

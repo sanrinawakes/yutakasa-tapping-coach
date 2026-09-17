@@ -7,6 +7,13 @@ BEGIN
     WHERE n.nspname='public' AND c.relname='yutakasa_ticket_clarifications' AND c.relrowsecurity)
     OR has_table_privilege('anon','public.yutakasa_ticket_clarifications','SELECT')
     OR has_table_privilege('authenticated','public.yutakasa_ticket_clarifications','SELECT')
+    OR NOT has_table_privilege('service_role','public.yutakasa_ticket_clarifications','SELECT')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','INSERT')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','UPDATE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','DELETE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','TRUNCATE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','REFERENCES')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_clarifications','TRIGGER')
     OR has_function_privilege('authenticated',
       'public.append_yutakasa_ticket_clarification(uuid,uuid,uuid,timestamptz)','EXECUTE')
     OR NOT has_function_privilege('service_role',

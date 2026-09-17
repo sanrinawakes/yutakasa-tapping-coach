@@ -8,6 +8,12 @@ BEGIN
     OR has_table_privilege('anon','public.yutakasa_ticket_reply_drafts','SELECT')
     OR has_table_privilege('authenticated','public.yutakasa_ticket_reply_drafts','SELECT')
     OR NOT has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','SELECT')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','INSERT')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','UPDATE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','DELETE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','TRUNCATE')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','REFERENCES')
+    OR has_table_privilege('service_role','public.yutakasa_ticket_reply_drafts','TRIGGER')
     OR has_function_privilege('anon','public.save_yutakasa_ticket_reply_draft(uuid,uuid,integer,text)','EXECUTE')
     OR has_function_privilege('authenticated','public.get_yutakasa_ticket_reply_draft_context(uuid)','EXECUTE')
     OR has_function_privilege('authenticated',
