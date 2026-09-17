@@ -13,7 +13,8 @@ import { cleanupTicketRepairSmoke, runTicketRepairHandoffSmoke } from
   "./ticket-repair-handoff-smoke.mjs";
 import { runTicketRepairInvestigation } from "./ticket-repair-investigate.mjs";
 import { verifyOpenAiProjectKey } from "./openai-project-gate.mjs";
-import { parseProposal, runAiRepairPublish, validatePatch } from "./ai-repair-publish.mjs";
+import { AiRepairPublishError, parseProposal, runAiRepairPublish,
+  validatePatch } from "./ai-repair-publish.mjs";
 import { verifyMainProtection } from "./ai-repair-promote.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
@@ -100,6 +101,17 @@ function markPrObserved(env, workId, pr) {
   fs.writeFileSync(attemptedFile(env), `${JSON.stringify({ ...prior,
     prNumber: pr.number, headSha: pr.head.sha })}\n`, { mode: 0o600 });
 }
+export function publishWithDiagnosis(publisher, publisherEnv,
+  write = (line) => process.stdout.write(line)) {
+  try { return publisher(publisherEnv); }
+  catch (error) {
+    const code = error instanceof AiRepairPublishError &&
+      typeof error.code === "string" && /^[a-z0-9_]{1,80}$/u.test(error.code)
+      ? error.code : "bridge_publisher_failed";
+    write(`${JSON.stringify({ ok: false, stage: "publisher", code })}\n`);
+    throw error;
+  }
+}
 export function checkGate(env, headSha, branch, clean) {
   if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
       env.GITHUB_REPOSITORY !== REPO || env.GITHUB_REF !== "refs/heads/main" ||
@@ -182,6 +194,28 @@ async function findPrBounded(env, fetchImpl, identity, sleep) {
     if (attempt < 3) await sleep(5_000);
   }
   return null;
+}
+function isUnlinkedInvestigatingJob(job, env, workId) {
+  return job?.work_id === workId && job.status === "investigating" &&
+    job.claimed_run_id === Number(env.GITHUB_RUN_ID) &&
+    job.pr_number === null && job.head_sha === null;
+}
+async function verifyNoPublication(env, fetchImpl, identity, workId, sleep) {
+  // The publisher has returned synchronously. Two separated negative remote
+  // observations plus the unchanged private job allow only synthetic cleanup.
+  await sleep(5_000);
+  const laterPr = await findPr(env, fetchImpl, identity);
+  const laterRef = await api(env, fetchImpl, `/git/ref/heads/${identity.branch}`,
+    { allow404: true });
+  const laterSaved = readPublishState(env, workId);
+  const laterJobs = await databaseRows(env, fetchImpl, "yutakasa_ticket_repair_jobs", {
+    work_id: `eq.${workId}`, select: "work_id,status,claimed_run_id,pr_number,head_sha", limit: "2",
+  });
+  if (laterPr || laterRef || !laterSaved || laterSaved.prNumber !== null ||
+      laterSaved.headSha !== null || laterJobs.length !== 1 ||
+      !isUnlinkedInvestigatingJob(laterJobs[0], env, workId)) {
+    fail("bridge_publication_uncertain");
+  }
 }
 function validateClaimedContext(context, identity) {
   if (context?.work_id !== identity.workId || context?.ticket_id !== identity.ticketId ||
@@ -319,7 +353,13 @@ export async function cleanupRemote({ env, fetchImpl = globalThis.fetch, workId,
   if (job && job.status !== "pr_open" &&
       (job.pr_number !== null || job.head_sha !== null)) fail("bridge_job_identity_changed");
   if (!pr && !ref) {
-    if (saved || job?.status === "pr_open") fail("bridge_publication_uncertain");
+    if (saved) {
+      if (saved.prNumber !== null || saved.headSha !== null ||
+          !isUnlinkedInvestigatingJob(job, env, workId)) {
+        fail("bridge_publication_uncertain");
+      }
+      await verifyNoPublication(env, fetchImpl, identity, workId, sleep);
+    } else if (job?.status === "pr_open") fail("bridge_publication_uncertain");
     return { prClosed: false, branchDeleted: false };
   }
   if (pr && !ref && saved?.prNumber === pr.number &&
@@ -378,7 +418,7 @@ export async function runBridgeE2eSmoke({ env = process.env, fetchImpl = globalT
           fail("bridge_terra_patch_scope_invalid");
         }
         markPublisherAttempt(env, identity.workId);
-        return publisher(publisherEnv);
+        return publishWithDiagnosis(publisher, publisherEnv);
       } });
       if (investigation?.status !== "draft_pr_linked") fail("bridge_pr_link_unconfirmed");
       const branch = branchFor(identity.workId);

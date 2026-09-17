@@ -7,7 +7,8 @@ import test from "node:test";
 
 import { BridgeE2eSmokeError, checkGate, cleanupRemote,
   createSyntheticInvestigatorFetch, createSyntheticProjectGate, inspectChecks,
-  rescueBridgeE2eSmoke } from "./ticket-repair-bridge-e2e-smoke.mjs";
+  publishWithDiagnosis, rescueBridgeE2eSmoke } from "./ticket-repair-bridge-e2e-smoke.mjs";
+import { AiRepairPublishError } from "./ai-repair-publish.mjs";
 import { BRIDGE_SUPPORT_BODY, TEST_SUPPORT_ACK, TEST_SUPPORT_SUBJECT } from
   "./ai-repair-functional-smoke.mjs";
 
@@ -189,26 +190,129 @@ test("remote cleanup closes only the exact draft then deletes only its unchanged
   } finally { fs.rmSync(sidecar, { force: true }); }
 });
 
-test("uncertain publisher result leaves DB and branch untouched", async () => {
+test("a failed publisher with no PR or branch permits only synthetic DB cleanup", async () => {
   savePublish(null, null);
   let lookups = 0;
+  let refLookups = 0;
+  let jobLookups = 0;
+  const delays = [];
   const fetchImpl = async (url, init) => {
     const target = new URL(url);
-    if (target.host === "fixture.supabase.co") return new Response("[]");
+    if (target.host === "fixture.supabase.co") {
+      jobLookups += 1;
+      return new Response(JSON.stringify([{ work_id: workId, status: "investigating",
+        claimed_run_id: Number(runId), pr_number: null, head_sha: null }]));
+    }
     assert.equal(init.method, "GET");
     if (target.pathname.endsWith("/pulls")) {
       lookups += 1; return new Response("[]");
     }
-    if (target.pathname.includes("/git/ref/heads/")) return new Response(null, { status: 404 });
+    if (target.pathname.includes("/git/ref/heads/")) {
+      refLookups += 1;
+      return new Response(null, { status: 404 });
+    }
     assert.fail("no mutation may occur");
+  };
+  try {
+    const result = await cleanupRemote({ env, fetchImpl, workId,
+      sleep: async (ms) => delays.push(ms),
+      deleteRef: async () => assert.fail("must not delete") });
+    assert.deepEqual(result, { prClosed: false, branchDeleted: false });
+    assert.ok(lookups >= 2);
+    assert.ok(refLookups >= 2);
+    assert.equal(jobLookups, 2);
+    assert.ok(delays.some((ms) => ms >= 5_000));
+  } finally { fs.rmSync(sidecar, { force: true }); }
+});
+
+test("a branch appearing during negative publication checks blocks DB cleanup", async () => {
+  savePublish(null, null);
+  let refLookups = 0;
+  let delays = 0;
+  const fetchImpl = async (url, init) => {
+    const target = new URL(url);
+    if (target.host === "fixture.supabase.co") {
+      return new Response(JSON.stringify([{ work_id: workId, status: "investigating",
+        claimed_run_id: Number(runId), pr_number: null, head_sha: null }]));
+    }
+    assert.equal(init.method, "GET");
+    if (target.pathname.endsWith("/pulls")) return new Response("[]");
+    if (target.pathname.includes("/git/ref/heads/")) {
+      refLookups += 1;
+      return refLookups === 1 ? new Response(null, { status: 404 }) :
+        new Response(JSON.stringify({ ref: `refs/heads/${branch}`,
+          object: { sha: headSha } }));
+    }
+    assert.fail("unexpected request");
+  };
+  try {
+    await assert.rejects(() => cleanupRemote({ env, fetchImpl, workId,
+      sleep: async () => { delays += 1; },
+      deleteRef: async () => assert.fail("must not delete") }),
+    { code: "bridge_publication_uncertain" });
+    assert.ok(delays >= 1);
+    assert.equal(refLookups, 2);
+  } finally { fs.rmSync(sidecar, { force: true }); }
+});
+
+test("an unclaimed job cannot use the no-publication cleanup exception", async () => {
+  savePublish(null, null);
+  const fetchImpl = async (url) => {
+    const target = new URL(url);
+    if (target.host === "fixture.supabase.co") {
+      return new Response(JSON.stringify([{ work_id: workId, status: "queued",
+        claimed_run_id: null, pr_number: null, head_sha: null }]));
+    }
+    if (target.pathname.endsWith("/pulls")) return new Response("[]");
+    if (target.pathname.includes("/git/ref/heads/")) return new Response(null, { status: 404 });
+    assert.fail("unexpected request");
   };
   try {
     await assert.rejects(() => cleanupRemote({ env, fetchImpl, workId,
       sleep: async () => {}, deleteRef: async () => assert.fail("must not delete") }),
-    (error) => error instanceof BridgeE2eSmokeError &&
-      error.code === "bridge_publication_uncertain");
-    assert.equal(lookups, 4);
+    { code: "bridge_job_identity_changed" });
   } finally { fs.rmSync(sidecar, { force: true }); }
+});
+
+test("a job linked during negative publication checks blocks DB cleanup", async () => {
+  savePublish(null, null);
+  let jobLookups = 0;
+  const fetchImpl = async (url) => {
+    const target = new URL(url);
+    if (target.host === "fixture.supabase.co") {
+      jobLookups += 1;
+      return new Response(JSON.stringify([{ work_id: workId,
+        status: jobLookups === 1 ? "investigating" : "pr_open",
+        claimed_run_id: Number(runId),
+        pr_number: jobLookups === 1 ? null : 99,
+        head_sha: jobLookups === 1 ? null : headSha }]));
+    }
+    if (target.pathname.endsWith("/pulls")) return new Response("[]");
+    if (target.pathname.includes("/git/ref/heads/")) return new Response(null, { status: 404 });
+    assert.fail("unexpected request");
+  };
+  try {
+    await assert.rejects(() => cleanupRemote({ env, fetchImpl, workId,
+      sleep: async () => {}, deleteRef: async () => assert.fail("must not delete") }),
+    { code: "bridge_publication_uncertain" });
+    assert.equal(jobLookups, 2);
+  } finally { fs.rmSync(sidecar, { force: true }); }
+});
+
+test("publisher failure emits only its safe code before being rethrown", () => {
+  const events = [];
+  const error = new AiRepairPublishError("command_failed_git");
+  error.message = "private patch and token must stay hidden";
+  assert.throws(() => publishWithDiagnosis(() => { throw error; }, {},
+    (line) => events.push(line)), (actual) => actual === error);
+  assert.deepEqual(events.map((line) => JSON.parse(line)),
+    [{ ok: false, stage: "publisher", code: "command_failed_git" }]);
+  assert.equal(events[0].includes("private patch"), false);
+  const unsafe = new AiRepairPublishError("token=private-value");
+  assert.throws(() => publishWithDiagnosis(() => { throw unsafe; }, {},
+    (line) => events.push(line)), (actual) => actual === unsafe);
+  assert.deepEqual(JSON.parse(events[1]),
+    { ok: false, stage: "publisher", code: "bridge_publisher_failed" });
 });
 
 test("a changed branch head stops before closing the PR or deleting the branch", async () => {
