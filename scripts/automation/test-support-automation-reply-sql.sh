@@ -41,6 +41,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-license.sql
   scripts/automation/ticket-clarification.sqlcheck.sql \
   scripts/automation/ticket-repair-handoff-smoke-cleanup.sql \
   scripts/automation/ticket-repair-handoff-smoke-cleanup.sqlcheck.sql \
+  scripts/automation/ticket-terra-issue-smoke-cleanup.sql \
+  scripts/automation/ticket-terra-issue-smoke-cleanup.sqlcheck.sql \
   scripts/automation/ticket-table-grants-remediation.sql \
   scripts/automation/ticket-table-grants-remediation.sql; do
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"

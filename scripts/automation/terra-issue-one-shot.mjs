@@ -15,6 +15,13 @@ const ISSUE_BODY = [
   "A capped Terra request containing only the fixed text OK completed before this issue was created.",
   "This issue is closed by the same workflow and must never enter a repair or release queue.",
 ].join("\n");
+const SYNTHETIC_TICKET_ISSUE_PREFIX = "Yutakasa synthetic ticket Terra issue probe ";
+const SYNTHETIC_TICKET_ISSUE_BODY = [
+  "One-shot synthetic support repair integration check. No real customer ticket was read.",
+  "The fixed capped Terra request contained only OK, and no model output is included here.",
+  "The workflow moves the private synthetic repair job to manual review and then removes it.",
+  "No PR, production code change, or customer message is created by this check.",
+].join("\n");
 
 export class TerraIssueSmokeError extends Error {
   constructor(code) { super(code); this.name = "TerraIssueSmokeError"; this.code = code; }
@@ -63,14 +70,14 @@ async function currentMainSha(env, fetchImpl) {
   return commit.sha;
 }
 
-function exactIssue(issue, title) {
+function exactIssue(issue, title, body) {
   return issue && Number.isSafeInteger(issue.number) && issue.number > 0 &&
-    issue.title === title && issue.body === ISSUE_BODY &&
+    issue.title === title && issue.body === body &&
     ["open", "closed"].includes(issue.state) &&
     (issue.pull_request === null || issue.pull_request === undefined);
 }
 
-async function findIssue(env, fetchImpl, title, marker) {
+async function findIssue(env, fetchImpl, title, marker, body) {
   const url = new URL("https://api.github.com/search/issues");
   url.searchParams.set("q", `repo:${REPO} is:issue in:title ${marker}`);
   url.searchParams.set("per_page", "100");
@@ -79,7 +86,7 @@ async function findIssue(env, fetchImpl, title, marker) {
       result.total_count > 100 || !Array.isArray(result.items) ||
       result.incomplete_results !== false ||
       result.items.length !== result.total_count) fail("terra_issue_lookup_invalid");
-  if (result.items.length > 1 || result.items.some((item) => !exactIssue(item, title))) {
+  if (result.items.length > 1 || result.items.some((item) => !exactIssue(item, title, body))) {
     fail("terra_issue_existing_mismatch");
   }
   return result.items[0] ?? null;
@@ -99,11 +106,11 @@ async function postIssue(env, fetchImpl, url, body, code) {
   try { return JSON.parse(raw); } catch { fail(`${code}_response_invalid`); }
 }
 
-async function closeExactIssue(env, fetchImpl, issue, title) {
-  if (!exactIssue(issue, title)) fail("terra_issue_existing_mismatch");
+async function closeExactIssue(env, fetchImpl, issue, title, body) {
+  if (!exactIssue(issue, title, body)) fail("terra_issue_existing_mismatch");
   const url = `https://api.github.com/repos/${REPO}/issues/${issue.number}`;
   const current = await getJson(env, fetchImpl, url, "terra_issue_current");
-  if (!exactIssue(current, title) || current.number !== issue.number) {
+  if (!exactIssue(current, title, body) || current.number !== issue.number) {
     fail("terra_issue_existing_mismatch");
   }
   if (current.state === "closed") return issue.number;
@@ -117,24 +124,32 @@ async function closeExactIssue(env, fetchImpl, issue, title) {
   } catch { fail("terra_issue_close_outcome_uncertain"); }
   if (response.status !== 200) fail("terra_issue_close_http_failure");
   const confirmed = await getJson(env, fetchImpl, url, "terra_issue_readback");
-  if (!exactIssue(confirmed, title) || confirmed.number !== issue.number ||
+  if (!exactIssue(confirmed, title, body) || confirmed.number !== issue.number ||
       confirmed.state !== "closed") fail("terra_issue_close_unconfirmed");
   return issue.number;
 }
 
 export async function runTerraIssueOneShot({
   env = process.env, fetchImpl = globalThis.fetch, terraImpl = probeTerra,
+  issueMode = "standalone",
 } = {}) {
   validateEnvironment(env);
+  if (!["standalone", "synthetic_ticket"].includes(issueMode)) {
+    fail("terra_issue_mode_invalid");
+  }
+  const issuePrefix = issueMode === "synthetic_ticket"
+    ? SYNTHETIC_TICKET_ISSUE_PREFIX : ISSUE_PREFIX;
+  const issueBody = issueMode === "synthetic_ticket"
+    ? SYNTHETIC_TICKET_ISSUE_BODY : ISSUE_BODY;
   const marker = createHash("sha256").update(`${REPO}:${env.GITHUB_RUN_ID}`)
     .digest("hex").slice(0, 16);
-  const title = `${ISSUE_PREFIX}${marker}`;
+  const title = `${issuePrefix}${marker}`;
   if (await currentMainSha(env, fetchImpl) !== env.GITHUB_SHA) {
     fail("terra_issue_main_changed");
   }
-  const existing = await findIssue(env, fetchImpl, title, marker);
+  const existing = await findIssue(env, fetchImpl, title, marker, issueBody);
   if (existing) {
-    const issueNumber = await closeExactIssue(env, fetchImpl, existing, title);
+    const issueNumber = await closeExactIssue(env, fetchImpl, existing, title, issueBody);
     return { ok: true, issueNumber, issueClosed: true, terraCalled: false, recovered: true };
   }
   // GitHub Search can lag a successful but unacknowledged POST. A rerun may
@@ -156,11 +171,11 @@ export async function runTerraIssueOneShot({
   // blindly retried; a rerun searches the exact marker before another call.
   const created = await postIssue(env, fetchImpl,
     `https://api.github.com/repos/${REPO}/issues`,
-    { title, body: ISSUE_BODY }, "terra_issue_create");
-  if (!exactIssue(created, title) || created.state !== "open") {
+    { title, body: issueBody }, "terra_issue_create");
+  if (!exactIssue(created, title, issueBody) || created.state !== "open") {
     fail("terra_issue_create_unconfirmed");
   }
-  const issueNumber = await closeExactIssue(env, fetchImpl, created, title);
+  const issueNumber = await closeExactIssue(env, fetchImpl, created, title, issueBody);
   return { ok: true, issueNumber, issueClosed: true, terraCalled: true, recovered: false };
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHmac, randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -83,10 +84,15 @@ function sessionToken(secret, email) {
   return `${content}.${createHmac("sha256", secret).update(content).digest("base64url")}`;
 }
 
-async function verifyCleanupRpc(env, fetchImpl) {
+async function verifyCleanupRpc(env, fetchImpl, rpcName = "cleanup_yutakasa_ticket_handoff_smoke",
+  runId = null) {
   // This deliberately invalid call must fail before any write. It proves the
   // deployed PostgREST schema exposes the cleanup RPC to service_role.
-  const url = new URL("/rest/v1/rpc/cleanup_yutakasa_ticket_handoff_smoke", env.SUPABASE_URL);
+  if (!["cleanup_yutakasa_ticket_handoff_smoke",
+    "cleanup_yutakasa_ticket_terra_issue_smoke"].includes(rpcName)) {
+    fail("handoff_smoke_cleanup_rpc_invalid");
+  }
+  const url = new URL(`/rest/v1/rpc/${rpcName}`, env.SUPABASE_URL);
   const response = await fetchImpl(url, {
     method: "POST",
     headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -94,7 +100,9 @@ async function verifyCleanupRpc(env, fetchImpl) {
       Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ p_run_id: null, p_account_id: null,
       p_account_updated_at: null, p_ticket_id: null,
-      p_ticket_updated_at: null, p_work_id: null, p_lock_token: null }),
+      p_ticket_updated_at: null, p_work_id: null, p_lock_token: null,
+      ...(rpcName === "cleanup_yutakasa_ticket_terra_issue_smoke"
+        ? { p_gh_run_id: runId } : {}) }),
     redirect: "error", signal: AbortSignal.timeout(15_000),
   }).catch(() => fail("handoff_smoke_cleanup_preflight_failed"));
   if (response.status !== 400) fail("handoff_smoke_cleanup_preflight_failed");
@@ -184,7 +192,9 @@ async function supportEvidence(env, fetchImpl, ticketId, email, workId, lockToke
   return { ticket, userMessageId, phase: queued ? "queued" : investigating ? "investigating" : "awaiting" };
 }
 
-async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken) {
+export async function cleanupTicketRepairSmoke(env, fetchImpl, email, runId, ticketId, workId, lockToken,
+  { rpcName = "cleanup_yutakasa_ticket_handoff_smoke", ghRunId = null,
+    postInvestigation = false } = {}) {
   const accounts = await rows(env, fetchImpl, "subscribers", {
     email: `eq.${email}`,
     select: "id,email,name,status,subscription_status,first_payment_date,subscription_started_at,subscription_last_event_at,myasp_data,updated_at", limit: "2",
@@ -213,9 +223,10 @@ async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken
   if (existingTicket) {
     if (!account || !UUID.test(existingTicket.id) ||
         (ticketId && existingTicket.id !== ticketId)) fail("handoff_smoke_ticket_ambiguous");
-    // Re-read exact messages, work logs and job immediately before a CAS delete.
-    // Any operator change or claim leaves the ticket in place for investigation.
-    const evidence = await supportEvidence(env, fetchImpl, existingTicket.id, email, workId, lockToken);
+    // The ordinary handoff path checks dependents here. The extended path
+    // checks them under database locks in its dedicated atomic cleanup RPC.
+    const evidence = postInvestigation ? { ticket: existingTicket }
+      : await supportEvidence(env, fetchImpl, existingTicket.id, email, workId, lockToken);
     current = await ticketForEmail(env, fetchImpl, email);
     if (!current || current.id !== existingTicket.id ||
         current.updated_at !== evidence.ticket.updated_at ||
@@ -227,13 +238,14 @@ async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken
   // exact synthetic contents and deletes both rows. A concurrent AI claim
   // can change the job without touching ticket.updated_at, so HTTP DELETE
   // with a ticket timestamp alone would be unsafe here.
-  const cleaned = await rows(env, fetchImpl, "rpc/cleanup_yutakasa_ticket_handoff_smoke",
+  const cleaned = await rows(env, fetchImpl, `rpc/${rpcName}`,
     {}, "POST", {
       p_run_id: runId, p_account_id: account?.id ?? null,
       p_account_updated_at: account?.updated_at ?? null,
       p_ticket_id: current?.id ?? null,
       p_ticket_updated_at: current?.updated_at ?? null,
       p_work_id: workId, p_lock_token: lockToken,
+      ...(postInvestigation ? { p_gh_run_id: ghRunId } : {}),
     });
   if (cleaned.length !== 1 || cleaned[0].ticket_deleted !== Boolean(current) ||
       cleaned[0].subscriber_deleted !== Boolean(account)) {
@@ -268,21 +280,42 @@ async function cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken
 /** A main-only production probe; no AI, GitHub dispatch, email, or payment call. */
 export async function runTicketRepairHandoffSmoke({ env = process.env,
   fetchImpl = globalThis.fetch, deploymentImpl = collectRemoteDeployment,
-  supportTicketImpl = checkSyntheticSupportTicket } = {}) {
+  supportTicketImpl = checkSyntheticSupportTicket,
+  afterQueued = null,
+  cleanupRpcName = "cleanup_yutakasa_ticket_handoff_smoke",
+  statePath = null } = {}) {
   validateEnvironment(env);
+  if (afterQueued === null && (cleanupRpcName !== "cleanup_yutakasa_ticket_handoff_smoke" ||
+      statePath !== null)) fail("handoff_smoke_post_handoff_configuration_invalid");
+  if (afterQueued !== null && (typeof afterQueued !== "function" ||
+      cleanupRpcName !== "cleanup_yutakasa_ticket_terra_issue_smoke" ||
+      !/^[1-9][0-9]{0,17}$/u.test(env.GITHUB_RUN_ID ?? "") ||
+      !Number.isSafeInteger(Number(env.GITHUB_RUN_ID)) ||
+      typeof statePath !== "string" || !path.isAbsolute(statePath))) {
+    fail("handoff_smoke_post_handoff_configuration_invalid");
+  }
   const before = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });
   if (before?.ready !== true || before.mainSha !== env.GITHUB_SHA) {
     fail("handoff_smoke_production_not_at_main");
   }
-  await verifyCleanupRpc(env, fetchImpl);
+  await verifyCleanupRpc(env, fetchImpl, cleanupRpcName,
+    afterQueued ? Number(env.GITHUB_RUN_ID) : null);
   await preflight(env, fetchImpl);
   const runId = randomUUID();
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
   const lockToken = randomUUID();
   const workId = randomUUID();
+  if (statePath) {
+    // The job-local rescue step can clean an interrupted run. No customer
+    // content or credential is stored in this exclusive mode-0600 file.
+    fs.writeFileSync(statePath, JSON.stringify({ version: 1,
+      ghRunId: Number(env.GITHUB_RUN_ID), runId, workId, lockToken }),
+    { mode: 0o600, flag: "wx" });
+  }
   let ticketId = null;
   let primaryError;
   let completed = false;
+  let cleaned = false;
   try {
     const account = await rows(env, fetchImpl, "subscribers", {
       select: "id,email,name,status,subscription_status,first_payment_date,subscription_started_at,subscription_last_event_at,myasp_data,updated_at",
@@ -333,13 +366,23 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
       ticketId, lockToken, workId, latestUserMessageId,
       ticketVersion: detail.ticket.updated_at,
     }, null, 409);
+    if (afterQueued) {
+      await afterQueued({ env, fetchImpl, email, runId, ticketId, workId,
+        lockToken, latestUserMessageId });
+    }
     completed = true;
   } catch (error) {
     primaryError = error;
   } finally {
-    try { await cleanup(env, fetchImpl, email, runId, ticketId, workId, lockToken); }
+    try { await cleanupTicketRepairSmoke(env, fetchImpl, email, runId, ticketId, workId, lockToken,
+      { rpcName: cleanupRpcName, ghRunId: afterQueued ? Number(env.GITHUB_RUN_ID) : null,
+        postInvestigation: Boolean(afterQueued) });
+      cleaned = true;
+      if (statePath) fs.unlinkSync(statePath);
+    }
     catch { primaryError = new HandoffSmokeError("handoff_smoke_cleanup_incomplete"); }
   }
+  if (!cleaned) fail("handoff_smoke_cleanup_incomplete");
   if (primaryError) throw primaryError;
   if (!completed) fail("handoff_smoke_incomplete");
   const after = await deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl });

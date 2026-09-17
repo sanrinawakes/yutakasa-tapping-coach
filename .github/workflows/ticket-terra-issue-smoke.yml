@@ -1,0 +1,67 @@
+name: One-shot synthetic ticket Terra issue proof
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  synthetic-ticket-issue:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_TICKET_REPAIR_ENABLED == 'false' &&
+      vars.YUTAKASA_AUTO_MERGE_ENABLED == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Verify isolated ticket, Terra, issue, and cleanup contracts
+        run: |
+          node --test scripts/automation/ticket-repair-handoff-smoke.nodecheck.mjs scripts/automation/terra-issue-one-shot.nodecheck.mjs scripts/automation/ticket-terra-issue-smoke.nodecheck.mjs
+          npm test -- src/lib/server/support-service.test.ts
+      - name: Verify scoped repair token, capped Terra, and private manual review
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+        run: node scripts/automation/ticket-terra-issue-smoke.mjs
+      - name: Rescue only the exact synthetic identity after interruption
+        if: always()
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/automation/ticket-terra-issue-smoke.mjs rescue
