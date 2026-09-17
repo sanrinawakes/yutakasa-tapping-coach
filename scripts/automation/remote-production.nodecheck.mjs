@@ -81,14 +81,52 @@ test("deployment parity requires all production identifiers to agree", async () 
 });
 
 test("deployment mismatch and not-ready states fail closed", async () => {
+  let waits = 0;
   await assert.rejects(
-    collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ loginId: "dpl_12345678" }) }),
+    collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ loginId: "dpl_12345678" }),
+      waitImpl: async () => { waits += 1; } }),
     /production_parity_mismatch/u,
   );
+  assert.equal(waits, 0);
   await assert.rejects(
     collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ readyState: "BUILDING" }) }),
     /vercel_deployment_invalid/u,
   );
+});
+
+test("deployment snapshot retries one transient read and rechecks every identifier", async () => {
+  const fetchGood = fakeFetch();
+  let mainReads = 0;
+  const waits = [];
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("/commits/main") && mainReads++ === 0) {
+        throw new Error("temporary connection failure");
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.deploymentId, id);
+  assert.equal(mainReads, 2);
+  assert.deepEqual(waits, [1_000]);
+});
+
+test("deployment snapshot fails after a second transient read", async () => {
+  let reads = 0;
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("/commits/main")) {
+        reads += 1;
+        return new Response("unavailable", { status: 503 });
+      }
+      return fakeFetch()(url, options);
+    },
+    waitImpl: async () => {},
+  }), /github_main_http_503/u);
+  assert.equal(reads, 2);
 });
 
 test("log queries discard content and reject truncated results", async () => {
