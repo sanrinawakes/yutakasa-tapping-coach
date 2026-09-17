@@ -47,6 +47,8 @@ const PUBLIC_REASON_CODES = new Set([
   "support_worker_uncertain",
   "support_deferred",
   "support_worker_nonhealthy",
+  "ticket_reconcile_work_due",
+  "ticket_reconcile_dispatch_failed",
   GENERIC_FAILURE,
 ]);
 

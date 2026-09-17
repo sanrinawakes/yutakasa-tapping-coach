@@ -3,7 +3,8 @@ import test from "node:test";
 import { dispatchQueuedTicketRepairs } from "./ticket-repair-dispatch.mjs";
 import { TicketRepairError, assertNoCustomerLeak, validatePrivateContext,
   runTicketRepairInvestigation } from "./ticket-repair-investigate.mjs";
-import { TicketReconcileError, reconcileTicketRepairs } from "./ticket-repair-reconcile.mjs";
+import { TicketReconcileError, reconcileTicketRepairs,
+  runTicketRepairReconcile } from "./ticket-repair-reconcile.mjs";
 import { retryPendingPromotions } from "./ai-repair-promote-sweep.mjs";
 
 const workId="e1aa3fb1-afae-43b8-b139-bc0fa4682255";
@@ -110,6 +111,39 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
   assert.deepEqual(called[2].body,{p_work_id:workId});
   await assert.rejects(()=>reconcileTicketRepairs({env:{},fetchImpl:async()=>{
     throw new Error("should not call");}}),TicketReconcileError);
+});
+
+test("manual probe with due work is read-only and cannot draft or recover",async()=>{
+  const requests=[];
+  const result=await runTicketRepairReconcile({env:{...env,
+    GITHUB_EVENT_NAME:"workflow_dispatch",TICKET_RECONCILE_MODE:"probe",
+    TICKET_RECONCILE_ENABLED:"true"},
+  now:()=>Date.parse("2026-09-17T12:00:00Z"),
+  draftImpl:async()=>assert.fail("probe must not draft"),
+  fetchImpl:async(url,init)=>{
+    requests.push({url:String(url),method:init.method??"GET"});
+    return new Response(JSON.stringify(requests.length===1?[{work_id:workId}]:[]),{status:200});
+  }});
+  assert.deepEqual(result,{mode:"probe",dueReviews:1,expiredClaims:0,due:true});
+  assert.deepEqual(requests.map((request)=>request.method),["POST","GET"]);
+  assert.equal(requests.some((request)=>request.url.includes("recover_yutakasa")),false);
+  assert.equal(requests.some((request)=>request.url.includes("review_yutakasa")),false);
+});
+
+test("manual reconcile requires explicit mode and uses the same no-send review path",async()=>{
+  const calls=[];
+  const common={...env,GITHUB_EVENT_NAME:"workflow_dispatch",
+    TICKET_RECONCILE_ENABLED:"true"};
+  await assert.rejects(()=>reconcileTicketRepairs({env:common,
+    fetchImpl:async()=>assert.fail("missing mode must stop before DB")}),TicketReconcileError);
+  const result=await runTicketRepairReconcile({env:{...common,TICKET_RECONCILE_MODE:"reconcile"},
+    fetchImpl:async(url)=>{
+      calls.push(String(url));
+      return new Response(JSON.stringify(calls.length===1?[{recovered:0}]:[]),{status:200});
+    }});
+  assert.deepEqual(result,{mode:"reconcile",examined:0,manualReviews:0,drafted:0,
+    draftFailures:0,recoveredClaims:0});
+  assert.equal(calls.length,2);
 });
 
 test("scheduled promotion retries pending Vercel status within a 24-hour window",async()=>{

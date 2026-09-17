@@ -15,6 +15,7 @@ import {
 import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.mjs";
 import { RepairDispatchError, dispatchAlert, dispatchRepair } from "./dispatch-repair.mjs";
 import { dispatchQueuedTicketRepairs, inspectTicketRepairBacklog } from "./ticket-repair-dispatch.mjs";
+import { dispatchDueTicketReconciliation, inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 import { DRIVE_INTAKE_FOLDER_ID, collectDriveIntakeMetadata } from "./drive-intake.mjs";
 import { SupportWorkerError, processSupportTicketContextFile } from "./support-worker.mjs";
 import { MonitorLedgerError, acquireMonitorLease } from "./monitor-ledger.mjs";
@@ -622,11 +623,14 @@ export async function runLeasedMonitor({
   repairImpl = dispatchRepair,
   ticketDispatchImpl = dispatchQueuedTicketRepairs,
   ticketBacklogImpl = inspectTicketRepairBacklog,
+  reconcileInspectImpl = inspectDueTicketReconciliations,
+  reconcileDispatchImpl = dispatchDueTicketReconciliation,
   ...options
 } = {}) {
   const lease = await leaseImpl({ secrets, kind: "scheduled" });
   let result;
   let observationError;
+  let reconcileInspection;
   try {
     result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
     if (secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true") {
@@ -635,6 +639,18 @@ export async function runLeasedMonitor({
           typeof backlog?.overflow!=="boolean") fail("ticket_backlog_invalid");
       if (backlog.pending>0 || backlog.overflow) {
         result.reasonCodes=[...new Set([...result.reasonCodes,"ticket_repair_work_pending"])].sort();
+        result.actionRequired=true;
+      }
+    }
+    if (secrets.TICKET_RECONCILE_FALLBACK_ENABLED === "true") {
+      reconcileInspection=await reconcileInspectImpl({secrets});
+      if (!Number.isSafeInteger(reconcileInspection?.dueReviews) ||
+          reconcileInspection.dueReviews<0 || reconcileInspection.dueReviews>100 ||
+          ![0,1].includes(reconcileInspection.expiredClaims) ||
+          reconcileInspection.due !== (reconcileInspection.dueReviews>0 ||
+            reconcileInspection.expiredClaims>0)) fail("ticket_reconcile_inspection_invalid");
+      if (reconcileInspection.due) {
+        result.reasonCodes=[...new Set([...result.reasonCodes,"ticket_reconcile_work_due"])].sort();
         result.actionRequired=true;
       }
     }
@@ -681,13 +697,37 @@ export async function runLeasedMonitor({
 
   let alertDispatched = false;
   let repairDispatched = false;
+  let reconcileDispatches = 0;
+  let reconcileAlreadyRunning = false;
+  let reconcileFailure;
+  if (reconcileInspection?.due) {
+    try {
+      const dispatched=await reconcileDispatchImpl({secrets,inspection:reconcileInspection});
+      if (![0,1].includes(dispatched?.dispatched) ||
+          typeof dispatched.alreadyRunning!=="boolean" ||
+          (dispatched.dispatched===1 && dispatched.alreadyRunning) ||
+          (dispatched.dispatched===0 && !dispatched.alreadyRunning)) {
+        fail("ticket_reconcile_dispatch_receipt_invalid");
+      }
+      reconcileDispatches=dispatched.dispatched;
+      reconcileAlreadyRunning=dispatched.alreadyRunning;
+    } catch (error) {
+      reconcileFailure=error;
+    }
+  }
   if (result.actionRequired) {
     const { alertReasons, repairReasons } = planMonitorDispatches(result.reasonCodes);
-    await alertImpl({
-      token: secrets.GITHUB_DISPATCH_TOKEN,
-      reasonCodes: alertReasons,
-      deploymentId: result.deploymentId,
-    });
+    try {
+      await alertImpl({
+        token: secrets.GITHUB_DISPATCH_TOKEN,
+        reasonCodes: reconcileFailure
+          ? [...new Set([...alertReasons,"ticket_reconcile_dispatch_failed"])].sort()
+          : alertReasons,
+        deploymentId: result.deploymentId,
+      });
+    } catch (error) {
+      throw reconcileFailure ?? error;
+    }
     alertDispatched = true;
     await lease.recordDispatch({ alertDispatched });
     if (repairReasons.length > 0) {
@@ -700,10 +740,13 @@ export async function runLeasedMonitor({
       await lease.recordDispatch({ repairDispatched });
     }
   }
+  if (reconcileFailure) throw reconcileFailure;
   const ticketRepairs = secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true"
     ? await ticketDispatchImpl({ secrets }) : { dispatched: 0 };
   return { ...result, alertDispatched, repairDispatched,
-    ticketRepairDispatches: ticketRepairs.dispatched };
+    ticketRepairDispatches: ticketRepairs.dispatched,
+    ticketReconcileDispatches: reconcileDispatches,
+    ticketReconcileAlreadyRunning: reconcileAlreadyRunning };
 }
 
 export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {

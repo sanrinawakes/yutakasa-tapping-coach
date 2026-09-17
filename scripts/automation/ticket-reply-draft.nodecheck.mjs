@@ -77,3 +77,15 @@ test("unavailable or stale release never calls the model or saves a draft",async
     fetchImpl:async()=>new Response(JSON.stringify({...context,latest_user_message_id:ticketId}),{status:200})}),
     TicketReplyDraftError);
 });
+
+test("manual probe cannot create a draft; explicit reconcile can read an existing draft",async()=>{
+  const manual={...env,GITHUB_EVENT_NAME:"workflow_dispatch"};
+  await assert.rejects(()=>draftVerifiedTicketReply({workId,
+    env:{...manual,TICKET_RECONCILE_MODE:"probe"},
+    fetchImpl:async()=>assert.fail("probe must not read draft context")}),TicketReplyDraftError);
+  const existing=await draftVerifiedTicketReply({workId,
+    env:{...manual,TICKET_RECONCILE_MODE:"reconcile"},
+    projectGate:async()=>assert.fail("existing draft must not call AI"),
+    fetchImpl:async()=>new Response(JSON.stringify({...context,draft_exists:true}),{status:200})});
+  assert.deepEqual(existing,{status:"existing"});
+});
