@@ -6,6 +6,10 @@ const SUPPORT_API = "https://yutakasa-tapping-coach.vercel.app/api/internal/supp
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DECISION_TERMS = /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)|個人データ.{0,8}(削除|開示)|損害賠償|消費者センター/u;
 const ENGLISH_DECISION_TERMS = /\b(?:refund|reimbursement|chargeback|billing|payment|charge|price|subscription|cancel(?:lation)?|contract|compensation|damages|lawyer|lawsuit|legal|privacy|personal\s+(?:data|information)|delete\s+(?:my\s+)?(?:account|data))\b/iu;
+const GENERIC_TECHNICAL_REPORTS = new Set([
+  "使えない", "動かない", "エラー", "ログインできない", "チャットが使えない",
+  "送信できない", "保存できない", "画面が開かない", "表示されない",
+]);
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_API_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_BYTES = 8 * 1024 * 1024;
@@ -54,6 +58,7 @@ export function validateTicketContext(context, allowedAutomationStatuses = ["que
       !allowedAutomationStatuses.includes(ticket.automation_status) ||
       !["open", "in_progress"].includes(ticket.status) ||
       ticket.decision_required !== false ||
+      (ticket.has_attachments !== undefined && typeof ticket.has_attachments !== "boolean") ||
       !["technical", "login", "quality", "how_to", "feature", "billing", "other"].includes(ticket.category) ||
       typeof ticket.subject !== "string" ||
       ticket.subject.length > 120 ||
@@ -103,7 +108,8 @@ export function readTicketContextFile(contextPath) {
   }
 }
 
-export function planTicket(entry, { ignorePriorEscalation = false } = {}) {
+export function planTicket(entry, { ignorePriorEscalation = false,
+  clarificationEnabled = false } = {}) {
   const latest = latestUserMessage(entry);
   if (!latest) fail("support_context_missing_user_message");
   const customerText = `${entry.ticket.subject}\n${entry.messages.filter((message) =>
@@ -114,6 +120,15 @@ export function planTicket(entry, { ignorePriorEscalation = false } = {}) {
   if (decision) return { kind: "decision_required", latestUserMessageId: latest.id };
   if (entry.ticket.category !== "technical") {
     return { kind: "manual_review", latestUserMessageId: latest.id };
+  }
+  const attachmentFree = entry.ticket.has_attachments === false ||
+    (entry.ticket.has_attachments === undefined && entry.messages.every((message) =>
+      Array.isArray(message.attachments) && message.attachments.length === 0));
+  if (clarificationEnabled && attachmentFree && entry.messages.length === 1 &&
+      GENERIC_TECHNICAL_REPORTS.has(entry.ticket.subject) &&
+      GENERIC_TECHNICAL_REPORTS.has(latest.body) &&
+      !entry.work_logs.some((log) => log.event_type === "automation_clarification_sent")) {
+    return { kind: "clarification_needed", latestUserMessageId: latest.id };
   }
   if (!ignorePriorEscalation && entry.work_logs.some((log) =>
     log.event_type === "remote_support_escalated" &&
@@ -219,6 +234,11 @@ async function getClaimedDetail({ automationToken, ticketId, lockToken, fetchImp
 }
 
 function validateApiResult(body, payload) {
+  if (body.action === "clarify") {
+    if (!validUuid(payload?.messageId) || typeof payload?.created !== "boolean")
+      fail("support_api_clarify_confirmation_invalid");
+    return;
+  }
   if (body.action === "log") {
     if (payload?.success !== true) fail("support_api_log_confirmation_invalid");
     return;
@@ -284,7 +304,7 @@ async function patchAction({ automationToken, body, fetchImpl, timeoutMs }) {
       // Confirm the state without ever returning or logging customer data.
       const payload = await readApiJson(response);
       validateApiResult(body, payload);
-      return { status: "ok" };
+      return { status: "ok", ...(body.action === "clarify" ? { created: payload.created } : {}) };
     })();
     return await Promise.race([request, deadline]);
   } catch (error) {
@@ -302,6 +322,7 @@ function emptyResult() {
     claimConflicts: 0,
     decisionsRequired: 0,
     technicalHandoffs: 0,
+    clarificationsSent: 0,
     manualReviews: 0,
     lostLocks: 0,
     staleContexts: 0,
@@ -320,6 +341,7 @@ export async function processSupportTickets({
   now = Date.now,
   beforeMutation = async () => {},
   repairBridgeEnabled = false,
+  clarificationEnabled = false,
 } = {}) {
   if (typeof automationToken !== "string" || automationToken.length < 32 || /[\r\n]/u.test(automationToken)) {
     fail("support_automation_token_invalid");
@@ -352,7 +374,8 @@ export async function processSupportTickets({
       break;
     }
     result.examined += 1;
-    const plan = planTicket(entry, { ignorePriorEscalation: repairBridgeEnabled });
+    const plan = planTicket(entry, { ignorePriorEscalation: repairBridgeEnabled,
+      clarificationEnabled });
     if (plan.kind === "already_escalated") {
       result.skippedPriorEscalation += 1;
       continue;
@@ -382,7 +405,8 @@ export async function processSupportTickets({
         continue;
       }
       claimedSnapshot = detail.entry;
-      const freshPlan = planTicket(claimedSnapshot, { ignorePriorEscalation: repairBridgeEnabled });
+      const freshPlan = planTicket(claimedSnapshot, { ignorePriorEscalation: repairBridgeEnabled,
+        clarificationEnabled });
       if (freshPlan.latestUserMessageId !== plan.latestUserMessageId ||
           freshPlan.kind !== plan.kind) {
         result.staleContexts += 1;
@@ -415,6 +439,22 @@ export async function processSupportTickets({
       });
       if (heartbeat.status === "conflict") {
         result.lostLocks += 1;
+        continue;
+      }
+      if (freshPlan.kind === "clarification_needed") {
+        const clarification = await ownedPatchAction({
+          automationToken,
+          body: { action: "clarify", ticketId, lockToken,
+            latestUserMessageId: freshPlan.latestUserMessageId,
+            ticketVersion: claimedSnapshot.ticket.updated_at },
+          fetchImpl, timeoutMs,
+        });
+        if (clarification.status === "conflict") {
+          result.lostLocks += 1;
+          continue;
+        }
+        if (clarification.created) result.clarificationsSent += 1;
+        claimAttempted = false;
         continue;
       }
       if (freshPlan.kind === "technical_handoff" && repairBridgeEnabled) {

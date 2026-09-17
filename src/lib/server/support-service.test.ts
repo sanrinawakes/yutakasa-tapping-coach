@@ -1,6 +1,7 @@
 import { getSupabase } from "@/lib/supabase";
 import {
   appendAdminSupportMessage,
+  appendAutomationClarification,
   appendUserSupportMessage,
   claimSupportTicket,
   createSupportTicket,
@@ -178,6 +179,40 @@ describe("support automation leases", () => {
       ticketVersion: ticket().updated_at,
       outcome: "decision_required", summary: "判断が必要です。",
     })).resolves.toBeNull();
+  });
+
+  it("uses an atomic latest-message check for a reviewed draft and does not resend on retry", async () => {
+    const latestId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
+    const rpc = vi.fn().mockResolvedValue({data:[{message_id:ticketId,created:false}],error:null});
+    const from = vi.fn();
+    getSupabaseMock.mockReturnValue({rpc,from} as never);
+    await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
+      clientRequestId:"74e6508f-c0ff-4689-ab68-dac8fe324ac9",
+      expectedLatestUserMessageId:latestId,resolve:false}))
+      .resolves.toEqual({message_id:ticketId,created:false});
+    expect(rpc).toHaveBeenCalledWith("append_support_admin_message_checked",{
+      p_ticket_id:ticketId,p_body:"現在の表示を教えてください。",
+      p_client_request_id:"74e6508f-c0ff-4689-ab68-dac8fe324ac9",
+      p_resolve:false,p_expected_latest_user_message_id:latestId,
+    });
+    expect(from).not.toHaveBeenCalled();
+    await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
+      expectedLatestUserMessageId:latestId,resolve:true})).rejects.toThrow();
+  });
+
+  it("asks a fixed in-app clarification through the guarded RPC without email",async()=>{
+    const latestId="a61fb99e-874b-4111-a95a-4f4cb268e48c";
+    const rpc=vi.fn().mockResolvedValue({data:[{message_id:latestId,created:true}],error:null});
+    const from=vi.fn();
+    getSupabaseMock.mockReturnValue({rpc,from} as never);
+    await expect(appendAutomationClarification({ticketId,lockToken,
+      latestUserMessageId:latestId,ticketVersion:ticket().updated_at}))
+      .resolves.toEqual({message_id:latestId,created:true});
+    expect(rpc).toHaveBeenCalledWith("append_yutakasa_ticket_clarification",{
+      p_ticket_id:ticketId,p_lock_token:lockToken,
+      p_latest_user_message_id:latestId,p_ticket_version:ticket().updated_at,
+    });
+    expect(from).not.toHaveBeenCalled();
   });
 });
 

@@ -23,7 +23,11 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   scripts/automation/ticket-repair-bridge.sql \
   scripts/automation/ticket-repair-bridge.sqlcheck.sql \
   scripts/automation/drive-result-ledger.sql \
-  scripts/automation/drive-result-ledger.sqlcheck.sql; do
+  scripts/automation/drive-result-ledger.sqlcheck.sql \
+  scripts/automation/ticket-reply-draft.sql \
+  scripts/automation/ticket-reply-draft.sqlcheck.sql \
+  scripts/automation/ticket-clarification.sql \
+  scripts/automation/ticket-clarification.sqlcheck.sql; do
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"
 done
 YUTAKASA_TEST_PG_CONTAINER="$container" node scripts/automation/drive-result-ledger-concurrency.mjs

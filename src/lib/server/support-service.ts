@@ -611,6 +611,26 @@ export async function getAdminSupportTicket(
   const latestUser = [...messages].reverse().find(
     (message) => message.sender_type === "user"
   );
+  let replyDraft: {
+    work_id: string;
+    latest_user_message_id: string;
+    pr_number: number;
+    body: string;
+    created_at: string;
+  } | null = null;
+  if (latestUser && ticket.automation_status === "manual_review" &&
+      ticket.category === "technical" && !ticket.decision_required) {
+    const { data: draft, error: draftError } = await getSupabase()
+      .from("yutakasa_ticket_reply_drafts")
+      .select("work_id,latest_user_message_id,pr_number,body,created_at")
+      .eq("ticket_id", ticketId)
+      .eq("latest_user_message_id", latestUser.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (draftError) throw draftError;
+    replyDraft = draft;
+  }
   if (latestUser && options.markRead !== false) {
     const { error: readError } = await getSupabase()
       .from("support_tickets")
@@ -619,7 +639,8 @@ export async function getAdminSupportTicket(
     if (readError) throw readError;
   }
 
-  return { ticket: ticket as SupportTicket, messages, work_logs: logs ?? [] };
+  return { ticket: ticket as SupportTicket, messages, work_logs: logs ?? [],
+    reply_draft: replyDraft };
 }
 
 export async function appendAdminSupportMessage(params: {
@@ -627,15 +648,27 @@ export async function appendAdminSupportMessage(params: {
   body: string;
   clientRequestId?: string;
   resolve?: boolean;
+  expectedLatestUserMessageId?: string;
 }) {
   const body = normalizeSupportText(params.body, MAX_SUPPORT_MESSAGE_LENGTH);
   const clientRequestId = params.clientRequestId || randomUUID();
-  const { data, error } = await getSupabase().rpc("append_support_admin_message", {
-    p_ticket_id: params.ticketId,
-    p_body: body,
-    p_client_request_id: clientRequestId,
-    p_resolve: Boolean(params.resolve),
-  });
+  const checked = Boolean(params.expectedLatestUserMessageId);
+  if (checked && params.resolve) {
+    throw new SupportRequestError("確認待ちの返信案で対応完了にはできません。", 400);
+  }
+  const { data, error } = await getSupabase().rpc(
+    checked ? "append_support_admin_message_checked" : "append_support_admin_message",
+    {
+      p_ticket_id: params.ticketId,
+      p_body: body,
+      p_client_request_id: clientRequestId,
+      p_resolve: Boolean(params.resolve),
+      ...(checked ? { p_expected_latest_user_message_id: params.expectedLatestUserMessageId } : {}),
+    }
+  );
+  if (checked && (error?.code === "P0001" || error?.code === "23505")) {
+    throw new SupportRequestError("問い合わせに新しい連絡があります。履歴を更新してから返信してください。", 409);
+  }
   if (error) throw error;
   const result = Array.isArray(data) ? data[0] : data;
 
@@ -737,6 +770,33 @@ export async function appendAutomationSupportMessage(params: {
   }
   // This automation records an in-app reply only. Email needs a durable
   // provider outbox before it can safely share this idempotent transaction.
+  return result;
+}
+
+export async function appendAutomationClarification(params: {
+  ticketId: string;
+  lockToken: string;
+  latestUserMessageId: string;
+  ticketVersion: string;
+}): Promise<{ message_id: string; created: boolean }> {
+  const { data, error } = await getSupabase().rpc("append_yutakasa_ticket_clarification", {
+    p_ticket_id: params.ticketId,
+    p_lock_token: params.lockToken,
+    p_latest_user_message_id: params.latestUserMessageId,
+    p_ticket_version: params.ticketVersion,
+  });
+  if (error?.code === "P0001") {
+    throw new SupportRequestError("問い合わせが変わったため、追加情報を質問できません。", 409);
+  }
+  if (error) throw error;
+  const result = (Array.isArray(data) ? data[0] : data) as
+    | { message_id: string; created: boolean }
+    | null;
+  if (!result || typeof result.message_id !== "string" ||
+      typeof result.created !== "boolean") {
+    throw new Error("Clarification RPC returned invalid confirmation");
+  }
+  // The fixed text is an in-app message; no external email is sent.
   return result;
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import {
   addSupportWorkLog,
+  appendAutomationClarification,
   beginTicketRepairWork,
   appendAdminSupportMessage,
   claimSupportTicket,
@@ -14,6 +15,7 @@ import { GET, PATCH } from "./route";
 
 vi.mock("@/lib/server/support-service", () => ({
   addSupportWorkLog: vi.fn(),
+  appendAutomationClarification: vi.fn(),
   beginTicketRepairWork: vi.fn(),
   appendAdminSupportMessage: vi.fn(),
   claimSupportTicket: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("@/lib/server/support-service", () => ({
 }));
 
 const addLogMock = vi.mocked(addSupportWorkLog);
+const clarifyMock = vi.mocked(appendAutomationClarification);
 const beginRepairMock = vi.mocked(beginTicketRepairWork);
 const appendMock = vi.mocked(appendAdminSupportMessage);
 const claimMock = vi.mocked(claimSupportTicket);
@@ -99,6 +102,7 @@ describe("support automation API", () => {
         attachments: [{ id: messageId, filename: "secret.jpg", content_type: "image/jpeg",
           size_bytes: 3, url: "https://example.com/secret" }] }],
       work_logs: [],
+      reply_draft: null,
     });
     const response = await GET(request("GET", undefined, secret,
       `?ticketId=${ticketId}`));
@@ -110,12 +114,13 @@ describe("support automation API", () => {
     expect(JSON.stringify(body)).not.toContain("member@example.com");
     expect(JSON.stringify(body)).not.toContain("secret.jpg");
     expect(JSON.stringify(body)).not.toContain("https://example.com/secret");
+    expect(body.ticket.has_attachments).toBe(true);
   });
 
   it("rejects a claimed detail read after an administrator replaces the lock", async () => {
     detailMock.mockResolvedValue({
       ticket: { ...ticket, automation_lock_token: "f41fb99e-874b-4111-a95a-4f4cb268e48c" },
-      messages: [], work_logs: [],
+      messages: [], work_logs: [], reply_draft: null,
     });
     const response = await GET(request("GET", undefined, secret, `?ticketId=${ticketId}`));
     expect(response.status).toBe(409);
@@ -128,6 +133,17 @@ describe("support automation API", () => {
     );
     expect(response.status).toBe(409);
     expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it("sends only a fixed, CAS-guarded clarification through the dedicated RPC",async()=>{
+    clarifyMock.mockResolvedValue({message_id:messageId,created:true});
+    const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
+      latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({messageId:messageId,created:true});
+    expect(clarifyMock).toHaveBeenCalledWith({ticketId,lockToken,
+      latestUserMessageId:messageId,ticketVersion:ticket.updated_at});
+    expect(appendMock).not.toHaveBeenCalled();
   });
 
   it("returns a claimed ticket without a second work-log write", async () => {

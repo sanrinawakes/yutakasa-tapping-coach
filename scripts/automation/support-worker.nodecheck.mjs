@@ -77,6 +77,7 @@ function fakeApi(statuses = {}, claimedEntry = entry()) {
     const payload = body.action === "log"
       ? { success: true }
       : body.action === "handoff" ? { workId: body.workId }
+      : body.action === "clarify" ? { messageId: MESSAGE_ID, created: true }
       : {
           ticket: {
             id: body.ticketId,
@@ -233,6 +234,40 @@ test("decision classification uses the customer's full history without exposing 
     id: NEW_MESSAGE_ID, sender_type: "user", body: "Please delete my personal data.",
     created_at: "2026-09-16T01:10:00Z",
   }] })).kind, "decision_required");
+});
+
+test("only an attachment-free, first generic technical report qualifies for a fixed clarification",()=>{
+  const generic=entry({ticket:{subject:"使えない",has_attachments:false}});
+  generic.messages=[{id:MESSAGE_ID,sender_type:"user",body:"使えない",
+    created_at:"2026-09-16T01:00:00Z"}];
+  assert.equal(planTicket(generic,{clarificationEnabled:true}).kind,"clarification_needed");
+  assert.equal(planTicket(generic).kind,"technical_handoff");
+  assert.equal(planTicket(entry({ticket:{subject:"返金したい",has_attachments:false},
+    messages:[{id:MESSAGE_ID,sender_type:"user",body:"使えない",
+      created_at:"2026-09-16T01:00:00Z"}]}),{clarificationEnabled:true}).kind,"decision_required");
+  assert.equal(planTicket(entry({ticket:{subject:"使えない",has_attachments:true},
+    messages:generic.messages}),{clarificationEnabled:true}).kind,"technical_handoff");
+  assert.equal(planTicket(entry({ticket:{subject:"使えない",has_attachments:false},
+    messages:generic.messages,work_logs:[{event_type:"automation_clarification_sent",metadata:{}}]}),
+    {clarificationEnabled:true}).kind,"technical_handoff");
+  assert.equal(planTicket(entry({ticket:{subject:"使えない",has_attachments:false},
+    messages:[...generic.messages,{id:NEW_MESSAGE_ID,sender_type:"user",body:"動かない",
+      created_at:"2026-09-16T01:10:00Z"}]}),{clarificationEnabled:true}).kind,"technical_handoff");
+});
+
+test("fixed clarification uses claimed version and finishes once without a model or free-form body",async()=>{
+  const generic=entry({ticket:{subject:"使えない",has_attachments:false}});
+  generic.messages=[{id:MESSAGE_ID,sender_type:"user",body:"使えない",
+    created_at:"2026-09-16T01:00:00Z"}];
+  const api=fakeApi({},generic);
+  const result=await processSupportTickets({automationToken:TOKEN,tickets:[generic],
+    fetchImpl:api.fetchImpl,clarificationEnabled:true});
+  assert.deepEqual(api.calls.map((call)=>call.action),["claim","get","log","clarify"]);
+  assert.equal(api.calls[3].ticketVersion,"2026-09-16T01:05:00.000Z");
+  assert.equal(api.calls[3].latestUserMessageId,MESSAGE_ID);
+  assert.equal(Object.hasOwn(api.calls[3],"body"),false);
+  assert.equal(result.clarificationsSent,1);
+  assert.equal(result.ok,true);
 });
 
 test("technical ticket claims, heartbeats, and atomically queues a private repair job", async () => {

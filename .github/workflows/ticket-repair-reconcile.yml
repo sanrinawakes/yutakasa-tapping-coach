@@ -32,4 +32,10 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: node scripts/automation/ticket-repair-reconcile.mjs

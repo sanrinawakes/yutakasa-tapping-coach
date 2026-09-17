@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 
@@ -22,7 +23,8 @@ async function rpc(env, fetchImpl, name, body={}) {
   try { return JSON.parse(raw); } catch { fail("ticket_reconcile_db_response_invalid"); }
 }
 
-export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch}={}) {
+export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
+  draftImpl=draftVerifiedTicketReply}={}) {
   if (env.GITHUB_EVENT_NAME!=="schedule" || env.TICKET_RECONCILE_ENABLED!=="true" ||
       typeof env.SUPABASE_URL!=="string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
       typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" || env.SUPABASE_SERVICE_ROLE_KEY.length<20) {
@@ -38,7 +40,18 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     fail("ticket_reconcile_queue_invalid");
   }
   let manualReviews=0;
+  let drafted=0;
+  let draftFailures=0;
   for (const job of jobs) {
+    // The draft is private and never sent. An AI or database failure must not
+    // stop the ticket from reaching a human review queue.
+    if (drafted+draftFailures<10) {
+      try {
+        const draft=await draftImpl({workId:job.work_id,env,fetchImpl});
+        if (draft?.status==="drafted" || draft?.status==="existing") drafted+=1;
+        else if (draft?.status!=="unavailable") draftFailures+=1;
+      } catch { draftFailures+=1; }
+    }
     const receipt=await rpc(env,fetchImpl,"review_yutakasa_ticket_repair_release",{
       p_work_id:job.work_id,
     });
@@ -51,7 +64,8 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   // A full page is not a healthy state. The next schedule can continue, and
   // this run remains visibly failed until the backlog falls below the bound.
   if (jobs.length===100 || recovery[0].recovered===100) fail("ticket_reconcile_backlog_remaining");
-  return {examined:jobs.length,manualReviews,recoveredClaims:recovery[0].recovered};
+  return {examined:jobs.length,manualReviews,drafted,draftFailures,
+    recoveredClaims:recovery[0].recovered};
 }
 
 const isMain=process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url;

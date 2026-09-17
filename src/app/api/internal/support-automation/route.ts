@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSupportWorkLog,
+  appendAutomationClarification,
   beginTicketRepairWork,
   claimSupportTicket,
   finishLockedSupportTicket,
@@ -105,6 +106,7 @@ export async function GET(request: NextRequest) {
           automation_status: detail.ticket.automation_status,
           automation_lock_token: detail.ticket.automation_lock_token,
           updated_at: detail.ticket.updated_at,
+          has_attachments: detail.messages.some((message) => message.attachments.length > 0),
         },
         messages: detail.messages.map(({ id, sender_type, body, created_at }) =>
           ({ id, sender_type, body, created_at })),
@@ -186,6 +188,16 @@ export async function PATCH(request: NextRequest) {
       });
       if (created !== workId) throw new SupportRequestError("Ticket changed before repair handoff", 409);
       return NextResponse.json({ workId });
+    }
+
+    if (action === "clarify") {
+      const result = await appendAutomationClarification({
+        ticketId,
+        lockToken,
+        latestUserMessageId: readTicketId(record.latestUserMessageId),
+        ticketVersion: readTicketVersion(record.ticketVersion),
+      });
+      return NextResponse.json({ messageId: result.message_id, created: result.created });
     }
 
     if (action === "decision_required") {

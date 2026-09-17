@@ -59,7 +59,10 @@ type WorkLog = {
   created_at: string;
 };
 
-type Detail = { ticket: Ticket; messages: Message[]; work_logs: WorkLog[] };
+type ReplyDraft = { work_id: string; latest_user_message_id: string;
+  pr_number: number; body: string; created_at: string };
+type Detail = { ticket: Ticket; messages: Message[]; work_logs: WorkLog[];
+  reply_draft?: ReplyDraft | null };
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("ja-JP", {
@@ -88,13 +91,15 @@ export default function AdminSupportPage() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SupportStatus | "">("");
   const [loadingList, setLoadingList] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replying, setReplying] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState("");
   const [replyBody, setReplyBody] = useState("");
   const [resolveWithReply, setResolveWithReply] = useState(true);
+  const [replyDraftSource, setReplyDraftSource] = useState<{
+    ticketId: string; latestUserMessageId: string;
+  } | null>(null);
   const replyRequestId = useRef(crypto.randomUUID());
 
   const loadTickets = useCallback(async (): Promise<Ticket[] | null> => {
@@ -128,7 +133,6 @@ export default function AdminSupportPage() {
 
   const loadDetail = useCallback(
     async (ticketId: string) => {
-      setLoadingDetail(true);
       try {
         const response = await fetch(`/api/admin/support/${ticketId}`, {
           cache: "no-store",
@@ -145,8 +149,6 @@ export default function AdminSupportPage() {
         setError("");
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
-      } finally {
-        setLoadingDetail(false);
       }
     },
     []
@@ -168,6 +170,10 @@ export default function AdminSupportPage() {
   }, [loadTickets]);
 
   useEffect(() => {
+    setReplyBody("");
+    setResolveWithReply(true);
+    setReplyDraftSource(null);
+    replyRequestId.current = crypto.randomUUID();
     if (selectedId) void loadDetail(selectedId);
     else setDetail(null);
   }, [loadDetail, selectedId]);
@@ -203,10 +209,14 @@ export default function AdminSupportPage() {
           body: replyBody,
           clientRequestId: replyRequestId.current,
           resolve: resolveWithReply,
+          ...(replyDraftSource?.ticketId === selectedId ? {
+            expectedLatestUserMessageId: replyDraftSource.latestUserMessageId,
+          } : {}),
         }),
       });
       await parseResponse(response);
       setReplyBody("");
+      setReplyDraftSource(null);
       replyRequestId.current = crypto.randomUUID();
       await loadTickets();
       await loadDetail(selectedId);
@@ -322,7 +332,7 @@ export default function AdminSupportPage() {
         <section className={styles.detail}>
           {!selectedId ? (
             <div className={styles.empty}>問い合わせを選択してください</div>
-          ) : loadingDetail && !detail ? (
+          ) : !detail || detail.ticket.id !== selectedId ? (
             <div className={styles.empty}>
               <LoaderCircle className={styles.spin} />
               読み込み中
@@ -428,6 +438,20 @@ export default function AdminSupportPage() {
               </div>
 
               <form className={styles.replyForm} onSubmit={sendReply}>
+                {detail.reply_draft && (
+                  <section className={styles.replyDraft} aria-label="AI返信案">
+                    <strong>AI返信案（担当者の確認が必要）</strong>
+                    <p>関連する変更は本番で確認されていますが、この方の症状が解消した証拠はありません。履歴と現在の状況を確認し、必要なら文面を直してから送信してください。</p>
+                    <blockquote>{detail.reply_draft.body}</blockquote>
+                    <button type="button" onClick={() => {
+                      setReplyBody(detail.reply_draft?.body ?? "");
+                      setResolveWithReply(false);
+                      setReplyDraftSource({ticketId:selectedId,
+                        latestUserMessageId:detail.reply_draft!.latest_user_message_id});
+                      replyRequestId.current = crypto.randomUUID();
+                    }}>返信欄へ入れる</button>
+                  </section>
+                )}
                 <label>
                   利用者へ返信
                   <textarea
@@ -445,6 +469,7 @@ export default function AdminSupportPage() {
                       type="checkbox"
                       checked={resolveWithReply}
                       onChange={(event) => setResolveWithReply(event.target.checked)}
+                      disabled={replyDraftSource !== null}
                     />
                     この返信で対応完了にする
                   </label>
