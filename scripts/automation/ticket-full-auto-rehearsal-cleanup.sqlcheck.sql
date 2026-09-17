@@ -55,6 +55,8 @@ BEGIN
   v_observed:=to_timestamp(v_slot*600+1);
   UPDATE public.yutakasa_repair_releases
     SET status='verified',merge_sha=v_merge,
+      ticket_before_after_run_id=125,
+      ticket_regression_artifact_sha256=repeat('5',64),
       merge_recorded_at=v_observed-INTERVAL '35 minutes',
       deployment_id=v_deploy,first_healthy_at=v_observed-INTERVAL '20 minutes',
       last_healthy_at=v_observed,healthy_count=3,verified_at=v_observed

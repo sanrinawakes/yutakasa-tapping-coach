@@ -81,6 +81,8 @@ BEGIN
     OR v_ticket.status<>'in_progress' OR v_ticket.automation_status<>'awaiting_repair'
     OR v_ticket.category<>'technical' OR v_ticket.decision_required
     OR v_ticket.subject IS DISTINCT FROM 'チャットの見出しが空白になる'
+    OR (SELECT count(*) FROM public.support_messages m
+      WHERE m.ticket_id=v_job.ticket_id AND m.sender_type='user')<>1
     OR EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=v_job.ticket_id)
     OR v_ticket.subject ~* v_owner_terms
     OR EXISTS(SELECT 1 FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
@@ -94,6 +96,8 @@ BEGIN
     OR v_release.status NOT IN ('observing','verified')
     OR v_release.head_sha IS DISTINCT FROM p_head_sha
     OR v_release.merge_sha IS DISTINCT FROM p_merge_sha
+    OR v_release.ticket_before_after_run_id IS DISTINCT FROM p_before_after_run_id
+    OR v_release.ticket_regression_artifact_sha256 IS NULL
     OR v_release.merge_recorded_at IS NULL
     OR NOT EXISTS(SELECT 1 FROM public.yutakasa_repair_ticket_links l
       WHERE l.pr_number=p_pr_number AND l.ticket_id=v_job.ticket_id
@@ -206,6 +210,8 @@ BEGIN
     OR v_ticket.automation_status<>'awaiting_repair'
     OR v_ticket.category<>'technical' OR v_ticket.decision_required
     OR v_ticket.subject IS DISTINCT FROM 'チャットの見出しが空白になる'
+    OR (SELECT count(*) FROM public.support_messages m
+      WHERE m.ticket_id=v_job.ticket_id AND m.sender_type='user')<>1
     OR EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=v_job.ticket_id)
     OR v_ticket.subject ~* v_owner_terms
     OR EXISTS(SELECT 1 FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
@@ -221,6 +227,8 @@ BEGIN
     OR v_proof.scenario_key IS DISTINCT FROM 'chat_title_zero_width'
     OR v_proof.merge_sha IS DISTINCT FROM v_release.merge_sha
     OR v_proof.deployment_id IS DISTINCT FROM v_release.deployment_id
+    OR v_release.ticket_before_after_run_id IS DISTINCT FROM v_proof.before_after_run_id
+    OR v_release.ticket_regression_artifact_sha256 IS NULL
     OR v_release.status<>'verified' OR v_release.verified_at IS NULL
     OR v_release.verified_at>clock_timestamp()+INTERVAL '2 minutes'
     OR v_release.healthy_count<3 OR v_release.first_healthy_at IS NULL

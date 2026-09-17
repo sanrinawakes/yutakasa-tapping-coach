@@ -226,7 +226,7 @@ test("manual reconcile requires explicit mode and uses the same no-send review p
   assert.equal(calls.length,2);
 });
 
-test("scheduled promotion retries pending Vercel status within a 24-hour window",async()=>{
+test("scheduled ticket promotion excludes generic AI repair branches",async()=>{
   let calls=0;
   const result=await retryPendingPromotions({env:{GITHUB_EVENT_NAME:"schedule",
     YUTAKASA_AUTO_MERGE_ENABLED:"true",GITHUB_REPOSITORY:env.GITHUB_REPOSITORY,
@@ -235,8 +235,8 @@ test("scheduled promotion retries pending Vercel status within a 24-hour window"
     head:{ref:"codex/yutakasa-ai-repair-0123456789abcdef",sha:"a".repeat(40),
       repo:{full_name:env.GITHUB_REPOSITORY}},base:{ref:"main"}}]),{status:200}),
   promoteImpl:async()=>{calls+=1;return {status:"pending_ci"};}});
-  assert.deepEqual(result,{examined:1,merged:0,pending:1,rejected:0});
-  assert.equal(calls,1);
+  assert.deepEqual(result,{examined:0,merged:0,pending:0,rejected:0});
+  assert.equal(calls,0);
 });
 
 test("scheduled promotion includes private ticket repair branches",async()=>{

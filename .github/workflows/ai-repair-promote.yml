@@ -2,7 +2,7 @@ name: Promote reviewed AI repair
 
 on:
   workflow_run:
-    workflows: [Source repair checks, AI repair independent review]
+    workflows: [Source repair checks, AI repair independent review, Ticket repair regression evidence]
     types: [completed]
   schedule:
     - cron: '*/5 * * * *'
@@ -17,9 +17,12 @@ jobs:
   merge:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      (startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-ai-repair-') ||
-       startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-support-ai-')) &&
+      ((github.event.workflow_run.event == 'pull_request' &&
+        startsWith(github.event.workflow_run.head_branch, 'codex/yutakasa-support-ai-') &&
+        github.event.workflow_run.name != 'Ticket repair regression evidence') ||
+       (github.event.workflow_run.event == 'workflow_run' &&
+        github.event.workflow_run.name == 'Ticket repair regression evidence' &&
+        github.event.workflow_run.head_branch == 'main')) &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -34,6 +37,9 @@ jobs:
       - name: Merge only after exact-head CI and independent review succeed
         env:
           YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA }}
+          REPAIR_REGRESSION_RUN_ID: ${{ github.event.workflow_run.name == 'Ticket repair regression evidence' && github.event.workflow_run.id || '' }}
           GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
@@ -44,7 +50,9 @@ jobs:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
       github.event_name == 'schedule' &&
-      vars.YUTAKASA_AUTO_MERGE_ENABLED == 'true'
+      (vars.YUTAKASA_AUTO_MERGE_ENABLED == 'true' ||
+       (vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID != '' &&
+        vars.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA != ''))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,6 +66,8 @@ jobs:
       - name: Retry exact-head promotion after Vercel status arrives
         env:
           YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA }}
           GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}

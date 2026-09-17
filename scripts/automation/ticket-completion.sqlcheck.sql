@@ -60,10 +60,18 @@ BEGIN
   INSERT INTO public.yutakasa_ticket_repair_jobs(work_id,ticket_id,latest_user_message_id,
     status,pr_number,head_sha)
     VALUES(v_work,v_ticket,v_user,'pr_open',9701,v_head);
-  INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,merge_recorded_at)
-    VALUES(9701,v_head,v_main,'observing',clock_timestamp()-INTERVAL '30 minutes');
+  INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,
+    merge_recorded_at,ticket_before_after_run_id,ticket_regression_artifact_sha256)
+    VALUES(9701,v_head,v_main,'observing',clock_timestamp()-INTERVAL '30 minutes',
+      101,repeat('1',64));
   INSERT INTO public.yutakasa_repair_ticket_links(pr_number,ticket_id,latest_user_message_id)
     VALUES(9701,v_ticket,v_user);
+  BEGIN
+    UPDATE public.yutakasa_repair_releases
+      SET ticket_before_after_run_id=999 WHERE pr_number=9701;
+    RAISE EXCEPTION 'trusted regression run was mutable';
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
+  END;
   -- A release link and generic smoke are not ticket-specific proof.
   BEGIN
     PERFORM * FROM public.append_yutakasa_verified_ticket_completion(v_work,v_main,v_deployment);
@@ -229,9 +237,10 @@ BEGIN
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。',gen_random_uuid()) RETURNING id INTO v_user;
   INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,
-    merge_recorded_at,first_healthy_at,last_healthy_at,healthy_count,verified_at,deployment_id)
+    merge_recorded_at,first_healthy_at,last_healthy_at,healthy_count,verified_at,deployment_id,
+    ticket_before_after_run_id,ticket_regression_artifact_sha256)
     VALUES(9702,v_head,v_main,'verified',clock_timestamp()-INTERVAL '30 minutes',
-      v_first,v_last,3,clock_timestamp(),v_deployment);
+      v_first,v_last,3,clock_timestamp(),v_deployment,301,repeat('2',64));
   INSERT INTO public.yutakasa_repair_observations(
     pr_number,workflow_run_id,observed_at,cron_slot,deployment_id,healthy)
     VALUES(9702,301,v_first,v_slot-2,v_deployment,TRUE),
@@ -268,8 +277,10 @@ BEGIN
       'in_progress','awaiting_repair',gen_random_uuid()) RETURNING id INTO v_ticket;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。',gen_random_uuid()) RETURNING id INTO v_user;
-  INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,merge_recorded_at)
-    VALUES(9703,v_head,v_main,'observing',clock_timestamp()-INTERVAL '30 minutes');
+  INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,
+    merge_recorded_at,ticket_before_after_run_id,ticket_regression_artifact_sha256)
+    VALUES(9703,v_head,v_main,'observing',clock_timestamp()-INTERVAL '30 minutes',
+      401,repeat('3',64));
   INSERT INTO public.yutakasa_ticket_repair_jobs(work_id,ticket_id,latest_user_message_id,
     status,pr_number,head_sha) VALUES(v_work,v_ticket,v_user,'pr_open',9703,v_head);
   INSERT INTO public.yutakasa_repair_ticket_links(pr_number,ticket_id,latest_user_message_id)

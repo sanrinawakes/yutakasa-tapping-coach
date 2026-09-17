@@ -52,6 +52,8 @@ test("free text, appended conditions, attachments, stale conversation, and revie
   for (const changed of [
     { messages: [{ ...message, body: `${message.body}ほかの端末でも起こります。` }] },
     { messages: [{ ...message, body: message.body.replace("（U+200B）", "") }] },
+    { messages: [message, { ...message, id: "523e4567-e89b-42d3-a456-426614174000",
+      body: "追加条件です。" }] },
     { attachments: [{ id: "423e4567-e89b-42d3-a456-426614174000" }] },
     { adminMessages: [{ created_at: "2026-09-17T12:01:00Z" }] },
     { sourceRun: { ...fixture.sourceRun, run_attempt: 2 } },

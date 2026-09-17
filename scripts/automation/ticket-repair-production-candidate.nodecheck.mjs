@@ -54,7 +54,9 @@ const job = { work_id: workId, ticket_id: ticketId, latest_user_message_id: mess
 const links = [{ pr_number: 78, ticket_id: ticketId, latest_user_message_id: messageId }];
 const release = { pr_number: 78, head_sha: headSha, merge_sha: mergeSha,
   status: "observing", merge_recorded_at: "2026-09-17T00:01:00Z",
-  deployment_id: deploymentId };
+  deployment_id: deploymentId, ticket_before_after_run_id: 450,
+  ticket_regression_artifact_sha256: createHash("sha256")
+    .update(JSON.stringify(artifact)).digest("hex") };
 const ticket = { id: ticketId, category: "technical", status: "in_progress",
   automation_status: "awaiting_repair", decision_required: false,
   subject: "チャットの会話が消える" };
@@ -82,6 +84,8 @@ test("only a dispatch from exact deployed main may measure a fixed scenario", ()
 
 test("candidate artifact is tied to the exact successful trusted workflow run", () => {
   assert.match(checkRegressionArtifact(artifact, input, run, artifactList), /^[a-f0-9]{64}$/);
+  assert.match(checkRegressionArtifact(artifact, input,
+    { ...run, event: "workflow_run" }, artifactList), /^[a-f0-9]{64}$/);
   assert.throws(() => checkRegressionArtifact({ ...artifact, productionVerified: true }, input, run, artifactList),
     rejected("regression_artifact_untrusted"));
   assert.throws(() => checkRegressionArtifact({ ...artifact, extra: "forged" }, input, run, artifactList),
@@ -133,17 +137,25 @@ test("release binding rejects stale PR, deployment, linked ticket, or latest mes
   assert.throws(() => checkReleaseBinding({ ...args,
     deployment: { ...deployment, mainSha: headSha } }),
   rejected("production_release_binding_invalid"));
+  assert.throws(() => checkReleaseBinding({ ...args,
+    release: { ...release, ticket_before_after_run_id: 449 } }),
+  rejected("production_release_binding_invalid"));
+  assert.throws(() => checkReleaseBinding({ ...args,
+    release: { ...release, ticket_regression_artifact_sha256: "0".repeat(64) } }),
+  rejected("production_release_binding_invalid"));
 });
 
 test("stream completion is accepted only as its own unambiguous reported symptom", () => {
   const streamInput = { ...input, scenarioKey: "chat_stream_completion" };
   const streamArtifact = { ...artifact, scenarioKey: "chat_stream_completion" };
+  const streamRelease = { ...release, ticket_regression_artifact_sha256:
+    createHash("sha256").update(JSON.stringify(streamArtifact)).digest("hex") };
   const streamMessages = [{ ...latestMessages[0], body: "AIの回答が途中で止まります。" }];
   assert.equal(checkReleaseBinding({ input: streamInput, artifact: streamArtifact,
-    pr, mergeCommit, job, links, release, ticket, attachments,
+    pr, mergeCommit, job, links, release: streamRelease, ticket, attachments,
     latestMessages: streamMessages, newerAdminMessages, deployment }).headSha, headSha);
   assert.throws(() => checkReleaseBinding({ input: streamInput, artifact: streamArtifact,
-    pr, mergeCommit, job, links, release, ticket, attachments,
+    pr, mergeCommit, job, links, release: streamRelease, ticket, attachments,
     latestMessages, newerAdminMessages, deployment }),
   rejected("production_release_binding_invalid"));
 });
@@ -219,6 +231,8 @@ test("exact zero-width ticket records proof only after trusted production replay
   const titleScenarioSha = sha256(titleSource);
   const titleArtifact = { ...artifact, scenarioKey: ZERO_WIDTH_CONDITION.scenarioKey,
     scenarioSha256: titleScenarioSha };
+  const titleRelease = { ...release, ticket_regression_artifact_sha256:
+    sha256(JSON.stringify(titleArtifact)) };
   const titleFile = { type: "file", encoding: "base64", path: titlePath,
     size: Buffer.byteLength(titleSource), content: Buffer.from(titleSource).toString("base64") };
   const titleTicket = { ...ticket, subject: ZERO_WIDTH_CONDITION.subject };
@@ -257,7 +271,7 @@ test("exact zero-width ticket records proof only after trusted production replay
     else if (url.pathname.endsWith(`/contents/${titlePath}`)) output = titleFile;
     else if (url.pathname.endsWith("/yutakasa_ticket_repair_jobs")) output = [job];
     else if (url.pathname.endsWith("/yutakasa_repair_ticket_links")) output = links;
-    else if (url.pathname.endsWith("/yutakasa_repair_releases")) output = [release];
+    else if (url.pathname.endsWith("/yutakasa_repair_releases")) output = [titleRelease];
     else if (url.pathname.endsWith("/support_tickets")) output = [titleTicket];
     else if (url.pathname.endsWith("/support_attachments")) output = [];
     else if (url.pathname.endsWith("/support_messages")) output =

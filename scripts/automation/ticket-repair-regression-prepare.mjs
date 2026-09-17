@@ -136,11 +136,11 @@ export async function prepareTicketRegression({ env = process.env, fetchImpl = g
   ]);
   // The second newest user message is accepted only if it is older than the
   // linked message. The exact latest ID is checked below.
-  if (!Array.isArray(messages) || messages.length < 1 || messages.length > 2) {
+  if (!Array.isArray(messages) || messages.length !== 1) {
     fail("regression_prepare_message_unavailable");
   }
   const result = selectEligibleTicketRepair({ sourceRun, main, linked, pr, jobs, ticket,
-    messages: messages.slice(0, 1), attachments, links, adminMessages, headSha, sourceRunId,
+    messages, attachments, links, adminMessages, headSha, sourceRunId,
     rehearsalWorkId: rehearsal ? env.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID : null });
   if (env.GITHUB_OUTPUT) {
     await appendFile(env.GITHUB_OUTPUT,

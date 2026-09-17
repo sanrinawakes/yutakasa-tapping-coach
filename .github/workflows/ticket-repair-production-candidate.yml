@@ -1,6 +1,11 @@
 name: Ticket repair production candidate
 
 on:
+  workflow_run:
+    workflows:
+      - Observe merged AI repair
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       work_id:
@@ -36,10 +41,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  measure:
+  prepare:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.select.outputs.eligible || steps.manual.outputs.eligible }}
+      work_id: ${{ steps.select.outputs.work_id || steps.manual.outputs.work_id }}
+      pr_number: ${{ steps.select.outputs.pr_number || steps.manual.outputs.pr_number }}
+      scenario_key: ${{ steps.select.outputs.scenario_key || steps.manual.outputs.scenario_key }}
+      before_after_run_id: ${{ steps.select.outputs.before_after_run_id || steps.manual.outputs.before_after_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select exact newly verified ticket release
+        id: select
+        if: github.event_name == 'workflow_run'
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          OBSERVED_RUN_ID: ${{ github.event.workflow_run.id }}
+          OBSERVED_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          OBSERVED_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          OBSERVED_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/automation/ticket-repair-production-prepare.mjs
+      - name: Preserve explicit manual inputs
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          WORK_ID: ${{ inputs.work_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SCENARIO_KEY: ${{ inputs.scenario_key }}
+          BEFORE_AFTER_RUN_ID: ${{ inputs.before_after_run_id }}
+        run: |
+          {
+            echo eligible=true
+            echo "work_id=$WORK_ID"
+            echo "pr_number=$PR_NUMBER"
+            echo "scenario_key=$SCENARIO_KEY"
+            echo "before_after_run_id=$BEFORE_AFTER_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+  measure:
+    needs: prepare
+    if: needs.prepare.outputs.eligible == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -55,16 +110,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ticket-regression-evidence
-          run-id: ${{ inputs.before_after_run_id }}
+          run-id: ${{ needs.prepare.outputs.before_after_run_id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/regression-candidate
       - run: node --test scripts/automation/ticket-repair-production-candidate.nodecheck.mjs
       - name: Verify release binding and measure the isolated production chat
         env:
-          WORK_ID: ${{ inputs.work_id }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          SCENARIO_KEY: ${{ inputs.scenario_key }}
-          BEFORE_AFTER_RUN_ID: ${{ inputs.before_after_run_id }}
+          WORK_ID: ${{ needs.prepare.outputs.work_id }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          SCENARIO_KEY: ${{ needs.prepare.outputs.scenario_key }}
+          BEFORE_AFTER_RUN_ID: ${{ needs.prepare.outputs.before_after_run_id }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
