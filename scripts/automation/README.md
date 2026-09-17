@@ -67,17 +67,16 @@ publication reservation, and a timed-out POST leaves `posting` or `uncertain`
 state. Later runs may confirm an existing Drive file but cannot issue another
 POST for that event. The upload uses an event-ID-only stable filename, checks
 the reservation before writing, and confirms the file's parent, name, size,
-and hashes through Drive readback. These
-modules have no scheduled or CLI entry point and do not run in the current
-monitor. A new Drive item still raises `drive_intake_items`; it is not marked
-processed or healthy.
+and hashes through Drive readback. The existing monitor reaches these modules
+only through the disabled Drive scheduler. A new Drive item still raises
+`drive_intake_items`; it is not marked processed or healthy.
 
 `drive-intake-runtime.mjs` adds a disabled per-file caller: it claims a Drive
 revision, renews that claim while it verifies the source bytes, binds the
 source SHA-256 to a stable event ID and an independently verified release
 record, then invokes the existing PDF publication ledger before marking the
 source processed. An error or uncertain upload becomes `needs_review`;
-another run cannot repeat the upload. The caller has no CLI or cron wiring.
+another run cannot repeat the upload. The caller has no direct CLI entry point.
 The old automation did not diagnose Drive files automatically, and this module
 does not invent such a diagnosis. Drive metadata now carries its revision
 version when Google supplies it. The processing caller requires that version
@@ -92,12 +91,25 @@ approval permission. `drive-release-binding.mjs` supplies the caller's
 binding and release ledger, three consecutive healthy observations, current
 GitHub main/Vercel production parity, and exact PR-head CI before publication.
 `drive-release-evidence.mjs` checks the report digest, source revision, and
-release evidence without reading customer content. These modules have no
-scheduled entry point or production migration. Apply the SQL only after the
-owner approves this specific binding path; the SQL fixture is local only.
+release evidence without reading customer content. The binding migration was
+applied to production on 2026-09-17; readback found zero rows, RLS enabled,
+service-role SELECT only, and no anon/authenticated SELECT. The SQL fixture is
+local only.
 There is still no trusted diagnosis/report issuer, owner approval interface,
 OAuth credential, or synthetic end-to-end Drive proof. Keep processing and
 publication flags off until those are implemented and verified.
+
+`drive-processing-scheduler.mjs` is wired to the Railway monitor lease but is
+disabled unless `YUTAKASA_DRIVE_SCHEDULED_ENABLED=true` as well as both Drive
+processing and publishing flags. It lists fresh Drive metadata, requires a
+revision version, and checks for an owner-verified binding by event ID before
+claiming or downloading a file. Missing bindings are skipped without a claim
+or content read; provider denial fails the monitor. At most one newly processed
+file runs per tick. The monitor still counts every file in `受付` as actionable,
+including processed files, until an independently verified completion-state
+read is implemented. This deliberately avoids a false healthy result. The
+scheduled flag is not set in Railway and must remain off before OAuth approval,
+trusted report issuance, and synthetic end-to-end proof.
 
 Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
 flag in their credential source. PDF publication additionally requires
@@ -106,9 +118,9 @@ refresh helper used by content reads and PDF publication rejects a missing or
 differently spelled processing flag before requesting a token. The existing
 metadata-only monitor still uses its API key when one is configured.
 Neither flag is configured in the production Railway service. Do not enable
-them merely because OAuth credentials have been issued: no scheduled caller
-currently binds a per-file claim to a verified diagnosis, release record,
-and result PDF. A file in `受付` remains an actionable unprocessed item.
+them merely because OAuth credentials have been issued: the scheduled caller
+only accepts reports with an owner-verified binding and does not generate a
+diagnosis. A file in `受付` remains actionable.
 
 The current `GOOGLE_DRIVE_API_KEY` is for public metadata only. Content and
 upload require OAuth on the actual `181wyc@gmail.com` Drive account:
@@ -123,9 +135,9 @@ before issuing a long-lived token. An External/Testing consent screen yields
 a refresh token that expires after seven days. Do not alter folder sharing
 or place OAuth credentials in the API-key variable.
 
-Before enabling this path, bind `assertLease` to the current monitor owner;
-verify the publication ledger and connect the existing durable per-file intake claim to the caller so a
-Drive file is not processed twice. Run a
+The disabled scheduler binds `assertLease` to the current monitor owner and
+uses the durable per-file intake claim. Before enabling it, verify the
+publication ledger and run a
 non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report
 publisher. Missing credentials, missing evidence, unsupported file types, or
@@ -144,8 +156,8 @@ reconciles the outcome. No automatic retry can process the file twice. Older
 versions return `stale`. The table stores no filename, file content, customer
 email, or raw error text. The intake ledger migration was applied to
 production on 2026-09-17; the table had zero rows and the RPC grants were
-verified at rollout. It still has no scheduled caller and has not been
-connected to OAuth, content retrieval, PDF publication, or customer
-notification. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
+verified at rollout. It now has a disabled scheduled caller, with no real
+OAuth, content retrieval, PDF publication, or customer notification verified.
+`drive-intake-ledger.sqlcheck.sql` is a local test fixture with
 synthetic IDs; do not run it on production. The test fixture rolls back its
 rows so repeated local runs remain independent.

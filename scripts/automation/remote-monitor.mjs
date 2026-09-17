@@ -16,7 +16,8 @@ import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.
 import { RepairDispatchError, dispatchAlert, dispatchRepair } from "./dispatch-repair.mjs";
 import { dispatchQueuedTicketRepairs, inspectTicketRepairBacklog } from "./ticket-repair-dispatch.mjs";
 import { dispatchDueTicketReconciliation, inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
-import { DRIVE_INTAKE_FOLDER_ID, collectDriveIntakeMetadata } from "./drive-intake.mjs";
+import { DRIVE_INTAKE_FOLDER_ID, DriveIntakeError, collectDriveIntakeMetadata } from "./drive-intake.mjs";
+import { processScheduledDriveIntake } from "./drive-processing-scheduler.mjs";
 import { SupportWorkerError, processSupportTicketContextFile } from "./support-worker.mjs";
 import { MonitorLedgerError, acquireMonitorLease } from "./monitor-ledger.mjs";
 
@@ -595,7 +596,7 @@ export async function runRemoteMonitorWithTickets(options = {}) {
 }
 
 function safeErrorCode(error) {
-  if (error instanceof RemoteMonitorError || error instanceof SnapshotError || error instanceof RepairDispatchError || error instanceof SupportWorkerError || error instanceof MonitorLedgerError) {
+  if (error instanceof RemoteMonitorError || error instanceof SnapshotError || error instanceof RepairDispatchError || error instanceof SupportWorkerError || error instanceof MonitorLedgerError || error instanceof DriveIntakeError) {
     return error.code;
   }
   return "remote_monitor_unexpected_failure";
@@ -625,6 +626,7 @@ export async function runLeasedMonitor({
   ticketBacklogImpl = inspectTicketRepairBacklog,
   reconcileInspectImpl = inspectDueTicketReconciliations,
   reconcileDispatchImpl = dispatchDueTicketReconciliation,
+  driveScheduleImpl = processScheduledDriveIntake,
   ...options
 } = {}) {
   const lease = await leaseImpl({ secrets, kind: "scheduled" });
@@ -633,6 +635,26 @@ export async function runLeasedMonitor({
   let reconcileInspection;
   try {
     result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
+    if (secrets.YUTAKASA_DRIVE_SCHEDULED_ENABLED === "true") {
+      const driveSchedule = await driveScheduleImpl({
+        secrets,
+        assertLease: async () => { await lease.assertActive(); return true; },
+      });
+      const counts = ["scanned", "unbound", "processed", "alreadyProcessed", "blocked", "deferred"];
+      if (counts.some((name) => !Number.isSafeInteger(driveSchedule?.[name]) ||
+          driveSchedule[name] < 0 || driveSchedule[name] > 100) ||
+          driveSchedule.processed > 1 ||
+          driveSchedule.unbound + driveSchedule.processed +
+            driveSchedule.alreadyProcessed + driveSchedule.blocked +
+            driveSchedule.deferred !== driveSchedule.scanned) {
+        fail("drive_schedule_receipt_invalid");
+      }
+      result.driveSchedule = Object.fromEntries(counts.map((name) => [name, driveSchedule[name]]));
+      if (driveSchedule.scanned > 0) {
+        result.reasonCodes = [...new Set([...result.reasonCodes, "drive_intake_items"])].sort();
+        result.actionRequired = true;
+      }
+    }
     if (secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true") {
       const backlog=await ticketBacklogImpl({secrets});
       if (!Number.isSafeInteger(backlog?.pending) || backlog.pending<0 ||

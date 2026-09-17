@@ -156,14 +156,30 @@ function adapter(fetchImpl) {
 test("fixed read-only adapter binds the file hash to verified live evidence", async () => {
   const { calls, fetchImpl } = mockFetch();
   const evidence = adapter(fetchImpl);
+  assert.deepEqual(await evidence.inspectVerifiedBinding(KEY), {
+    eventId: KEY.eventId, contentSha256: KEY.contentSha256,
+  });
   const bound = await evidence.loadVerifiedResult(KEY);
   assert.deepEqual(bound, { ...KEY, report: REPORT });
   assert.equal(await evidence.verifyReleaseEvidence({ ...KEY, report: bound.report }), true);
   assert.equal(calls.filter(({ url }) =>
-    url.pathname.endsWith("/yutakasa_drive_release_bindings")).length, 2);
+    url.pathname.endsWith("/yutakasa_drive_release_bindings")).length, 3);
   assert.ok(calls.every(({ url }) =>
     !url.toString().includes(SECRETS.SUPABASE_SERVICE_ROLE_KEY)));
   assert.ok(calls.every(({ url }) => !url.toString().includes(REPORT.cause)));
+});
+
+test("binding header absence skips a file but provider denial fails closed", async () => {
+  const absent = mockFetch({ binding: null });
+  const original = absent.fetchImpl;
+  const withoutRow = async (url, init) =>
+    new URL(url).pathname.endsWith("/yutakasa_drive_release_bindings")
+      ? Response.json([]) : original(url, init);
+  assert.equal(await adapter(withoutRow).inspectVerifiedBinding(KEY), null);
+  const denied = mockFetch({ bindingStatus: 403 });
+  await assert.rejects(adapter(denied.fetchImpl).inspectVerifiedBinding(KEY),
+    (error) => error instanceof DriveIntakeError &&
+      error.code === "drive_evidence_binding_http_failure");
 });
 
 test("missing or inaccessible owner binding never becomes an empty healthy result", async () => {
