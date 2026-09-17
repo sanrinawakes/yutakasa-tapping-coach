@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FunctionalSmokeError, checkSyntheticSupportTicket, reapStaleSyntheticIdentities, runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
+import { BRIDGE_SUPPORT_BODY, FunctionalSmokeError, checkSyntheticSupportTicket, reapStaleSyntheticIdentities, runProductionFunctionalSmoke, TEST_SUPPORT_BODY } from "./ai-repair-functional-smoke.mjs";
 
 const env = {
   JWT_SECRET: "j".repeat(40),
@@ -318,6 +318,7 @@ test("support smoke confirms idempotent authenticated API storage and read-only 
   let ticket = null;
   let messages = [];
   let queueFilterSeen = false;
+  let expectedBody = TEST_SUPPORT_BODY;
   const calls = [];
   const fetchImpl = async (rawUrl, init) => {
     const url = new URL(rawUrl);
@@ -326,6 +327,7 @@ test("support smoke confirms idempotent authenticated API storage and read-only 
       assert.equal(init.headers.Cookie, "session=synthetic-token");
       const input = JSON.parse(init.body);
       assert.equal(input.category, "technical");
+      assert.equal(input.body, expectedBody);
       if (!ticket) {
         ticket = { id: ticketId, user_email: email, subject: input.subject,
           client_request_id: input.clientRequestId, category: "technical", status: "open",
@@ -354,4 +356,13 @@ test("support smoke confirms idempotent authenticated API storage and read-only 
   assert.equal(calls.filter((call) => call.path === "/api/support/tickets").length, 2);
   assert.equal(calls.some((call) => call.path === "/api/internal/support-automation"), false);
   assert.equal(queueFilterSeen, true);
+  ticket = null;
+  messages = [];
+  expectedBody = BRIDGE_SUPPORT_BODY;
+  const bridge = await checkSyntheticSupportTicket(env, fetchImpl, email,
+    "synthetic-token", BRIDGE_SUPPORT_BODY);
+  assert.deepEqual(bridge, result);
+  assert.equal(calls.filter((call) => call.path === "/api/support/tickets").length, 4);
+  await assert.rejects(() => checkSyntheticSupportTicket(env, fetchImpl, email,
+    "synthetic-token", "unapproved synthetic body"), FunctionalSmokeError);
 });

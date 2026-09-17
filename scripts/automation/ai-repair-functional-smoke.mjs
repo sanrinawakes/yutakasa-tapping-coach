@@ -9,6 +9,7 @@ const TEST_ACCOUNT_MARKER = "yutakasa-ai-repair-smoke-v1";
 const TEST_MESSAGE_MARKER = "__YUTAKASA_AI_REPAIR_SMOKE_V1__";
 export const TEST_SUPPORT_SUBJECT = `${TEST_MESSAGE_MARKER} support`;
 export const TEST_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} technical support route check`;
+export const BRIDGE_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} ゼロ幅スペースだけを渡すと、見出しは空白になります。`;
 export const TEST_SUPPORT_ACK = "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA = /^[a-f0-9]{40}$/u;
@@ -262,14 +263,14 @@ async function assertReload(page, prompt, expectedRendered, expectedAssistantCou
   if ((await assistant.innerText()).trim() !== expectedRendered) fail("smoke_chat_reload_mismatch");
 }
 
-async function postSyntheticSupportTicket(fetchImpl, token, clientRequestId) {
+async function postSyntheticSupportTicket(fetchImpl, token, clientRequestId, body) {
   let response;
   try {
     response = await within(fetchImpl(`${PRODUCTION_URL}/api/support/tickets`, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json", Cookie: `session=${token}` },
       body: JSON.stringify({ category: "technical", subject: TEST_SUPPORT_SUBJECT,
-        body: TEST_SUPPORT_BODY, clientRequestId }),
+        body, clientRequestId }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     }), 15_000, "smoke_support_api_timeout");
@@ -282,20 +283,22 @@ async function postSyntheticSupportTicket(fetchImpl, token, clientRequestId) {
 }
 
 /** Exercise the real authenticated API while never claiming a real support ticket. */
-export async function checkSyntheticSupportTicket(env, fetchImpl, email, token) {
-  if (!SYNTHETIC_EMAIL.test(email) || typeof token !== "string" || !token) {
+export async function checkSyntheticSupportTicket(env, fetchImpl, email, token,
+  supportBody = TEST_SUPPORT_BODY) {
+  if (!SYNTHETIC_EMAIL.test(email) || typeof token !== "string" || !token ||
+      ![TEST_SUPPORT_BODY, BRIDGE_SUPPORT_BODY].includes(supportBody)) {
     fail("smoke_support_identity_invalid");
   }
   if ((await listSupportTickets(env, fetchImpl, email)).length !== 0) {
     fail("smoke_support_preexisting_ticket");
   }
   const clientRequestId = randomUUID();
-  const first = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId);
+  const first = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId, supportBody);
   if (first.status !== 201 || first.result?.created !== true ||
       !UUID.test(first.result.ticket_id ?? "") || !UUID.test(first.result.message_id ?? "")) {
     fail("smoke_support_creation_unconfirmed");
   }
-  const retry = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId);
+  const retry = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId, supportBody);
   if (retry.status !== 200 || retry.result?.created !== false ||
       retry.result.ticket_id !== first.result.ticket_id ||
       retry.result.message_id !== first.result.message_id) {
@@ -315,7 +318,7 @@ export async function checkSyntheticSupportTicket(env, fetchImpl, email, token) 
   if (messages.length !== 2 || messages.some((row) => !UUID.test(row?.id ?? "") ||
       row.ticket_id !== tickets[0].id) ||
       messages.filter((row) => row.sender_type === "user" &&
-        row.id === first.result.message_id && row.body === TEST_SUPPORT_BODY &&
+      row.id === first.result.message_id && row.body === supportBody &&
         row.client_request_id === clientRequestId).length !== 1 ||
       messages.filter((row) => row.sender_type === "system").length !== 1) {
     fail("smoke_support_messages_invalid");

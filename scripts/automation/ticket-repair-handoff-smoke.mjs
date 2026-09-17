@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { checkSyntheticSupportTicket, TEST_SUPPORT_ACK, TEST_SUPPORT_BODY,
+import { BRIDGE_SUPPORT_BODY, checkSyntheticSupportTicket, TEST_SUPPORT_ACK, TEST_SUPPORT_BODY,
   TEST_SUPPORT_SUBJECT } from "./ai-repair-functional-smoke.mjs";
 import { collectRemoteDeployment } from "./remote-production.mjs";
 
@@ -89,7 +89,8 @@ async function verifyCleanupRpc(env, fetchImpl, rpcName = "cleanup_yutakasa_tick
   // This deliberately invalid call must fail before any write. It proves the
   // deployed PostgREST schema exposes the cleanup RPC to service_role.
   if (!["cleanup_yutakasa_ticket_handoff_smoke",
-    "cleanup_yutakasa_ticket_terra_issue_smoke"].includes(rpcName)) {
+    "cleanup_yutakasa_ticket_terra_issue_smoke",
+    "cleanup_yutakasa_ticket_bridge_e2e_smoke"].includes(rpcName)) {
     fail("handoff_smoke_cleanup_rpc_invalid");
   }
   const url = new URL(`/rest/v1/rpc/${rpcName}`, env.SUPABASE_URL);
@@ -101,8 +102,11 @@ async function verifyCleanupRpc(env, fetchImpl, rpcName = "cleanup_yutakasa_tick
     body: JSON.stringify({ p_run_id: null, p_account_id: null,
       p_account_updated_at: null, p_ticket_id: null,
       p_ticket_updated_at: null, p_work_id: null, p_lock_token: null,
-      ...(rpcName === "cleanup_yutakasa_ticket_terra_issue_smoke"
-        ? { p_gh_run_id: runId } : {}) }),
+      ...(["cleanup_yutakasa_ticket_terra_issue_smoke",
+        "cleanup_yutakasa_ticket_bridge_e2e_smoke"].includes(rpcName)
+        ? { p_gh_run_id: runId } : {}),
+      ...(rpcName === "cleanup_yutakasa_ticket_bridge_e2e_smoke"
+        ? { p_pr_number: null, p_head_sha: null } : {}) }),
     redirect: "error", signal: AbortSignal.timeout(15_000),
   }).catch(() => fail("handoff_smoke_cleanup_preflight_failed"));
   if (response.status !== 400) fail("handoff_smoke_cleanup_preflight_failed");
@@ -139,7 +143,8 @@ async function ticketForEmail(env, fetchImpl, email) {
   return result[0] ?? null;
 }
 
-async function supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken) {
+async function supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken,
+  supportBody = TEST_SUPPORT_BODY) {
   const ticket = await ticketForEmail(env, fetchImpl, email);
   if (!ticket || ticket.id !== ticketId || ticket.user_email !== email ||
       ticket.category !== "technical" || ticket.subject !== TEST_SUPPORT_SUBJECT ||
@@ -152,7 +157,7 @@ async function supportEvidence(env, fetchImpl, ticketId, email, workId, lockToke
   if (messages.length !== 2 || messages.some((message) =>
       !UUID.test(message?.id ?? "") || message.ticket_id !== ticketId) ||
       messages.filter((message) => message.sender_type === "user" &&
-        message.sender_email === email && message.body === TEST_SUPPORT_BODY &&
+        message.sender_email === email && message.body === supportBody &&
         message.client_request_id === ticket.client_request_id).length !== 1 ||
       messages.filter((message) => message.sender_type === "system" &&
         message.sender_email === null && message.body === TEST_SUPPORT_ACK &&
@@ -234,6 +239,24 @@ export async function cleanupTicketRepairSmoke(env, fetchImpl, email, runId, tic
       fail("handoff_smoke_ticket_changed");
     }
   }
+  let prNumber = null;
+  let headSha = null;
+  if (rpcName === "cleanup_yutakasa_ticket_bridge_e2e_smoke") {
+    const jobs = await rows(env, fetchImpl, "yutakasa_ticket_repair_jobs", {
+      work_id: `eq.${workId}`,
+      select: "work_id,ticket_id,pr_number,head_sha", limit: "2",
+    });
+    if (jobs.length > 1 || (jobs.length === 1 &&
+        (!current || jobs[0].work_id !== workId || jobs[0].ticket_id !== current.id ||
+         (jobs[0].pr_number !== null &&
+          (!Number.isSafeInteger(jobs[0].pr_number) || jobs[0].pr_number < 1 ||
+           !SHA.test(jobs[0].head_sha ?? ""))) ||
+         (jobs[0].pr_number === null && jobs[0].head_sha !== null)))) {
+      fail("handoff_smoke_job_changed");
+    }
+    prNumber = jobs[0]?.pr_number ?? null;
+    headSha = jobs[0]?.head_sha ?? null;
+  }
   // One database transaction locks job -> ticket -> subscriber, validates
   // exact synthetic contents and deletes both rows. A concurrent AI claim
   // can change the job without touching ticket.updated_at, so HTTP DELETE
@@ -246,6 +269,8 @@ export async function cleanupTicketRepairSmoke(env, fetchImpl, email, runId, tic
       p_ticket_updated_at: current?.updated_at ?? null,
       p_work_id: workId, p_lock_token: lockToken,
       ...(postInvestigation ? { p_gh_run_id: ghRunId } : {}),
+      ...(rpcName === "cleanup_yutakasa_ticket_bridge_e2e_smoke"
+        ? { p_pr_number: prNumber, p_head_sha: headSha } : {}),
     });
   if (cleaned.length !== 1 || cleaned[0].ticket_deleted !== Boolean(current) ||
       cleaned[0].subscriber_deleted !== Boolean(account)) {
@@ -274,6 +299,10 @@ export async function cleanupTicketRepairSmoke(env, fetchImpl, email, runId, tic
     if (workId && (await rows(env, fetchImpl, "yutakasa_ticket_repair_jobs", {
       work_id: `eq.${workId}`, select: "work_id", limit: "1",
     })).length !== 0) fail("handoff_smoke_cleanup_incomplete");
+    if (rpcName === "cleanup_yutakasa_ticket_bridge_e2e_smoke" && prNumber &&
+        (await rows(env, fetchImpl, "yutakasa_repair_releases", {
+          pr_number: `eq.${prNumber}`, select: "pr_number", limit: "1",
+        })).length !== 0) fail("handoff_smoke_cleanup_incomplete");
   }
 }
 
@@ -283,12 +312,19 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
   supportTicketImpl = checkSyntheticSupportTicket,
   afterQueued = null,
   cleanupRpcName = "cleanup_yutakasa_ticket_handoff_smoke",
-  statePath = null } = {}) {
+  statePath = null, supportBody = TEST_SUPPORT_BODY,
+  beforeDatabaseCleanup = null } = {}) {
   validateEnvironment(env);
   if (afterQueued === null && (cleanupRpcName !== "cleanup_yutakasa_ticket_handoff_smoke" ||
-      statePath !== null)) fail("handoff_smoke_post_handoff_configuration_invalid");
+      statePath !== null || supportBody !== TEST_SUPPORT_BODY ||
+      beforeDatabaseCleanup !== null)) fail("handoff_smoke_post_handoff_configuration_invalid");
   if (afterQueued !== null && (typeof afterQueued !== "function" ||
-      cleanupRpcName !== "cleanup_yutakasa_ticket_terra_issue_smoke" ||
+      !["cleanup_yutakasa_ticket_terra_issue_smoke",
+        "cleanup_yutakasa_ticket_bridge_e2e_smoke"].includes(cleanupRpcName) ||
+      (cleanupRpcName === "cleanup_yutakasa_ticket_terra_issue_smoke" &&
+        (supportBody !== TEST_SUPPORT_BODY || beforeDatabaseCleanup !== null)) ||
+      (cleanupRpcName === "cleanup_yutakasa_ticket_bridge_e2e_smoke" &&
+        (supportBody !== BRIDGE_SUPPORT_BODY || typeof beforeDatabaseCleanup !== "function")) ||
       !/^[1-9][0-9]{0,17}$/u.test(env.GITHUB_RUN_ID ?? "") ||
       !Number.isSafeInteger(Number(env.GITHUB_RUN_ID)) ||
       typeof statePath !== "string" || !path.isAbsolute(statePath))) {
@@ -327,7 +363,8 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
     });
     if (account.length !== 1 || account[0].email !== email ||
         account[0].myasp_data?.smoke_run_id !== runId) fail("handoff_smoke_account_insert_unconfirmed");
-    const support = await supportTicketImpl(env, fetchImpl, email, sessionToken(env.JWT_SECRET, email));
+    const support = await supportTicketImpl(env, fetchImpl, email,
+      sessionToken(env.JWT_SECRET, email), supportBody);
     if (support?.ticketCreated !== true || support?.idempotent !== true ||
         support?.messagesSaved !== true || support?.queueIsolated !== true) {
       fail("handoff_smoke_support_creation_unconfirmed");
@@ -335,7 +372,8 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
     const initial = await ticketForEmail(env, fetchImpl, email);
     if (!initial) fail("handoff_smoke_ticket_missing");
     ticketId = initial.id;
-    if ((await supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken)).phase !== "queued") {
+    if ((await supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken,
+      supportBody)).phase !== "queued") {
       fail("handoff_smoke_initial_state_invalid");
     }
     const claim = await supportApi(env, fetchImpl, "claim", { ticketId, lockToken });
@@ -347,7 +385,7 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
         !Number.isFinite(Date.parse(detail.ticket.updated_at ?? "")) ||
         !Array.isArray(detail.messages) || detail.messages.length !== 2 ||
         detail.messages.filter((message) => message.sender_type === "user" &&
-          message.body === TEST_SUPPORT_BODY && UUID.test(message.id ?? "")).length !== 1) {
+          message.body === supportBody && UUID.test(message.id ?? "")).length !== 1) {
       fail("handoff_smoke_detail_unconfirmed");
     }
     const latestUserMessageId = detail.messages.find((message) => message.sender_type === "user").id;
@@ -356,7 +394,8 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
       ticketVersion: detail.ticket.updated_at,
     });
     if (handoff?.workId !== workId) fail("handoff_smoke_handoff_unconfirmed");
-    const queued = await supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken);
+    const queued = await supportEvidence(env, fetchImpl, ticketId, email, workId, lockToken,
+      supportBody);
     if (queued.phase !== "awaiting" || queued.userMessageId !== latestUserMessageId) {
       fail("handoff_smoke_job_unconfirmed");
     }
@@ -374,7 +413,10 @@ export async function runTicketRepairHandoffSmoke({ env = process.env,
   } catch (error) {
     primaryError = error;
   } finally {
-    try { await cleanupTicketRepairSmoke(env, fetchImpl, email, runId, ticketId, workId, lockToken,
+    try {
+      if (beforeDatabaseCleanup) await beforeDatabaseCleanup({ env, fetchImpl, email, runId,
+        ticketId, workId, lockToken });
+      await cleanupTicketRepairSmoke(env, fetchImpl, email, runId, ticketId, workId, lockToken,
       { rpcName: cleanupRpcName, ghRunId: afterQueued ? Number(env.GITHUB_RUN_ID) : null,
         postInvestigation: Boolean(afterQueued) });
       cleaned = true;
