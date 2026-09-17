@@ -106,12 +106,61 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
     throw new Error("unexpected request");
   }});
   assert.deepEqual(result,{examined:1,manualReviews:1,drafted:1,draftFailures:0,
-    completed:0,completionFailures:0,recoveredClaims:0});
+    completed:0,completionFailures:0,noticesExamined:0,noticesAccepted:0,
+    noticesNeedsReview:0,recoveredClaims:0});
   assert.equal(drafts,1);
   assert.equal(called.some((item)=>item.url.includes("append_verified")),false);
   assert.deepEqual(called[2].body,{p_work_id:workId});
   await assert.rejects(()=>reconcileTicketRepairs({env:{},fetchImpl:async()=>{
     throw new Error("should not call");}}),TicketReconcileError);
+});
+
+test("earlier completion notices drain even when repair recovery fails",async()=>{
+  const order=[];
+  await assert.rejects(()=>reconcileTicketRepairs({env:{...env,
+    GITHUB_EVENT_NAME:"schedule",TICKET_RECONCILE_ENABLED:"true"},
+    noticeImpl:async()=>{order.push("notice");
+      return {examined:1,accepted:1,needsReview:0};},
+    fetchImpl:async()=>{order.push("recovery");throw new Error("database offline");}}),
+  TicketReconcileError);
+  assert.deepEqual(order,["notice","recovery"]);
+});
+
+test("reconcile drains notice outbox before and after new work",async()=>{
+  let drains=0;
+  const result=await reconcileTicketRepairs({env:{...env,
+    GITHUB_EVENT_NAME:"schedule",TICKET_RECONCILE_ENABLED:"true"},
+    noticeImpl:async()=>({examined:++drains,accepted:drains,needsReview:0}),
+    fetchImpl:async(url)=>new Response(JSON.stringify(
+      String(url).endsWith("recover_yutakasa_ticket_repair_jobs")
+        ? [{recovered:0}]:[]),{status:200})});
+  assert.equal(drains,2);
+  assert.equal(result.noticesExamined,3);
+  assert.equal(result.noticesAccepted,3);
+});
+
+test("notification uncertainty blocks new completion but still reviews repair work",async()=>{
+  const calls=[];
+  await assert.rejects(()=>reconcileTicketRepairs({env:{...env,
+    GITHUB_EVENT_NAME:"schedule",TICKET_RECONCILE_ENABLED:"true",
+    TICKET_COMPLETION_ENABLED:"true",TICKET_COMPLETION_NOTICE_ENABLED:"true"},
+    noticeImpl:async()=>{calls.push("notice");throw new Error("provider uncertain");},
+    completionImpl:async()=>assert.fail("must not create another completion"),
+    draftImpl:async()=>({status:"unavailable"}),
+    fetchImpl:async(url)=>{
+      const name=String(url).split("/").at(-1);calls.push(name);
+      if(name==="recover_yutakasa_ticket_repair_jobs")
+        return new Response(JSON.stringify([{recovered:0}]));
+      if(name==="list_due_yutakasa_ticket_repair_reviews")
+        return new Response(JSON.stringify([{work_id:workId}]));
+      if(name==="review_yutakasa_ticket_repair_release")
+        return new Response(JSON.stringify([{status:"manual_review"}]));
+      assert.fail("unexpected RPC");
+    }}),
+  (error)=>error instanceof TicketReconcileError&&
+    error.code==="ticket_reconcile_notification_unconfirmed");
+  assert.deepEqual(calls,["notice","recover_yutakasa_ticket_repair_jobs",
+    "list_due_yutakasa_ticket_repair_reviews","review_yutakasa_ticket_repair_release"]);
 });
 
 test("manual probe with due work is read-only and cannot draft or recover",async()=>{
@@ -125,7 +174,8 @@ test("manual probe with due work is read-only and cannot draft or recover",async
     requests.push({url:String(url),method:init.method??"GET"});
     return new Response(JSON.stringify(requests.length===1?[{work_id:workId}]:[]),{status:200});
   }});
-  assert.deepEqual(result,{mode:"probe",dueReviews:1,expiredClaims:0,due:true});
+  assert.deepEqual(result,{mode:"probe",dueReviews:1,expiredClaims:0,
+    dueNotices:0,due:true});
   assert.deepEqual(requests.map((request)=>request.method),["POST","GET"]);
   assert.equal(requests.some((request)=>request.url.includes("recover_yutakasa")),false);
   assert.equal(requests.some((request)=>request.url.includes("review_yutakasa")),false);
@@ -143,7 +193,8 @@ test("manual reconcile requires explicit mode and uses the same no-send review p
       return new Response(JSON.stringify(calls.length===1?[{recovered:0}]:[]),{status:200});
     }});
   assert.deepEqual(result,{mode:"reconcile",examined:0,manualReviews:0,drafted:0,
-    draftFailures:0,completed:0,completionFailures:0,recoveredClaims:0});
+    draftFailures:0,completed:0,completionFailures:0,noticesExamined:0,
+    noticesAccepted:0,noticesNeedsReview:0,recoveredClaims:0});
   assert.equal(calls.length,2);
 });
 

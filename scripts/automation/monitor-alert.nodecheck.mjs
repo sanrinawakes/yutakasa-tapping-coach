@@ -50,6 +50,14 @@ test("owner decision, technical review, and stale context retain distinct public
   for (const reason of reasons) assert.equal(alertTitle(reason), `[Yutakasa monitor] ${reason}`);
 });
 
+test("notice fallback configuration and probe failures keep fixed alert reasons",()=>{
+  const reasons=["ticket_reconcile_fallback_required",
+    "ticket_reconcile_notice_probe_unavailable",
+    "ticket_reconcile_notice_probe_invalid"];
+  assert.deepEqual(normalizeAlertInput(JSON.stringify(reasons),deploymentId).reasonCodes,
+    [...reasons].sort());
+});
+
 test("historical production log reasons remain explicit without implying a current deployment repair", () => {
   const reasons = [
     "historical_production_log_fiveXx",

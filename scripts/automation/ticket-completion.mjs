@@ -29,10 +29,11 @@ async function rpc(env, fetchImpl, name, body) {
 export function validateCompletionContext(context, workId) {
   if (!context || typeof context !== "object" || Array.isArray(context) ||
     Object.keys(context).sort().join(",") !==
-      "deployment_id,merge_sha,pr_number,scenario_key,work_id" ||
+      "deployment_id,merge_sha,notice_ready,pr_number,scenario_key,work_id" ||
     context.work_id !== workId || !Number.isSafeInteger(context.pr_number) ||
     context.pr_number < 1 || !SHA.test(context.merge_sha ?? "") ||
     !DEPLOYMENT.test(context.deployment_id ?? "") ||
+    context.notice_ready !== true ||
     !SCENARIOS.has(context.scenario_key)) fail("ticket_completion_context_invalid");
   return context;
 }
@@ -43,12 +44,14 @@ export async function completeVerifiedTicketRepair({workId,env=process.env,
   if (!UUID.test(workId ?? "") || env.GITHUB_REPOSITORY !== REPOSITORY ||
       env.GITHUB_REF !== "refs/heads/main" ||
       env.TICKET_COMPLETION_ENABLED !== "true" ||
+      env.TICKET_COMPLETION_NOTICE_ENABLED !== "true" ||
       env.TICKET_RECONCILE_ENABLED !== "true" ||
       !((env.GITHUB_EVENT_NAME === "schedule" && !env.TICKET_RECONCILE_MODE) ||
         (env.GITHUB_EVENT_NAME === "workflow_dispatch" && env.TICKET_RECONCILE_MODE === "reconcile")) ||
       typeof env.SUPABASE_URL !== "string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
       typeof env.SUPABASE_SERVICE_ROLE_KEY !== "string" || env.SUPABASE_SERVICE_ROLE_KEY.length < 20 ||
-      typeof env.VERCEL_TOKEN !== "string" || env.VERCEL_TOKEN.length < 20) {
+      typeof env.VERCEL_TOKEN !== "string" || env.VERCEL_TOKEN.length < 20 ||
+      typeof env.YUTAKASA_RESEND_API_KEY !== "string" || env.YUTAKASA_RESEND_API_KEY.length < 20) {
     fail("ticket_completion_configuration_invalid");
   }
   const raw = await rpc(env,fetchImpl,"get_yutakasa_ticket_completion_context",{p_work_id:workId});

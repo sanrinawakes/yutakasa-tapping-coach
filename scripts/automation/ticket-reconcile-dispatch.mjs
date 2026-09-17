@@ -70,7 +70,26 @@ export async function inspectDueTicketReconciliations({secrets=process.env,
   const nowMs=now();
   if (!Number.isFinite(nowMs)) fail("ticket_reconcile_clock_invalid");
   const expiredClaims=claims.length===1 && Date.parse(claims[0].claimed_at)<nowMs-2*60*60*1000 ? 1 : 0;
-  return {dueReviews:reviews.length,expiredClaims,due:reviews.length>0 || expiredClaims>0};
+  let dueNotices=0;
+  // The outbox table is installed by a later migration. Keep this RPC absent
+  // until that migration and the matching Railway flag are both in place.
+  if (secrets.TICKET_COMPLETION_NOTICE_ENABLED==="true") {
+    const noticesResponse=await fetchImpl(
+      `${base}/rest/v1/rpc/list_due_yutakasa_completion_notices`,{
+        method:"POST",headers:{...headers,"content-type":"application/json"},body:"{}",
+        redirect:"error",signal:AbortSignal.timeout(10_000),
+      }).catch(()=>fail("ticket_reconcile_notice_probe_unavailable"));
+    if (noticesResponse.status!==200) fail("ticket_reconcile_notice_probe_unavailable");
+    const notices=await readJson(noticesResponse,4096,"ticket_reconcile_notice_probe_invalid");
+    if (!Array.isArray(notices) || notices.length>21 || notices.some((row)=>
+        !UUID.test(row?.work_id??"") || Object.keys(row).join(",")!=="work_id") ||
+        new Set(notices.map((row)=>row.work_id)).size!==notices.length) {
+      fail("ticket_reconcile_notice_probe_invalid");
+    }
+    dueNotices=notices.length;
+  }
+  return {dueReviews:reviews.length,expiredClaims,dueNotices,
+    due:reviews.length>0 || expiredClaims>0 || dueNotices>0};
 }
 
 // GitHub's workflow concurrency is the final guard. Inspecting existing
@@ -80,7 +99,10 @@ export async function dispatchDueTicketReconciliation({secrets=process.env,
   if (!inspection || !Number.isSafeInteger(inspection.dueReviews) ||
       inspection.dueReviews<0 || inspection.dueReviews>100 ||
       ![0,1].includes(inspection.expiredClaims) ||
-      inspection.due!==(inspection.dueReviews>0 || inspection.expiredClaims>0)) {
+      !Number.isSafeInteger(inspection.dueNotices) ||
+      inspection.dueNotices<0 || inspection.dueNotices>21 ||
+      inspection.due!==(inspection.dueReviews>0 || inspection.expiredClaims>0 ||
+        inspection.dueNotices>0)) {
     fail("ticket_reconcile_inspection_invalid");
   }
   if (!inspection.due) return {dispatched:0,alreadyRunning:false};
