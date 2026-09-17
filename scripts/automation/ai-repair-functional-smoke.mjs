@@ -7,6 +7,9 @@ import { pathToFileURL } from "node:url";
 const PRODUCTION_URL = "https://yutakasa-tapping-coach.vercel.app";
 const TEST_ACCOUNT_MARKER = "yutakasa-ai-repair-smoke-v1";
 const TEST_MESSAGE_MARKER = "__YUTAKASA_AI_REPAIR_SMOKE_V1__";
+const TEST_SUPPORT_SUBJECT = `${TEST_MESSAGE_MARKER} support`;
+const TEST_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} technical support route check`;
+const TEST_SUPPORT_ACK = "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
@@ -15,6 +18,11 @@ const SYNTHETIC_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const PREFLIGHT_LIMIT_MS = 2 * 60 * 1_000;
 const BROWSER_PHASE_LIMIT_MS = 4 * 60 * 1_000;
+const SUPPORT_UNEXPECTED_DEPENDENTS = [
+  "support_attachments", "support_work_logs", "yutakasa_repair_ticket_links",
+  "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts",
+  "yutakasa_ticket_clarifications",
+];
 
 export class FunctionalSmokeError extends Error {
   constructor(code) {
@@ -107,6 +115,50 @@ async function listMessages(env, fetchImpl, threadId) {
     order: "created_at.asc,id.asc",
     limit: "20",
   });
+}
+
+async function listSupportTickets(env, fetchImpl, email) {
+  const rows = await databaseRequest(env, fetchImpl, "support_tickets", {
+    user_email: `eq.${email}`,
+    select: "id,user_email,category,subject,client_request_id,status,automation_status,decision_required,updated_at",
+    limit: "2",
+  });
+  if (rows.length > 1 || rows.some((row) => !UUID.test(row?.id ?? "") ||
+      row.user_email !== email || row.subject !== TEST_SUPPORT_SUBJECT ||
+      !UUID.test(row.client_request_id ?? ""))) fail("smoke_support_identity_ambiguous");
+  return rows;
+}
+
+async function supportRows(env, fetchImpl, table, ticketId) {
+  if (!UUID.test(ticketId)) fail("smoke_support_ticket_id_invalid");
+  return databaseRequest(env, fetchImpl, table, {
+    ticket_id: `eq.${ticketId}`, select: "ticket_id", limit: "20",
+  });
+}
+
+async function verifySyntheticTicketBeforeDelete(env, fetchImpl, email, ticket) {
+  if (ticket.category !== "technical" || ticket.status !== "open" ||
+      ticket.automation_status !== "queued" || ticket.decision_required !== false ||
+      typeof ticket.updated_at !== "string" ||
+      !Number.isFinite(Date.parse(ticket.updated_at))) {
+    fail("smoke_support_ticket_changed");
+  }
+  const messages = await databaseRequest(env, fetchImpl, "support_messages", {
+    ticket_id: `eq.${ticket.id}`,
+    select: "id,ticket_id,sender_type,sender_email,body,client_request_id",
+    limit: "3",
+  });
+  if (messages.length !== 2 || messages.some((row) =>
+      !UUID.test(row?.id ?? "") || row.ticket_id !== ticket.id) ||
+      messages.filter((row) => row.sender_type === "user" &&
+        row.sender_email === email && row.body === TEST_SUPPORT_BODY &&
+        row.client_request_id === ticket.client_request_id).length !== 1 ||
+      messages.filter((row) => row.sender_type === "system" &&
+        row.sender_email === null && row.body === TEST_SUPPORT_ACK &&
+        UUID.test(row.client_request_id ?? "") &&
+        row.client_request_id !== ticket.client_request_id).length !== 1) {
+    fail("smoke_support_messages_changed");
+  }
 }
 
 async function assertMessagesSaved(env, fetchImpl, threadId, prompts) {
@@ -210,6 +262,76 @@ async function assertReload(page, prompt, expectedRendered, expectedAssistantCou
   if ((await assistant.innerText()).trim() !== expectedRendered) fail("smoke_chat_reload_mismatch");
 }
 
+async function postSyntheticSupportTicket(fetchImpl, token, clientRequestId) {
+  let response;
+  try {
+    response = await within(fetchImpl(`${PRODUCTION_URL}/api/support/tickets`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Cookie: `session=${token}` },
+      body: JSON.stringify({ category: "technical", subject: TEST_SUPPORT_SUBJECT,
+        body: TEST_SUPPORT_BODY, clientRequestId }),
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    }), 15_000, "smoke_support_api_timeout");
+  } catch { fail("smoke_support_api_request_failed"); }
+  if (![200, 201].includes(response.status)) fail(`smoke_support_api_http_${response.status}`);
+  const raw = await within(response.text(), 15_000, "smoke_support_api_body_timeout");
+  if (Buffer.byteLength(raw) > 4_096) fail("smoke_support_api_response_large");
+  try { return { status: response.status, result: JSON.parse(raw) }; }
+  catch { fail("smoke_support_api_response_invalid"); }
+}
+
+/** Exercise the real authenticated API while never claiming a real support ticket. */
+export async function checkSyntheticSupportTicket(env, fetchImpl, email, token) {
+  if (!SYNTHETIC_EMAIL.test(email) || typeof token !== "string" || !token) {
+    fail("smoke_support_identity_invalid");
+  }
+  if ((await listSupportTickets(env, fetchImpl, email)).length !== 0) {
+    fail("smoke_support_preexisting_ticket");
+  }
+  const clientRequestId = randomUUID();
+  const first = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId);
+  if (first.status !== 201 || first.result?.created !== true ||
+      !UUID.test(first.result.ticket_id ?? "") || !UUID.test(first.result.message_id ?? "")) {
+    fail("smoke_support_creation_unconfirmed");
+  }
+  const retry = await postSyntheticSupportTicket(fetchImpl, token, clientRequestId);
+  if (retry.status !== 200 || retry.result?.created !== false ||
+      retry.result.ticket_id !== first.result.ticket_id ||
+      retry.result.message_id !== first.result.message_id) {
+    fail("smoke_support_idempotency_failed");
+  }
+  const tickets = await listSupportTickets(env, fetchImpl, email);
+  if (tickets.length !== 1 || tickets[0].id !== first.result.ticket_id ||
+      tickets[0].client_request_id !== clientRequestId ||
+      tickets[0].category !== "technical" ||
+      tickets[0].status !== "open" || tickets[0].automation_status !== "queued" ||
+      tickets[0].decision_required !== false) fail("smoke_support_persistence_invalid");
+  const messages = await databaseRequest(env, fetchImpl, "support_messages", {
+    ticket_id: `eq.${tickets[0].id}`,
+    select: "id,ticket_id,sender_type,body,client_request_id",
+    limit: "3",
+  });
+  if (messages.length !== 2 || messages.some((row) => !UUID.test(row?.id ?? "") ||
+      row.ticket_id !== tickets[0].id) ||
+      messages.filter((row) => row.sender_type === "user" &&
+        row.id === first.result.message_id && row.body === TEST_SUPPORT_BODY &&
+        row.client_request_id === clientRequestId).length !== 1 ||
+      messages.filter((row) => row.sender_type === "system").length !== 1) {
+    fail("smoke_support_messages_invalid");
+  }
+  // The production queue GET can recover real customers' stale locks. Check
+  // the identical PostgREST predicate read-only instead.
+  const queueRows = await databaseRequest(env, fetchImpl, "support_tickets", {
+    id: `eq.${tickets[0].id}`,
+    user_email: "not.ilike.yutakasa-auto-smoke+%@example.invalid",
+    select: "id",
+    limit: "1",
+  });
+  if (queueRows.length !== 0) fail("smoke_support_queue_not_isolated");
+  return { ticketCreated: true, idempotent: true, messagesSaved: true, queueIsolated: true };
+}
+
 async function cleanupAndVerify(env, fetchImpl, email, runId) {
   const accounts = await databaseRequest(env, fetchImpl, "subscribers", {
     email: `eq.${email}`,
@@ -221,7 +343,40 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
     validateAccount(accounts[0], email, runId);
     if (!UUID.test(accounts[0].id ?? "")) fail("smoke_cleanup_identity_ambiguous");
   }
+  const tickets = await listSupportTickets(env, fetchImpl, email);
   const threads = await listThreads(env, fetchImpl, email);
+  // Never erase a ticket that acquired external files or repair work. Such a
+  // row means the queue isolation failed and needs investigation.
+  for (const ticket of tickets) {
+    await verifySyntheticTicketBeforeDelete(env, fetchImpl, email, ticket);
+    for (const table of SUPPORT_UNEXPECTED_DEPENDENTS) {
+      if ((await supportRows(env, fetchImpl, table, ticket.id)).length !== 0) {
+        fail("smoke_support_unexpected_side_effect");
+      }
+    }
+  }
+  const otps = await databaseRequest(env, fetchImpl, "otp_codes", {
+    email: `eq.${email}`, select: "id", limit: "2",
+  });
+  if (otps.length !== 0) fail("smoke_unexpected_otp_data");
+  for (const ticket of tickets) {
+    const current = await listSupportTickets(env, fetchImpl, email);
+    if (current.length !== 1 || current[0].id !== ticket.id) {
+      fail("smoke_support_ticket_changed");
+    }
+    await verifySyntheticTicketBeforeDelete(env, fetchImpl, email, current[0]);
+    const deleted = await databaseRequest(env, fetchImpl, "support_tickets", {
+      id: `eq.${ticket.id}`,
+      user_email: `eq.${email}`,
+      client_request_id: `eq.${ticket.client_request_id}`,
+      status: "eq.open",
+      automation_status: "eq.queued",
+      decision_required: "eq.false",
+      updated_at: `eq.${current[0].updated_at}`,
+      select: "id",
+    }, "DELETE");
+    if (deleted.length !== 1 || deleted[0]?.id !== ticket.id) fail("smoke_cleanup_ticket_unconfirmed");
+  }
   for (const thread of threads) {
     const deleted = await databaseRequest(env, fetchImpl, "chat_threads", {
       id: `eq.${thread.id}`,
@@ -230,10 +385,6 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
     }, "DELETE");
     if (deleted.length !== 1 || deleted[0]?.id !== thread.id) fail("smoke_cleanup_delete_unconfirmed");
   }
-  const otps = await databaseRequest(env, fetchImpl, "otp_codes", {
-    email: `eq.${email}`, select: "id", limit: "2",
-  });
-  if (otps.length !== 0) fail("smoke_unexpected_otp_data");
   if (accounts.length === 1) {
     const deleted = await databaseRequest(env, fetchImpl, "subscribers", {
       id: `eq.${accounts[0].id}`,
@@ -246,6 +397,14 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
   // The FK must cascade. Check twice so a late stream completion cannot count as cleaned data.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    if ((await listSupportTickets(env, fetchImpl, email)).length !== 0) fail("smoke_cleanup_tickets_remaining");
+    for (const ticket of tickets) {
+      for (const table of ["support_messages", ...SUPPORT_UNEXPECTED_DEPENDENTS]) {
+        if ((await supportRows(env, fetchImpl, table, ticket.id)).length !== 0) {
+          fail("smoke_cleanup_ticket_dependents_remaining");
+        }
+      }
+    }
     if ((await listThreads(env, fetchImpl, email)).length !== 0) fail("smoke_cleanup_threads_remaining");
     if ((await databaseRequest(env, fetchImpl, "subscribers", {
       email: `eq.${email}`, select: "id", limit: "2",
@@ -253,6 +412,9 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
     for (const thread of threads) {
       if ((await listMessages(env, fetchImpl, thread.id)).length !== 0) fail("smoke_cleanup_messages_remaining");
     }
+    if ((await databaseRequest(env, fetchImpl, "otp_codes", {
+      email: `eq.${email}`, select: "id", limit: "2",
+    })).length !== 0) fail("smoke_cleanup_otp_remaining");
   }
 }
 
@@ -301,8 +463,10 @@ export async function reapStaleSyntheticIdentities(env, fetchImpl, nowMs = Date.
 export async function runProductionFunctionalSmoke({
   release, deployment, env = process.env, fetchImpl = globalThis.fetch,
   chromiumImpl = null, browserPhaseLimitMs = BROWSER_PHASE_LIMIT_MS,
+  includeSupportTicket = false,
 } = {}) {
   requiredConfiguration(env, release, deployment);
+  if (typeof includeSupportTicket !== "boolean") fail("smoke_support_option_invalid");
   if (!Number.isSafeInteger(browserPhaseLimitMs) || browserPhaseLimitMs < 1) fail("smoke_browser_limit_invalid");
   const preflightStartedAt = Date.now();
   await reapStaleSyntheticIdentities(env, fetchImpl);
@@ -316,6 +480,7 @@ export async function runProductionFunctionalSmoke({
   });
   if (existing.length !== 0) fail("smoke_preexisting_identity");
   if ((await listThreads(env, fetchImpl, email)).length !== 0) fail("smoke_prior_test_data_remaining");
+  if ((await listSupportTickets(env, fetchImpl, email)).length !== 0) fail("smoke_prior_support_data_remaining");
 
   const errors = [];
   const token = sessionToken(env.JWT_SECRET, email);
@@ -326,6 +491,7 @@ export async function runProductionFunctionalSmoke({
   let completed = false;
   let phaseExpired = false;
   let phaseTimer;
+  let supportEvidence = null;
   try {
     const inserted = await databaseRequest(env, fetchImpl, "subscribers", {
       select: "id,email,status,subscription_status,first_payment_date,myasp_data",
@@ -393,6 +559,10 @@ export async function runProductionFunctionalSmoke({
     }
     assertBrowserTime();
     if (errors.length !== 0) fail("smoke_client_error");
+    if (includeSupportTicket) {
+      supportEvidence = await checkSyntheticSupportTicket(env, fetchImpl, email, token);
+      assertBrowserTime();
+    }
     completed = true;
   } catch (error) {
     primaryError = error;
@@ -419,6 +589,7 @@ export async function runProductionFunctionalSmoke({
     reloadPersisted: true,
     testDataCleaned: true,
     clientErrors: 0,
+    ...(supportEvidence ? { support: supportEvidence } : {}),
   };
 }
 

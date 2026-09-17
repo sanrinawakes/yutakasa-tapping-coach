@@ -1,0 +1,41 @@
+name: One-shot production functional smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Share the observer lock so stale cleanup and a manual run cannot overlap.
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix scripts/automation
+      - run: npm ci --no-audit --no-fund
+      - name: Verify synthetic support notification guard and cleanup contract
+        run: |
+          npm test -- src/lib/server/support-service.test.ts
+          node --test scripts/automation/ai-repair-functional-smoke.nodecheck.mjs scripts/automation/ai-repair-one-shot-smoke.nodecheck.mjs
+      - name: Verify deployed main and run isolated desktop, mobile, and support checks
+        env:
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+        run: node scripts/automation/ai-repair-one-shot-smoke.mjs

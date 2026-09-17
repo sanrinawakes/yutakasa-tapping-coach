@@ -546,6 +546,7 @@ export async function listAdminSupportTickets(params: {
   let request = getSupabase()
     .from("support_tickets")
     .select("*")
+    .not("user_email", "ilike", SYNTHETIC_SUPPORT_EMAIL_LIKE)
     .order("updated_at", { ascending: false })
     .limit(250);
   if (params.status) request = request.eq("status", params.status);

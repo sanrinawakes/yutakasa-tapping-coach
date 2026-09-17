@@ -7,6 +7,7 @@ import {
   createSupportTicket,
   finishLockedSupportTicket,
   getAdminSupportTicket,
+  listAdminSupportTickets,
   listPendingAutomatedSupportTickets,
   recoverStaleSupportAutomationTickets,
   renewSupportAutomationLock,
@@ -257,6 +258,23 @@ describe("support automation leases", () => {
       p_latest_user_message_id:latestId,p_ticket_version:ticket().updated_at,
     });
     expect(from).not.toHaveBeenCalled();
+  });
+});
+
+describe("synthetic ticket isolation", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("filters the reserved smoke namespace before limiting the administrator ticket list", async () => {
+    const query = {
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+    };
+    getSupabaseMock.mockReturnValue({ from: vi.fn().mockReturnValue(query) } as never);
+    await expect(listAdminSupportTickets({})).resolves.toEqual([]);
+    expect(query.not).toHaveBeenCalledWith("user_email", "ilike", "yutakasa-auto-smoke+%@example.invalid");
+    expect(query.not.mock.invocationCallOrder[0]).toBeLessThan(query.limit.mock.invocationCallOrder[0]);
   });
 });
 
