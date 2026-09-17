@@ -29,7 +29,10 @@ CREATE INDEX IF NOT EXISTS yutakasa_ticket_repair_jobs_queue_idx
   ON public.yutakasa_ticket_repair_jobs(status,created_at);
 ALTER TABLE public.yutakasa_ticket_repair_jobs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_ticket_repair_jobs FROM PUBLIC, anon, authenticated;
-GRANT SELECT ON public.yutakasa_ticket_repair_jobs TO service_role;
+-- Supabase may grant ALL to service_role by default. RPCs retain writes
+-- through their SECURITY DEFINER owner, while the API key gets read only.
+REVOKE ALL ON TABLE public.yutakasa_ticket_repair_jobs FROM service_role;
+GRANT SELECT ON TABLE public.yutakasa_ticket_repair_jobs TO service_role;
 
 CREATE OR REPLACE FUNCTION public.begin_yutakasa_ticket_repair(
   p_ticket_id UUID, p_lock_token UUID, p_latest_user_message_id UUID,

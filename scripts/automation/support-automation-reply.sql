@@ -27,7 +27,10 @@ CREATE INDEX IF NOT EXISTS yutakasa_repair_ticket_links_ticket_idx
   ON public.yutakasa_repair_ticket_links(ticket_id);
 ALTER TABLE public.yutakasa_repair_ticket_links ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_repair_ticket_links FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT ON public.yutakasa_repair_ticket_links TO service_role;
+-- The link is inserted only by SECURITY DEFINER repair RPCs. Supabase's
+-- default service_role ALL grant must not permit direct link tampering.
+REVOKE ALL ON TABLE public.yutakasa_repair_ticket_links FROM service_role;
+GRANT SELECT ON TABLE public.yutakasa_repair_ticket_links TO service_role;
 
 -- The user-message RPC inserts before updating its ticket. This trigger takes
 -- the ticket lock first, serializing a new user message with the automation
