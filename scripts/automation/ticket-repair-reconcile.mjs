@@ -3,6 +3,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
+import { completeVerifiedTicketRepair } from "./ticket-completion.mjs";
 import { RepairDispatchError } from "./dispatch-repair.mjs";
 import { inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 
@@ -27,7 +28,7 @@ async function rpc(env, fetchImpl, name, body={}) {
 }
 
 export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
-  draftImpl=draftVerifiedTicketReply}={}) {
+  draftImpl=draftVerifiedTicketReply,completionImpl=completeVerifiedTicketRepair}={}) {
   const scheduled=env.GITHUB_EVENT_NAME==="schedule" && !env.TICKET_RECONCILE_MODE;
   const manual=env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
     env.TICKET_RECONCILE_MODE==="reconcile";
@@ -49,7 +50,16 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   let manualReviews=0;
   let drafted=0;
   let draftFailures=0;
+  let completed=0;
+  let completionFailures=0;
   for (const job of jobs) {
+    if (env.TICKET_COMPLETION_ENABLED==="true") {
+      try {
+        const completion=await completionImpl({workId:job.work_id,env,fetchImpl});
+        if (completion?.status==="completed") { completed+=1; continue; }
+        if (completion?.status!=="unavailable") completionFailures+=1;
+      } catch { completionFailures+=1; }
+    }
     // The draft is private and never sent. An AI or database failure must not
     // stop the ticket from reaching a human review queue.
     if (drafted+draftFailures<10) {
@@ -71,7 +81,7 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   // A full page is not a healthy state. The next schedule can continue, and
   // this run remains visibly failed until the backlog falls below the bound.
   if (jobs.length===100 || recovery[0].recovered===100) fail("ticket_reconcile_backlog_remaining");
-  return {examined:jobs.length,manualReviews,drafted,draftFailures,
+  return {examined:jobs.length,manualReviews,drafted,draftFailures,completed,completionFailures,
     recoveredClaims:recovery[0].recovered};
 }
 
