@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   collectRemoteDeployment,
   collectRemoteLogs,
@@ -9,6 +10,16 @@ import {
 const sha = "9e30bbefd52eb03b67a95dcce7ed2120ee8defaa";
 const id = "dpl_CnNGM63s3fmYAsHpe1RhkXqvJru4";
 const deploymentUrl = "https://yutakasa-tapping-coach-example.vercel.app";
+const knownDisabledReplyProbe = Object.freeze({
+  id: "khkhd-1789602181091-f3e1581be96c",
+  timestamp: 1789602181091,
+  deploymentId: "dpl_6Q4vydEuX5y4iyApkDV8gWyuXF4b",
+  requestMethod: "PATCH",
+  requestPath: "/api/internal/support-automation",
+  responseStatusCode: 501,
+  source: "serverless",
+  level: "info",
+});
 
 function fakeFetch({ loginId = id, readyState = "READY", mainSha = sha } = {}) {
   return async (url) => {
@@ -62,7 +73,8 @@ test("log queries discard content and reject truncated results", async () => {
   const result = await collectRemoteLogs({
     deploymentId: id,
     token: "x".repeat(30),
-    runCommand: async (_command, args) => {
+    runCommand: async (command, args) => {
+      assert.equal(command, fileURLToPath(new URL("./node_modules/.bin/vercel", import.meta.url)));
       invocations.push(args);
       return { stdout: '{"message":"private content"}\n' };
     },
@@ -134,4 +146,49 @@ test("older deployment errors are counted separately from current deployment err
       stdout: args.includes(`--deployment=${id}`) ? '{}\n' : '',
     }),
   }), /log_fiveXx_scope_inconsistent/u);
+});
+
+test("only the known disabled-reply probe is excluded from 5xx counts", async () => {
+  const probeLine = `${JSON.stringify(knownDisabledReplyProbe)}\n`;
+  assert.deepEqual(parseBoundedLogQuery(probeLine, { filterName: "fiveXx" }), {
+    count: 0, truncated: false,
+  });
+  assert.equal(parseBoundedLogQuery(probeLine, { filterName: "levelError" }).count, 1);
+  for (const [field, changed] of [
+    ["id", "another-event"],
+    ["timestamp", knownDisabledReplyProbe.timestamp + 1],
+    ["deploymentId", id],
+    ["requestMethod", "GET"],
+    ["requestPath", "/api/other"],
+    ["responseStatusCode", 503],
+    ["source", "edge"],
+    ["level", "error"],
+  ]) {
+    const line = `${JSON.stringify({ ...knownDisabledReplyProbe, [field]: changed })}\n`;
+    assert.equal(parseBoundedLogQuery(line, { filterName: "fiveXx" }).count, 1, field);
+  }
+  assert.equal(parseBoundedLogQuery(
+    probeLine + "{}\n".repeat(99), { filterName: "fiveXx" },
+  ).truncated, true, "the raw 100-row limit must not be hidden by an exclusion");
+  assert.throws(
+    () => parseBoundedLogQuery(probeLine.repeat(2), { filterName: "fiveXx" }),
+    /known_reply_probe_duplicate/u,
+  );
+
+  const newFailure = JSON.stringify({
+    ...knownDisabledReplyProbe, id: "new-503", deploymentId: id, responseStatusCode: 503,
+  });
+  const result = await collectRemoteLogs({
+    deploymentId: knownDisabledReplyProbe.deploymentId,
+    token: "x".repeat(30),
+    runCommand: async (_command, args) => ({
+      stdout: args.includes("--status-code=5xx")
+        ? args.includes(`--deployment=${knownDisabledReplyProbe.deploymentId}`)
+          ? probeLine
+          : `${probeLine}${newFailure}\n`
+        : "",
+    }),
+  });
+  assert.equal(result.queries.fiveXx.count, 0);
+  assert.equal(result.historicalQueries.fiveXx.count, 1);
 });

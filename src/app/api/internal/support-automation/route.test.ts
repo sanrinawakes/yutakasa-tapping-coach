@@ -198,7 +198,7 @@ describe("support automation API", () => {
         resolve: true,
       })
     );
-    expect(response.status).toBe(501);
+    expect(response.status).toBe(409);
     expect(renewLockMock).not.toHaveBeenCalled();
     expect(appendMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
