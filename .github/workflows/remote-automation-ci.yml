@@ -14,6 +14,7 @@ on:
       - .github/workflows/ticket-clarification-smoke.yml
       - .github/workflows/terra-issue-one-shot.yml
       - .github/workflows/ticket-terra-issue-smoke.yml
+      - .github/workflows/ticket-repair-bridge-e2e-smoke.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
   push:
@@ -30,6 +31,7 @@ on:
       - .github/workflows/ticket-clarification-smoke.yml
       - .github/workflows/terra-issue-one-shot.yml
       - .github/workflows/ticket-terra-issue-smoke.yml
+      - .github/workflows/ticket-repair-bridge-e2e-smoke.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
 
@@ -62,6 +64,8 @@ jobs:
         run: bash scripts/automation/test-support-automation-reply-sql.sh
       - name: Synthetic clarification cleanup database tests
         run: bash scripts/automation/test-ticket-clarification-smoke-sql.sh
+      - name: Synthetic linked PR cleanup database tests
+        run: bash scripts/automation/test-ticket-repair-bridge-e2e-smoke-sql.sh
       - name: Production build
         run: npm run build
       - name: Docker build
