@@ -66,6 +66,17 @@ modules have no scheduled or CLI entry point and do not run in the current
 monitor. A new Drive item still raises `drive_intake_items`; it is not marked
 processed or healthy.
 
+Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
+flag in their credential source. PDF publication additionally requires
+`YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED=true`. Both default off. The OAuth
+refresh helper used by content reads and PDF publication rejects a missing or
+differently spelled processing flag before requesting a token. The existing
+metadata-only monitor still uses its API key when one is configured.
+Neither flag is configured in the production Railway service. Do not enable
+them merely because OAuth credentials have been issued: no scheduled caller
+currently binds a per-file claim to a verified diagnosis, release record,
+and result PDF. A file in `受付` remains an actionable unprocessed item.
+
 The current `GOOGLE_DRIVE_API_KEY` is for public metadata only. Content and
 upload require OAuth on the actual `181wyc@gmail.com` Drive account:
 `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, and
@@ -80,9 +91,9 @@ a refresh token that expires after seven days. Do not alter folder sharing
 or place OAuth credentials in the API-key variable.
 
 Before enabling this path, bind `assertEvidence` to verified release records
-and `assertLease` to the current monitor owner; apply and verify the
-publication ledger, and add a durable per-file intake
-claim and terminal state so a Drive file is not processed twice. Run a
+and `assertLease` to the current monitor owner; verify the publication ledger
+and connect the existing durable per-file intake claim to the caller so a
+Drive file is not processed twice. Run a
 non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report
 publisher. Missing credentials, missing evidence, unsupported file types, or
@@ -99,10 +110,10 @@ crashes or the result of an external action is unclear, the claim becomes
 `needs_review`; later versions of that file remain blocked until a person
 reconciles the outcome. No automatic retry can process the file twice. Older
 versions return `stale`. The table stores no filename, file content, customer
-email, or raw error text. This ledger has no scheduled entry point, is not
-deployed to the production database, and has not been connected to OAuth,
-content retrieval, PDF publication, or customer notification.
-Apply only `drive-intake-ledger.sql` after a separate production rollout
-decision. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
+email, or raw error text. The intake ledger migration was applied to
+production on 2026-09-17; the table had zero rows and the RPC grants were
+verified at rollout. It still has no scheduled caller and has not been
+connected to OAuth, content retrieval, PDF publication, or customer
+notification. `drive-intake-ledger.sqlcheck.sql` is a local test fixture with
 synthetic IDs; do not run it on production. The test fixture rolls back its
 rows so repeated local runs remain independent.

@@ -155,6 +155,11 @@ export async function getDriveOAuthAccessToken({
   credentials = process.env,
   fetchImpl = globalThis.fetch,
 } = {}) {
+  // The public metadata monitor has its own API-key path. A refresh token
+  // must never silently turn dormant content or result code into a live path.
+  if (credentials?.YUTAKASA_DRIVE_PROCESSING_ENABLED !== "true") {
+    fail("drive_processing_disabled");
+  }
   return refreshAccessToken({
     clientId: requiredCredential(credentials, "GOOGLE_DRIVE_CLIENT_ID"),
     clientSecret: requiredCredential(credentials, "GOOGLE_DRIVE_CLIENT_SECRET"),

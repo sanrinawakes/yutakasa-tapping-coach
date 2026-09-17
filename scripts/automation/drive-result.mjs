@@ -206,6 +206,9 @@ export async function publishVerifiedDriveResult({
   publicationLedger,
   ledgerSecrets = process.env,
 } = {}) {
+  if (credentials?.YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED !== "true") {
+    fail("drive_result_publication_disabled");
+  }
   const eventId = validateReport(report);
   await requireCheck(assertEvidence, report, "drive_result_evidence_required");
   await requireCheck(assertLease, undefined, "drive_result_lease_required");

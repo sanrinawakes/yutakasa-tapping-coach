@@ -11,6 +11,8 @@ import {
 } from "./drive-result.mjs";
 
 const CREDENTIALS = {
+  YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
+  YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED: "true",
   GOOGLE_DRIVE_CLIENT_ID: "test-client",
   GOOGLE_DRIVE_CLIENT_SECRET: "test-secret",
   GOOGLE_DRIVE_REFRESH_TOKEN: "test-refresh",
@@ -139,6 +141,22 @@ async function expectCode(fn, code) {
     !error.message.includes(CREDENTIALS.GOOGLE_DRIVE_REFRESH_TOKEN)
   );
 }
+
+test("PDF publication requires its own exact flag before rendering or network", async () => {
+  for (const value of [undefined, "false", "TRUE", "1", true]) {
+    let calls = 0;
+    await expectCode(() => publishVerifiedDriveResult({
+      report: REPORT,
+      credentials: { ...CREDENTIALS, YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED: value },
+      renderPdf: async () => { calls += 1; return PDF; },
+      fetchImpl: async () => { calls += 1; },
+      assertEvidence: async () => { calls += 1; return true; },
+      assertLease: async () => { calls += 1; return true; },
+      publicationLedger: makeLedger(),
+    }), "drive_result_publication_disabled");
+    assert.equal(calls, 0);
+  }
+});
 
 test("verified report uploads one PDF and confirms Drive readback", async () => {
   const calls = [];
@@ -300,7 +318,11 @@ test("API key alone cannot authorize write", async () => {
   let calls = 0;
   await expectCode(() => publishVerifiedDriveResult({
     report: REPORT,
-    credentials: { GOOGLE_DRIVE_API_KEY: "key-only" },
+    credentials: {
+      YUTAKASA_DRIVE_PROCESSING_ENABLED: "true",
+      YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED: "true",
+      GOOGLE_DRIVE_API_KEY: "key-only",
+    },
     renderPdf: async () => PDF,
     fetchImpl: async () => { calls += 1; },
     assertEvidence: async () => true,
