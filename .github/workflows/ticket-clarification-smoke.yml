@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: ${{ runner.temp }}/yutakasa-clarification-smoke-state.json
       YUTAKASA_CLARIFICATION_SMOKE_ENABLED: ${{ vars.YUTAKASA_CLARIFICATION_SMOKE_ENABLED }}
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +35,7 @@ jobs:
           node --test scripts/automation/ticket-clarification-smoke.nodecheck.mjs
       - name: Verify deployed main and exercise isolated clarification
         env:
+          YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: ${{ runner.temp }}/yutakasa-clarification-smoke-state.json
           GITHUB_ACTIONS: 'true'
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
@@ -45,6 +45,7 @@ jobs:
       - name: Rescue synthetic cleanup after an interrupted smoke
         if: always()
         env:
+          YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: ${{ runner.temp }}/yutakasa-clarification-smoke-state.json
           GITHUB_ACTIONS: 'true'
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
