@@ -135,6 +135,7 @@ test("Google Docs are exported to DOCX with a bounded response", async () => {
           mimeType: native.mimeType,
           modifiedTime: native.modifiedTime,
           parents: [DRIVE_INTAKE_FOLDER_ID],
+          version: "42",
           trashed: false,
         });
       }
@@ -148,4 +149,37 @@ test("Google Docs are exported to DOCX with a bounded response", async () => {
   });
   assert.equal(result.extension, ".docx");
   assert.ok(result.bytes.equals(bytes));
+});
+
+test("Google Docs edit during export fails after a second metadata read", async () => {
+  const native = { ...FILE, mimeType: "application/vnd.google-apps.document" };
+  for (const changedField of ["version", "modifiedTime", "parents"]) {
+    let metadataReads = 0;
+    await expectCode(() => fetchDriveIntakeContent({
+      file: native,
+      credentials: CREDENTIALS,
+      fetchImpl: async (url) => {
+        if (url === "https://oauth2.googleapis.com/token") {
+          return json({ access_token: "test-access-token", token_type: "Bearer" });
+        }
+        const parsed = new URL(url);
+        if (parsed.searchParams.get("fields")) {
+          metadataReads += 1;
+          return json({
+            id: native.id,
+            name: native.name,
+            mimeType: native.mimeType,
+            modifiedTime: metadataReads === 2 && changedField === "modifiedTime"
+              ? "2026-09-17T00:00:01.000Z" : native.modifiedTime,
+            parents: metadataReads === 2 && changedField === "parents"
+              ? ["other-folder"] : [DRIVE_INTAKE_FOLDER_ID],
+            version: metadataReads === 2 && changedField === "version" ? "43" : "42",
+            trashed: false,
+          });
+        }
+        return new Response(Buffer.from("PK\x03\x04exported"));
+      },
+    }), "drive_intake_content_changed_during_export");
+    assert.equal(metadataReads, 2);
+  }
 });

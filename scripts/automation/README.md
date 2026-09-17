@@ -55,9 +55,13 @@ The built-in GitHub Actions `GITHUB_TOKEN` cannot be used by Railway, and using 
 existing `受付` folder after checking its parent, modified time, size, and
 checksum. `drive-result.mjs` renders a Japanese PDF from a structured release
 record and uploads it to the existing `処理結果` folder. A durable exclusive
-lease and a separate release-evidence check are required callbacks. The upload
-checks the event ID before writing, never blindly retries a POST, and confirms
-the file's parent, name, size, and hashes through Drive readback. These
+lease and a separate release-evidence check are required callbacks. Apply
+`drive-result-ledger.sql` before activation: an event ID has one durable
+publication reservation, and a timed-out POST leaves `posting` or `uncertain`
+state. Later runs may confirm an existing Drive file but cannot issue another
+POST for that event. The upload uses an event-ID-only stable filename, checks
+the reservation before writing, and confirms the file's parent, name, size,
+and hashes through Drive readback. These
 modules have no scheduled or CLI entry point and do not run in the current
 monitor. A new Drive item still raises `drive_intake_items`; it is not marked
 processed or healthy.
@@ -76,7 +80,8 @@ a refresh token that expires after seven days. Do not alter folder sharing
 or place OAuth credentials in the API-key variable.
 
 Before enabling this path, bind `assertEvidence` to verified release records
-and `assertLease` to the current monitor owner; add a durable per-file intake
+and `assertLease` to the current monitor owner; apply and verify the
+publication ledger, and add a durable per-file intake
 claim and terminal state so a Drive file is not processed twice. Run a
 non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report

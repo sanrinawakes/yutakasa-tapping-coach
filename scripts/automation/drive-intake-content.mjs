@@ -99,7 +99,7 @@ export async function fetchDriveIntakeContent({
   const metadataUrl = new URL(`${FILES_URL}/${file.id}`);
   metadataUrl.searchParams.set(
     "fields",
-    "id,name,mimeType,modifiedTime,parents,size,md5Checksum,trashed",
+    "id,name,mimeType,modifiedTime,parents,size,md5Checksum,version,trashed",
   );
   const metadataBytes = await request(
     metadataUrl.toString(), headers, "drive_intake_content_metadata", fetchImpl,
@@ -127,6 +127,9 @@ export async function fetchDriveIntakeContent({
     fail("drive_intake_content_metadata_mismatch");
   }
   const exportAs = EXPORTED.get(file.mimeType);
+  if (exportAs && (typeof metadata.version !== "string" || !/^\d+$/u.test(metadata.version))) {
+    fail("drive_intake_content_metadata_mismatch");
+  }
   const contentUrl = exportAs
     ? new URL(`${FILES_URL}/${file.id}/export`)
     : new URL(`${FILES_URL}/${file.id}`);
@@ -135,6 +138,30 @@ export async function fetchDriveIntakeContent({
   const bytes = await request(
     contentUrl.toString(), headers, "drive_intake_content", fetchImpl,
   );
+  if (exportAs) {
+    const afterBytes = await request(
+      metadataUrl.toString(), headers, "drive_intake_content_post_export_metadata", fetchImpl,
+    );
+    let after;
+    try {
+      after = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(afterBytes));
+    } catch {
+      fail("drive_intake_content_post_export_metadata_invalid");
+    }
+    if (
+      after?.id !== metadata.id ||
+      after.name !== metadata.name ||
+      after.mimeType !== metadata.mimeType ||
+      after.modifiedTime !== metadata.modifiedTime ||
+      after.version !== metadata.version ||
+      after.trashed !== false ||
+      !Array.isArray(after.parents) ||
+      after.parents.length !== 1 ||
+      after.parents[0] !== DRIVE_INTAKE_FOLDER_ID
+    ) {
+      fail("drive_intake_content_changed_during_export");
+    }
+  }
   if (bytes.length === 0) fail("drive_intake_content_empty");
   if (file.mimeType === "application/pdf" && !bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
     fail("drive_intake_content_pdf_invalid");

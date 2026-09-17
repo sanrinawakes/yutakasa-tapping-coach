@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DriveIntakeError, getDriveOAuthAccessToken } from "./drive-intake.mjs";
+import { createDriveResultLedger } from "./drive-result-ledger.mjs";
 
 export const DRIVE_RESULT_FOLDER_ID = "11nYD_FzHqnYKbOy2zPBge3Y_of2tM-m5";
 
@@ -119,7 +120,7 @@ async function requestJson(url, init, code, fetchImpl, allowedStatuses = [200]) 
 function verifyFile(file, { name, sha256, md5, size, eventId }) {
   if (
     !file || typeof file.id !== "string" ||
-    !/^[A-Za-z0-9_-]{1,256}$/u.test(file.id) ||
+    !/^[A-Za-z0-9_-]{1,200}$/u.test(file.id) ||
     file.name !== name ||
     file.mimeType !== "application/pdf" ||
     file.trashed !== false ||
@@ -202,10 +203,21 @@ export async function publishVerifiedDriveResult({
   renderPdf = renderVerifiedResultPdf,
   assertLease,
   assertEvidence,
+  publicationLedger,
+  ledgerSecrets = process.env,
 } = {}) {
   const eventId = validateReport(report);
   await requireCheck(assertEvidence, report, "drive_result_evidence_required");
   await requireCheck(assertLease, undefined, "drive_result_lease_required");
+  const ledger = publicationLedger ?? createDriveResultLedger({
+    secrets: ledgerSecrets,
+    fetchImpl,
+  });
+  if (
+    typeof ledger?.reserve !== "function" ||
+    typeof ledger.uncertain !== "function" ||
+    typeof ledger.confirm !== "function"
+  ) fail("drive_result_ledger_invalid");
   const pdf = await renderPdf(report);
   if (!Buffer.isBuffer(pdf) || pdf.length < 100 || pdf.length > PDF_LIMIT ||
       !pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
@@ -215,7 +227,10 @@ export async function publishVerifiedDriveResult({
   const md5 = createHash("md5").update(pdf).digest("hex");
   const date = new Date(report.completedAt);
   if (!Number.isFinite(date.getTime())) fail("drive_result_date_invalid");
-  const name = `豊かさBOT_対応結果_${date.toISOString().slice(0, 10).replaceAll("-", "")}_${eventId}.pdf`;
+  // Event ID, unlike a completion timestamp, is immutable across retries.
+  // Drive permits duplicate names, so the durable event claim below is also
+  // mandatory before the first POST.
+  const name = `豊かさBOT_対応結果_${eventId}.pdf`;
   const expected = { name, sha256, md5, size: pdf.length, eventId };
 
   const token = await getDriveOAuthAccessToken({ credentials, fetchImpl });
@@ -260,9 +275,19 @@ export async function publishVerifiedDriveResult({
   ) {
     fail("drive_result_list_invalid");
   }
-  if (listed.files.length === 1) {
-    return { ok: true, fileId: verifyFile(listed.files[0], expected), deduplicated: true };
+  const reservation = await ledger.reserve({ eventId, sha256, name });
+  if (!["reserved", "pending", "confirmed", "conflict"].includes(reservation)) {
+    fail("drive_result_ledger_response_invalid");
   }
+  if (reservation === "conflict") fail("drive_result_event_conflict");
+  if (listed.files.length === 1) {
+    const fileId = verifyFile(listed.files[0], expected);
+    if (await ledger.confirm({ eventId, sha256, fileId }) !== true) {
+      fail("drive_result_ledger_confirm_failed");
+    }
+    return { ok: true, fileId, deduplicated: true };
+  }
+  if (reservation !== "reserved") fail("drive_result_publication_pending");
   await requireCheck(assertLease, undefined, "drive_result_lease_required");
   const metadata = {
     name,
@@ -277,23 +302,37 @@ export async function publishVerifiedDriveResult({
     "fields",
     "id,name,mimeType,parents,appProperties,md5Checksum,size,trashed",
   );
-  // A POST is never retried after a timeout. The next run searches by event ID.
-  const uploaded = await requestJson(
-    uploadUrl.toString(),
-    { method: "POST", headers: { ...headers, "Content-Type": contentType }, body },
-    "drive_result_upload",
-    fetchImpl,
-    [200, 201],
-  );
-  const fileId = verifyFile(uploaded, expected);
-  const getUrl = new URL(`${FILES_URL}/${fileId}`);
-  getUrl.searchParams.set(
-    "fields",
-    "id,name,mimeType,parents,appProperties,md5Checksum,size,trashed",
-  );
-  const confirmed = await requestJson(
-    getUrl.toString(), { method: "GET", headers }, "drive_result_readback", fetchImpl,
-  );
-  verifyFile(confirmed, expected);
-  return { ok: true, fileId, deduplicated: false };
+  // Once reserved, any failure leaves a durable row that forbids another POST.
+  // A later run may only reconcile by verifying an existing Drive file.
+  try {
+    const uploaded = await requestJson(
+      uploadUrl.toString(),
+      { method: "POST", headers: { ...headers, "Content-Type": contentType }, body },
+      "drive_result_upload",
+      fetchImpl,
+      [200, 201],
+    );
+    const fileId = verifyFile(uploaded, expected);
+    const getUrl = new URL(`${FILES_URL}/${fileId}`);
+    getUrl.searchParams.set(
+      "fields",
+      "id,name,mimeType,parents,appProperties,md5Checksum,size,trashed",
+    );
+    const confirmed = await requestJson(
+      getUrl.toString(), { method: "GET", headers }, "drive_result_readback", fetchImpl,
+    );
+    verifyFile(confirmed, expected);
+    if (await ledger.confirm({ eventId, sha256, fileId }) !== true) {
+      fail("drive_result_ledger_confirm_failed");
+    }
+    return { ok: true, fileId, deduplicated: false };
+  } catch (error) {
+    try {
+      await ledger.uncertain({ eventId, sha256 });
+    } catch {
+      // The posting row still blocks a retry if this update is unavailable.
+    }
+    if (error instanceof DriveIntakeError) throw error;
+    fail("drive_result_publication_failed");
+  }
 }
