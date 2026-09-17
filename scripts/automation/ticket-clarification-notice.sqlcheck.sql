@@ -11,6 +11,7 @@ DECLARE v_reply RECORD;
 DECLARE v_retry RECORD;
 DECLARE v_notice JSONB;
 DECLARE v_count INTEGER;
+DECLARE v_rejected BOOLEAN:=FALSE;
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
@@ -68,9 +69,9 @@ BEGIN
   BEGIN
     PERFORM * FROM public.finish_yutakasa_clarification_notice(
       v_ticket,gen_random_uuid(),v_provider);
-    RAISE EXCEPTION 'wrong notification claim accepted';
-  EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN v_rejected:=TRUE;
   END;
+  IF NOT v_rejected THEN RAISE EXCEPTION 'wrong notification claim accepted'; END IF;
   PERFORM * FROM public.finish_yutakasa_clarification_notice(v_ticket,v_claim,v_provider);
   IF public.claim_yutakasa_clarification_notice(v_ticket,gen_random_uuid())->>'status'<>'accepted'
     OR EXISTS(SELECT 1 FROM public.list_due_yutakasa_clarification_notices() d
