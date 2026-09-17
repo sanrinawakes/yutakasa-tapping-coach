@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 15
     env:
       YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: ${{ runner.temp }}/yutakasa-clarification-smoke-state.json
+      YUTAKASA_CLARIFICATION_SMOKE_ENABLED: ${{ vars.YUTAKASA_CLARIFICATION_SMOKE_ENABLED }}
     steps:
       - uses: actions/checkout@v4
         with:

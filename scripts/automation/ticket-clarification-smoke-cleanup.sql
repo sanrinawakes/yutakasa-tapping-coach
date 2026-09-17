@@ -3,8 +3,10 @@
 -- and transaction so a changed ticket is retained for investigation.
 BEGIN;
 
+DROP FUNCTION IF EXISTS public.cleanup_yutakasa_ticket_clarification_smoke(UUID,UUID);
+
 CREATE OR REPLACE FUNCTION public.cleanup_yutakasa_ticket_clarification_smoke(
-  p_run_id UUID, p_client_request_id UUID
+  p_run_id UUID, p_client_request_id UUID, p_lock_token UUID
 )
 RETURNS TABLE(cleaned BOOLEAN, ticket_id UUID)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
@@ -21,7 +23,7 @@ DECLARE v_expected_ack CONSTANT TEXT :=
 DECLARE v_expected_reply CONSTANT TEXT :=
   'お問い合わせありがとうございます。状況を確認するため、問題が起きた画面、直前に行った操作、表示されたエラー文（あれば）、発生した日時を教えてください。パスワードや認証コードは送らないでください。';
 BEGIN
-  IF p_run_id IS NULL OR p_client_request_id IS NULL THEN
+  IF p_run_id IS NULL OR p_client_request_id IS NULL OR p_lock_token IS NULL THEN
     RAISE EXCEPTION 'invalid clarification smoke cleanup' USING ERRCODE='22023';
   END IF;
   v_email:='yutakasa-auto-smoke+'||p_run_id::TEXT||'@example.invalid';
@@ -33,15 +35,16 @@ BEGIN
     RETURN QUERY SELECT FALSE,NULL::UUID;
     RETURN;
   END IF;
-  IF v_account.myasp_data->>'automation_test_identity' IS DISTINCT FROM
-      'yutakasa-clarification-smoke-v1' OR
-    v_account.myasp_data->>'smoke_run_id' IS DISTINCT FROM p_run_id::TEXT OR
-    v_account.myasp_data->>'source' IS DISTINCT FROM 'system_monitor_no_payment' OR
+  IF v_account.myasp_data IS DISTINCT FROM jsonb_build_object(
+      'automation_test_identity','yutakasa-clarification-smoke-v1',
+      'source','system_monitor_no_payment','smoke_run_id',p_run_id::TEXT) OR
     v_account.name IS DISTINCT FROM
       'System monitor clarification test (no customer, no payment)' OR
     v_account.status IS DISTINCT FROM 'active' OR
     v_account.subscription_status IS DISTINCT FROM 'active' OR
-    v_account.first_payment_date IS NOT NULL THEN
+    v_account.first_payment_date IS NOT NULL OR
+    v_account.subscription_started_at IS NOT NULL OR
+    v_account.subscription_last_event_at IS NOT NULL THEN
     RAISE EXCEPTION 'clarification smoke identity changed' USING ERRCODE='P0001';
   END IF;
   IF to_regclass('public.chat_threads') IS NOT NULL THEN
@@ -69,6 +72,8 @@ BEGIN
       v_ticket.category IS DISTINCT FROM 'technical' OR
       v_ticket.subject IS DISTINCT FROM '使えない' OR
       v_ticket.decision_required IS DISTINCT FROM FALSE OR
+      v_ticket.user_last_read_at IS NOT NULL OR
+      v_ticket.admin_last_read_at IS NOT NULL OR
       EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=v_ticket.id) OR
       EXISTS(SELECT 1 FROM public.yutakasa_repair_ticket_links l WHERE l.ticket_id=v_ticket.id) OR
       EXISTS(SELECT 1 FROM public.yutakasa_ticket_repair_jobs j WHERE j.ticket_id=v_ticket.id) OR
@@ -98,13 +103,16 @@ BEGIN
           WHERE m.ticket_id=v_ticket.id AND m.sender_type='admin') OR
         (v_ticket.status='open' AND v_ticket.automation_status='queued' AND
           v_ticket.automation_lock_token IS NULL AND
+          v_ticket.automation_locked_at IS NULL AND
           (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id)=0)
           IS DISTINCT FROM TRUE AND
         (v_ticket.status='in_progress' AND v_ticket.automation_status='investigating' AND
-          v_ticket.automation_lock_token IS NOT NULL AND
+          v_ticket.automation_lock_token=p_lock_token AND
+          v_ticket.automation_locked_at IS NOT NULL AND
           (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id
             AND w.event_type='automation_claimed' AND
-            w.summary='Codexが技術調査を開始しました。')=1 AND
+            w.summary='Codexが技術調査を開始しました。' AND
+            w.metadata='{}'::jsonb)=1 AND
           (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id)=1)
           IS DISTINCT FROM TRUE THEN
         RAISE EXCEPTION 'clarification smoke pending state changed' USING ERRCODE='P0001';
@@ -125,12 +133,13 @@ BEGIN
           AND m.sender_type='admin')<>1 OR
         (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id
           AND w.event_type='automation_claimed' AND
-          w.summary='Codexが技術調査を開始しました。')<>1 OR
+          w.summary='Codexが技術調査を開始しました。' AND
+          w.metadata='{}'::jsonb)<>1 OR
         (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id
           AND w.event_type='automation_clarification_sent' AND
           w.summary='情報不足の初回技術問い合わせに、固定文面で画面・操作・エラー・発生日時を質問しました。' AND
-          w.metadata->>'message_id'=v_reply.id::TEXT AND
-          w.metadata->>'latest_user_message_id'=v_user.id::TEXT)<>1 OR
+          w.metadata=jsonb_build_object('message_id',v_reply.id,
+            'latest_user_message_id',v_user.id))<>1 OR
         (SELECT count(*) FROM public.support_work_logs w WHERE w.ticket_id=v_ticket.id)<>2 THEN
         RAISE EXCEPTION 'clarification smoke completed state changed' USING ERRCODE='P0001';
       END IF;
@@ -150,9 +159,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.cleanup_yutakasa_ticket_clarification_smoke(UUID,UUID)
+REVOKE ALL ON FUNCTION public.cleanup_yutakasa_ticket_clarification_smoke(UUID,UUID,UUID)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.cleanup_yutakasa_ticket_clarification_smoke(UUID,UUID)
+GRANT EXECUTE ON FUNCTION public.cleanup_yutakasa_ticket_clarification_smoke(UUID,UUID,UUID)
   TO service_role;
 
 COMMIT;

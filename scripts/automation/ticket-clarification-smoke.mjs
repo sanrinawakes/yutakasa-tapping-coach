@@ -81,9 +81,10 @@ function sessionToken(secret, email) {
   return `${content}.${createHmac("sha256", secret).update(content).digest("base64url")}`;
 }
 
-function required(env) {
+function required(env, requireSmokeGate = true) {
   if (env.GITHUB_ACTIONS !== "true" || env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
     env.GITHUB_REPOSITORY !== REPO || env.GITHUB_REF !== "refs/heads/main" ||
+    (requireSmokeGate && env.YUTAKASA_CLARIFICATION_SMOKE_ENABLED !== "true") ||
     !SHA.test(env.GITHUB_SHA ?? "")) fail("clarification_smoke_trusted_main_required");
   if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/u.test(env.SUPABASE_URL ?? "") ||
     typeof env.SUPABASE_SERVICE_ROLE_KEY !== "string" ||
@@ -109,8 +110,8 @@ function statePath(env) {
 function defaultStateStore(env) {
   const file = statePath(env);
   return {
-    save(runId, requestId) {
-      fs.writeFileSync(file, JSON.stringify({ runId, requestId }),
+    save(runId, requestId, lockToken) {
+      fs.writeFileSync(file, JSON.stringify({ runId, requestId, lockToken }),
         { flag: "wx", mode: 0o600 });
     },
     read() {
@@ -120,7 +121,7 @@ function defaultStateStore(env) {
       if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 ||
         stat.size > 256) fail("clarification_smoke_state_file_invalid");
       const value = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!uuid(value?.runId) || !uuid(value?.requestId)) {
+      if (!uuid(value?.runId) || !uuid(value?.requestId) || !uuid(value?.lockToken)) {
         fail("clarification_smoke_state_file_invalid");
       }
       return value;
@@ -135,10 +136,11 @@ async function rows(env, fetchImpl, table, filter, select = "id") {
   });
 }
 
-async function cleanup(env, fetchImpl, runId, requestId, email) {
+async function cleanup(env, fetchImpl, runId, requestId, lockToken, email) {
   const result = await dbRequest(env, fetchImpl,
     "rpc/cleanup_yutakasa_ticket_clarification_smoke", {
-      method: "POST", body: { p_run_id: runId, p_client_request_id: requestId },
+      method: "POST", body: { p_run_id: runId, p_client_request_id: requestId,
+        p_lock_token: lockToken },
     });
   if (result.length !== 1 || typeof result[0]?.cleaned !== "boolean" ||
     (result[0].ticket_id !== null && !uuid(result[0].ticket_id))) {
@@ -214,6 +216,16 @@ export async function runClarificationSmoke({ env = process.env, fetchImpl = fet
     "This ticket is not locked by the current automation run.") {
     fail("clarification_smoke_vercel_flag_not_ready");
   }
+  // Concurrent jobs share a workflow lock; any older reserved-family row is
+  // therefore residue and must be investigated before creating a new one.
+  for (const [table, column] of [["subscribers", "email"],
+    ["support_tickets", "user_email"], ["chat_threads", "user_email"],
+    ["otp_codes", "email"]]) {
+    if ((await rows(env, fetchImpl, table,
+      { [column]: "like.yutakasa-auto-smoke+*@example.invalid" })).length) {
+      fail("clarification_smoke_prior_fixture_remaining");
+    }
+  }
   const runId = uuidImpl();
   const requestId = uuidImpl();
   const lockToken = uuidImpl();
@@ -221,12 +233,12 @@ export async function runClarificationSmoke({ env = process.env, fetchImpl = fet
     new Set([runId, requestId, lockToken]).size !== 3) fail("clarification_smoke_uuid_invalid");
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
   // This no-op also checks that the service-role-only cleanup RPC is deployed.
-  if (await cleanup(env, fetchImpl, runId, requestId, email)) {
+  if (await cleanup(env, fetchImpl, runId, requestId, lockToken, email)) {
     fail("clarification_smoke_preexisting_fixture");
   }
   // Persist only synthetic UUIDs before the first write. A later workflow
   // step can rescue cleanup even if the Node process is killed mid-request.
-  state.save(runId, requestId);
+  state.save(runId, requestId, lockToken);
   let createdIdentity = false;
   let primaryError;
   let completed = false;
@@ -289,7 +301,7 @@ export async function runClarificationSmoke({ env = process.env, fetchImpl = fet
     completed = true;
   } catch (error) { primaryError = error; }
   try {
-    const cleaned = await cleanup(env, fetchImpl, runId, requestId, email);
+    const cleaned = await cleanup(env, fetchImpl, runId, requestId, lockToken, email);
     if (createdIdentity && !cleaned) fail("clarification_smoke_cleanup_not_confirmed");
   } catch { fail("clarification_smoke_cleanup_incomplete"); }
   state.remove();
@@ -305,15 +317,16 @@ export async function runClarificationSmoke({ env = process.env, fetchImpl = fet
 
 export async function runCleanupOnly({ env = process.env, fetchImpl = fetch,
   stateStore = null } = {}) {
-  required(env);
+  // Rescue must remain available if the run gate is disabled mid-job.
+  required(env, false);
   const state = stateStore ?? defaultStateStore(env);
   const saved = state.read();
   if (!saved) return { ok: true, rescueNeeded: false };
-  if (!uuid(saved.runId) || !uuid(saved.requestId)) {
+  if (!uuid(saved.runId) || !uuid(saved.requestId) || !uuid(saved.lockToken)) {
     fail("clarification_smoke_state_file_invalid");
   }
   const email = `yutakasa-auto-smoke+${saved.runId}@example.invalid`;
-  await cleanup(env, fetchImpl, saved.runId, saved.requestId, email);
+  await cleanup(env, fetchImpl, saved.runId, saved.requestId, saved.lockToken, email);
   state.remove();
   return { ok: true, rescueNeeded: true, syntheticRowsRemaining: 0 };
 }

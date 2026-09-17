@@ -25,7 +25,7 @@ for file in scripts/support-migration-harness.sql \
   scripts/automation/ticket-clarification-smoke-cleanup.sqlcheck.sql; do
   if [[ "$file" == scripts/automation/repair-release-ledger.sql ]]; then
     docker exec "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa \
-      -c "ALTER TABLE public.subscribers ADD COLUMN subscription_status TEXT DEFAULT 'active', ADD COLUMN first_payment_date TIMESTAMPTZ, ADD COLUMN myasp_data JSONB DEFAULT '{}'::jsonb"
+      -c "ALTER TABLE public.subscribers ADD COLUMN IF NOT EXISTS subscription_status TEXT DEFAULT 'active', ADD COLUMN IF NOT EXISTS first_payment_date TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS myasp_data JSONB DEFAULT '{}'::jsonb, ADD COLUMN IF NOT EXISTS subscription_started_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS subscription_last_event_at TIMESTAMPTZ"
   fi
   docker exec -i "$container" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d yutakasa < "$file"
 done

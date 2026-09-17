@@ -22,6 +22,7 @@ const ENV = {
   GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "workflow_dispatch",
   GITHUB_REPOSITORY: "sanrinawakes/yutakasa-tapping-coach",
   GITHUB_REF: "refs/heads/main", GITHUB_SHA: SHA,
+  YUTAKASA_CLARIFICATION_SMOKE_ENABLED: "true",
   SUPABASE_URL: "https://fixture.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "s".repeat(40), JWT_SECRET: "j".repeat(40),
   VERCEL_TOKEN: "v".repeat(40),
@@ -32,11 +33,13 @@ function response(status, data) {
   return { status, text: async () => JSON.stringify(data) };
 }
 
-function fixture({ flagEnabled = true, replyCreated = true, cleanupFails = false } = {}) {
+function fixture({ flagEnabled = true, replyCreated = true, cleanupFails = false,
+  priorResidueTable = null } = {}) {
   const state = { account: false, ticket: false, claimed: false, clarified: false,
-    cleanupCalls: 0, appCalls: [], dbWrites: [], cleanupFails, saved: null };
+    cleanupCalls: 0, appCalls: [], dbWrites: [], cleanupFails, priorResidueTable,
+    saved: null };
   const stateStore = {
-    save(runId, requestId) { state.saved = { runId, requestId }; },
+    save(runId, requestId, lockToken) { state.saved = { runId, requestId, lockToken }; },
     read() { return state.saved; },
     remove() { state.saved = null; },
   };
@@ -48,7 +51,8 @@ function fixture({ flagEnabled = true, replyCreated = true, cleanupFails = false
       if (init.method === "POST") state.dbWrites.push(table);
       if (table === "rpc/cleanup_yutakasa_ticket_clarification_smoke") {
         state.cleanupCalls += 1;
-        assert.deepEqual(body, { p_run_id: RUN, p_client_request_id: REQUEST });
+        assert.deepEqual(body, { p_run_id: RUN, p_client_request_id: REQUEST,
+          p_lock_token: LOCK });
         if (state.cleanupFails && state.account) return response(409, { code: "P0001" });
         const cleaned = state.account;
         state.account = false;
@@ -56,6 +60,11 @@ function fixture({ flagEnabled = true, replyCreated = true, cleanupFails = false
         state.claimed = false;
         state.clarified = false;
         return response(200, [{ cleaned, ticket_id: cleaned ? TICKET : null }]);
+      }
+      if (init.method === "GET" && state.priorResidueTable === table &&
+        [...url.searchParams.values()].some((value) =>
+          value === "like.yutakasa-auto-smoke+*@example.invalid")) {
+        return response(200, [{ id: RUN }]);
       }
       if (table === "subscribers") {
         if (init.method === "POST") {
@@ -163,6 +172,26 @@ test("disabled Vercel flag stops before any database write", async () => {
   assert.equal(f.state.cleanupCalls, 0);
 });
 
+test("missing one-shot repository gate stops before API or database access", async () => {
+  const f = fixture();
+  await assert.rejects(runClarificationSmoke({ env: {
+    ...ENV, YUTAKASA_CLARIFICATION_SMOKE_ENABLED: "false" }, ...f,
+  deploymentImpl: deployment }), { code: "clarification_smoke_trusted_main_required" });
+  assert.equal(f.state.dbWrites.length, 0);
+  assert.equal(f.state.appCalls.length, 0);
+});
+
+test("prior reserved-family residue stops before new synthetic writes", async () => {
+  for (const priorResidueTable of ["subscribers", "support_tickets",
+    "chat_threads", "otp_codes"]) {
+    const f = fixture({ priorResidueTable });
+    await assert.rejects(runClarificationSmoke({ env: ENV, ...f,
+      deploymentImpl: deployment }), { code: "clarification_smoke_prior_fixture_remaining" });
+    assert.equal(f.state.dbWrites.length, 0);
+    assert.equal(f.state.cleanupCalls, 0);
+  }
+});
+
 test("failed reply confirmation still invokes guarded cleanup", async () => {
   const f = fixture({ replyCreated: false });
   await assert.rejects(runClarificationSmoke({ env: ENV, ...f,
@@ -177,9 +206,11 @@ test("cleanup guard failure never reports a passing smoke", async () => {
   await assert.rejects(runClarificationSmoke({ env: ENV, ...f,
     deploymentImpl: deployment }), { code: "clarification_smoke_cleanup_incomplete" });
   assert.equal(f.state.account, true);
-  assert.deepEqual(f.state.saved, { runId: RUN, requestId: REQUEST });
+  assert.deepEqual(f.state.saved, { runId: RUN, requestId: REQUEST,
+    lockToken: LOCK });
   f.state.cleanupFails = false;
-  const rescued = await runCleanupOnly({ env: ENV, ...f });
+  const rescued = await runCleanupOnly({ env: {
+    ...ENV, YUTAKASA_CLARIFICATION_SMOKE_ENABLED: "false" }, ...f });
   assert.equal(rescued.syntheticRowsRemaining, 0);
   assert.equal(f.state.account, false);
   assert.equal(f.state.saved, null);
@@ -197,7 +228,7 @@ test("interrupted workflow rescues from a mode-0600 synthetic-only state file", 
     { code: "clarification_smoke_cleanup_incomplete" });
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")),
-      { runId: RUN, requestId: REQUEST });
+      { runId: RUN, requestId: REQUEST, lockToken: LOCK });
     f.state.cleanupFails = false;
     const rescued = await runCleanupOnly({ env, fetchImpl: f.fetchImpl });
     assert.equal(rescued.syntheticRowsRemaining, 0);
