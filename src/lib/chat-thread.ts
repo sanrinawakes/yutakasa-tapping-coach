@@ -20,7 +20,7 @@ export interface EmptyChatThreadCandidate extends ChatThreadMessageCount {
 }
 
 function normalizeSingleLine(value: string): string {
-  return value.replace(/\s+/gu, " ").trim();
+  return value.replace(/[\s\u200B]+/gu, " ").trim();
 }
 
 export function sanitizeChatTitle(value: unknown): string {
