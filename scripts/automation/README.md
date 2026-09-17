@@ -68,9 +68,10 @@ processed or healthy.
 
 Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
 flag in their credential source. PDF publication additionally requires
-`YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED=true`. Both default off. The shared
-OAuth refresh helper rejects a missing or differently spelled processing flag
-before requesting a token; the metadata-only API-key monitor is unchanged.
+`YUTAKASA_DRIVE_RESULT_PUBLISH_ENABLED=true`. Both default off. The OAuth
+refresh helper used by content reads and PDF publication rejects a missing or
+differently spelled processing flag before requesting a token. The existing
+metadata-only monitor still uses its API key when one is configured.
 Neither flag is configured in the production Railway service. Do not enable
 them merely because OAuth credentials have been issued: no scheduled caller
 currently binds a per-file claim to a verified diagnosis, release record,
