@@ -22,6 +22,11 @@ import {
 
 const deploymentId = "dpl_CnNGM63s3fmYAsHpe1RhkXqvJru4";
 const projectId = "proj_S4e8BxvmjNYzpo8EL2bjRPUH";
+test("GitHub live recheck receives the production support API secret", () => {
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/ai-repair.yml", import.meta.url), "utf8");
+  const recheck = workflow.split("\n  investigate:")[0];
+  assert.match(recheck, /JWT_SECRET: \$\{\{ secrets\.YUTAKASA_JWT_SECRET \}\}/u);
+});
 const testLease = async ({ kind }) => {
   assert.equal(kind, "recheck");
   return {

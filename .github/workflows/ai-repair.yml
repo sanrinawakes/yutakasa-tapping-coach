@@ -49,6 +49,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
           CRON_SECRET: ${{ secrets.YUTAKASA_CRON_SECRET }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.YUTAKASA_GOOGLE_DRIVE_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
