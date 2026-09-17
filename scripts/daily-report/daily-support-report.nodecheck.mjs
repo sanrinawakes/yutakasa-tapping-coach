@@ -434,6 +434,7 @@ test("an old unresolved ticket is counted even on a day with no new activity", (
   assert.match(report.text, /現在の未解決: 1件/);
   assert.match(report.text, /運営判断要1件/);
   assert.match(report.text, /運営判断待ち1件/);
+  assert.match(report.text, new RegExp(`あなたの判断が必要なチケット: 1件[\\s\\S]*ID ${TICKET_ID}`));
 });
 
 test("an old manual review remains visible as an action in every daily report", () => {
@@ -442,8 +443,9 @@ test("an old manual review remains visible as an action in every daily report", 
       user_email: "PRIVATE-ADDRESS@example.com", automation_status: "manual_review",
       updated_at: "2026-09-11T00:00:00.000Z" }] };
   const report = buildDailyReport("2026-09-16", records, NOW);
-  assert.match(report.text, /運営確認待ち1件/);
-  assert.match(report.text, new RegExp(`現在、運営が対応するチケット:[\\s\\S]*ID ${TICKET_ID} \\| 自動処理:運営確認待ち`));
+  assert.match(report.text, /自動処理停止1件/);
+  assert.match(report.text, /あなたの判断が必要なチケット: 0件/);
+  assert.match(report.text, new RegExp(`自動処理が止まっているチケット（判断依頼ではありません）: 1件[\\s\\S]*ID ${TICKET_ID} \\| 自動処理:自動処理停止・確認待ち`));
   assert.equal(report.text.includes("PRIVATE-ADDRESS"), false);
 });
 
@@ -517,7 +519,7 @@ test("ticket repair states remain reportable after the ticket bridge migration",
   assert.match(email, /自動処理:修正PR待ち/);
   records.tickets[0].automation_status = "manual_review";
   records.openTickets[0].automation_status = "manual_review";
-  assert.match(buildDailyReport("2026-09-16", records, NOW).text, /自動処理:運営確認待ち/);
+  assert.match(buildDailyReport("2026-09-16", records, NOW).text, /自動処理:自動処理停止・確認待ち/);
 });
 
 test("repair report verifies exact GitHub head checks and private release ledger without customer content", async () => {
