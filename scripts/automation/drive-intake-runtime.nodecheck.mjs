@@ -114,7 +114,7 @@ test("verified binding and evidence are required before one publication", async 
   assert.deepEqual(await processVerifiedDriveIntake(args), {
     processed: 1, alreadyProcessed: 0, blocked: 0,
   });
-  assert.deepEqual(calls.map(([name]) => name), ["read", "load", "publish", "verify"]);
+  assert.deepEqual(calls.map(([name]) => name), ["read", "load", "publish", "verify", "verify"]);
   assert.equal(calls[1][1].contentSha256, HASH);
   assert.equal(calls[1][1].eventId, EVENT_ID);
   assert.ok(!JSON.stringify(calls[1]).includes(FILE.name));
@@ -187,6 +187,21 @@ test("ambiguous publication never marks the source processed", async () => {
     "finish", FILE.id, CLAIM_ID,
     { status: "needs_review", failureCode: "external_outcome_unknown" },
   ]);
+});
+
+test("evidence revoked after PDF readback prevents processed completion", async () => {
+  let checks = 0;
+  const { args, ledger } = harness({
+    verifyReleaseEvidence: async () => { checks += 1; return checks === 1; },
+  });
+  await expectCode(() => processVerifiedDriveIntake(args),
+    "drive_runtime_release_evidence_expired");
+  assert.equal(checks, 2);
+  assert.deepEqual(ledger.calls.at(-1)[3], {
+    status: "needs_review", failureCode: "external_outcome_unknown",
+  });
+  assert.equal(ledger.calls.some(([name, , , result]) =>
+    name === "finish" && result.status === "processed"), false);
 });
 
 test("lost file lease blocks publication and completion", async () => {

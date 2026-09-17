@@ -203,6 +203,13 @@ export async function processVerifiedDriveIntake({
         fail("drive_runtime_publication_invalid");
       }
       await guard.assertOwned();
+      if (await verifyReleaseEvidence({
+        fileId: file.id, modifiedTime: file.modifiedTime,
+        driveVersion: file.version ?? null,
+        contentSha256: content.sha256, eventId, report: binding.report,
+      }) !== true) {
+        fail("drive_runtime_release_evidence_expired");
+      }
       if (await guard.stop() !== true) fail("drive_runtime_file_lease_lost");
       await requireLease(assertLease, "drive_runtime_monitor_lease_lost");
       if (await intakeLedger.finish(file, claimed.claimId, { status: "processed" }) !== true) {

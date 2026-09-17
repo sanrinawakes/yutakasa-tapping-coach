@@ -285,6 +285,8 @@ export async function publishVerifiedDriveResult({
   if (reservation === "conflict") fail("drive_result_event_conflict");
   if (listed.files.length === 1) {
     const fileId = verifyFile(listed.files[0], expected);
+    await requireCheck(assertLease, undefined, "drive_result_lease_required");
+    await requireCheck(assertEvidence, report, "drive_result_evidence_required");
     if (await ledger.confirm({ eventId, sha256, fileId }) !== true) {
       fail("drive_result_ledger_confirm_failed");
     }
