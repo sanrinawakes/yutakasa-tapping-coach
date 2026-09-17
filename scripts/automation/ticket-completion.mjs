@@ -65,9 +65,9 @@ export async function completeVerifiedTicketRepair({workId,env=process.env,
     p_current_deployment_id:deployment.deploymentId,
   });
   if (!Array.isArray(receipt) || receipt.length !== 1 ||
-      !UUID.test(receipt[0]?.message_id ?? "") || receipt[0]?.created !== true) {
+      !UUID.test(receipt[0]?.message_id ?? "") || typeof receipt[0]?.created !== "boolean") {
     fail("ticket_completion_receipt_invalid");
   }
   // No customer content or message ID is written to the workflow summary.
-  return {status:"completed"};
+  return {status:receipt[0].created?"completed":"existing"};
 }
