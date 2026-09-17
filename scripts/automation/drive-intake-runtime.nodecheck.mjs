@@ -9,6 +9,7 @@ const FILE = {
   name: "private-customer-name.pdf",
   mimeType: "application/pdf",
   modifiedTime: "2026-09-17T02:00:00.000Z",
+  version: "42",
 };
 const SNAPSHOT = {
   schemaVersion: 1,
@@ -31,7 +32,9 @@ test("a changed Drive version gets a distinct immutable result event", () => {
     driveResultEventId({ ...FILE, version: "42" }),
     driveResultEventId({ ...FILE, version: "43" }),
   );
-  assert.notEqual(driveResultEventId(FILE), driveResultEventId({ ...FILE, version: "42" }));
+  const withoutVersion = { ...FILE };
+  delete withoutVersion.version;
+  assert.notEqual(driveResultEventId(withoutVersion), driveResultEventId(FILE));
 });
 
 function fakeLedger(state = "acquired") {
@@ -213,6 +216,11 @@ test("duplicate file IDs and invalid snapshots fail before a claim", async () =>
   await expectCode(() => processVerifiedDriveIntake({
     ...args, snapshot: { ...SNAPSHOT, folderId: "wrong-folder" },
   }), "drive_runtime_snapshot_invalid");
+  const withoutVersion = { ...FILE };
+  delete withoutVersion.version;
+  await expectCode(() => processVerifiedDriveIntake({
+    ...args, snapshot: { ...SNAPSHOT, files: [withoutVersion] },
+  }), "drive_runtime_file_version_missing");
   assert.deepEqual(ledger.calls, []);
 });
 

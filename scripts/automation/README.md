@@ -80,7 +80,9 @@ production release-evidence loader. The old automation did not diagnose Drive
 files automatically, and this module does not invent such a diagnosis. Do not
 enable the flags until the release-evidence loader and verifier are implemented
 and exercised with a synthetic file. Drive metadata now carries its revision
-version when Google supplies it, so the claim can reject a conflicting edit.
+version when Google supplies it. The processing caller requires that version
+and stops before a claim if Google omits it, so an edited file cannot be
+silently treated as an already processed revision.
 
 Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
 flag in their credential source. PDF publication additionally requires

@@ -16,7 +16,7 @@ function fail(code) {
   throw new DriveIntakeError(code);
 }
 
-function checkedFile(file) {
+function checkedFile(file, requireVersion = false) {
   if (!file || typeof file !== "object" ||
       typeof file.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(file.id) ||
       typeof file.name !== "string" || file.name.length < 1 || file.name.length > 1024 ||
@@ -27,6 +27,9 @@ function checkedFile(file) {
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(file.modifiedTime) ||
       !Number.isFinite(Date.parse(file.modifiedTime))) {
     fail("drive_runtime_file_invalid");
+  }
+  if (requireVersion && file.version === undefined) {
+    fail("drive_runtime_file_version_missing");
   }
   return file;
 }
@@ -40,7 +43,7 @@ function checkedSnapshot(snapshot) {
   }
   const seen = new Set();
   for (const file of snapshot.files) {
-    checkedFile(file);
+    checkedFile(file, true);
     if (seen.has(file.id)) fail("drive_runtime_duplicate_file");
     seen.add(file.id);
   }
