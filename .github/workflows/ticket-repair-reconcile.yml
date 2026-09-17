@@ -50,4 +50,7 @@ jobs:
           YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
           YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+          TICKET_COMPLETION_ENABLED: ${{ vars.YUTAKASA_TICKET_COMPLETION_ENABLED }}
         run: node scripts/automation/ticket-repair-reconcile.mjs

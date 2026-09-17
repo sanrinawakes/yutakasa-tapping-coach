@@ -105,7 +105,8 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
       return new Response(JSON.stringify([{status:"manual_review"}]),{status:200});
     throw new Error("unexpected request");
   }});
-  assert.deepEqual(result,{examined:1,manualReviews:1,drafted:1,draftFailures:0,recoveredClaims:0});
+  assert.deepEqual(result,{examined:1,manualReviews:1,drafted:1,draftFailures:0,
+    completed:0,completionFailures:0,recoveredClaims:0});
   assert.equal(drafts,1);
   assert.equal(called.some((item)=>item.url.includes("append_verified")),false);
   assert.deepEqual(called[2].body,{p_work_id:workId});
@@ -142,7 +143,7 @@ test("manual reconcile requires explicit mode and uses the same no-send review p
       return new Response(JSON.stringify(calls.length===1?[{recovered:0}]:[]),{status:200});
     }});
   assert.deepEqual(result,{mode:"reconcile",examined:0,manualReviews:0,drafted:0,
-    draftFailures:0,recoveredClaims:0});
+    draftFailures:0,completed:0,completionFailures:0,recoveredClaims:0});
   assert.equal(calls.length,2);
 });
 

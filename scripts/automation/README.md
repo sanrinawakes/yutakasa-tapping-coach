@@ -47,7 +47,30 @@ The Railway definition preserves `TICKET_REPAIR_BRIDGE_ENABLED` and leaves it of
 
 Automatic merge remains independently gated by `YUTAKASA_AUTO_MERGE_ENABLED`. The strict main ruleset must require `source-repair-verify`, `ai-repair-independent-review`, and `Vercel`. Promotion checks the Vercel commit status for the exact PR head. Ticket PRs use the dedicated `codex/yutakasa-support-ai-*` branch namespace. Promotion first reads the private PR-number/head link for every candidate, then rechecks the ticket work UUID, exact PR head, latest customer message, ticket state, and decision flag just before merge; changing a PR title or body cannot turn a ticket repair into a generic anomaly. Because this classification is fail closed, apply the ticket bridge migration before enabling automatic merge for either repair path. A five-minute scheduled retry checks recently opened AI PRs when Vercel finishes after the other checks; it cannot bypass a failed check or a changed main SHA.
 
-No automatic customer reply is installed for technical repair tickets. The generic production chat smoke and three healthy observations do not prove that a customer's particular symptom has cleared. Once the release is verified, `ticket-repair-reconcile.yml` moves the linked work and ticket to `manual_review` with a fixed audit log; a release still pending after 24 hours follows the same path. The job runs every ten minutes and processes up to 100 due work items per run, failing visibly when a full page remains. A future customer reply requires ticket-specific reproduction and post-fix proof, an owner-approved message, and a separate idempotent delivery path. The old support `reply` API returns HTTP 409.
+`ticket-completion.sql` adds a dormant, ticket-specific completion route for two
+bounded chat symptoms: a sent message disappearing on reload, and a response
+stopping mid-stream. Its private proof row binds one repair work ID, ticket,
+latest user message and message digest, PR head, merge SHA, deployment, test
+scenario digest, and distinct before-failure, after-success, and production-
+success artifacts. It must be written only after a trusted scenario runner has
+executed those three checks for the exact customer-reported conditions. Such a
+runner is **not yet implemented**. Generic chat smoke, PR success, an AI draft,
+and the release observation ledger cannot create a truthful proof row on their
+own. No per-ticket owner approval is needed once that exact evidence is
+available, but there is currently no production-eligible proof producer.
+
+With `YUTAKASA_TICKET_COMPLETION_ENABLED=true`, the reconciliation workflow
+tries the proof route before the existing manual review transition. The
+database rechecks the ticket and latest customer message, technical category,
+absence of attachments and owner-decision terms, exact PR/release/production
+identity, and three consecutive healthy observations on the same deployment
+spanning at least twenty minutes. One transaction inserts a fixed,
+scenario-specific in-app reply, resolves the ticket, marks the job replied,
+and writes an audit log; a retry returns the original message. No email is
+sent by this path. A missing or stale proof remains manual review. Keep the
+flag absent or `false` until the trusted runner, proof provenance check,
+production synthetic test, and live readback have been verified. The old
+support `reply` API still returns HTTP 409.
 
 The reconcile workflow runs at minutes 7, 17, 27, 37, 47, and 57 UTC, avoiding GitHub's busiest top-of-hour schedule boundary while retaining ten-minute spacing. GitHub can still delay or omit a scheduled event, so this timing is not a delivery guarantee. It also has an explicit manual `workflow_dispatch` entry point. Its default `probe` mode only reads the number of due release reviews and expired final investigation claims; it never calls the recovery or review RPC, the AI model, or a customer send. `reconcile` mode runs the same guarded review path as the schedule and must be selected explicitly. Both modes require the main branch, the exact repository, and `YUTAKASA_TICKET_RECONCILE_ENABLED=true`. A successful probe proves the workflow can start and read its database; it does not prove the GitHub schedule fires or that a real repair completed.
 
