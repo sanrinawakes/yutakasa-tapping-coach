@@ -37,6 +37,7 @@ const GEMINI_RETRY_EVENT_KEYS = Object.freeze([
 ].sort());
 const FAILURE_LOG_WORDS = /\b(?:error|timeout|timed out|fail(?:ed|ure)?|exception|abort(?:ed)?|cancel(?:led)?)\b/iu;
 const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+const TRANSIENT_DEPLOYMENT_READ = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
 
 function fail(code) {
   throw new Error(code);
@@ -84,10 +85,7 @@ async function getJson(url, headers, code, fetchImpl) {
   }
 }
 
-export async function collectRemoteDeployment({
-  token = process.env.VERCEL_TOKEN,
-  fetchImpl = fetch,
-} = {}) {
+async function collectRemoteDeploymentOnce(token, fetchImpl) {
   if (typeof token !== "string" || token.length < 20) fail("vercel_token_missing");
   const githubHeaders = {
     Accept: "application/vnd.github+json",
@@ -155,6 +153,23 @@ export async function collectRemoteDeployment({
     deploymentUrl: vercelUrl,
     ready: true,
   });
+}
+
+export async function collectRemoteDeployment({
+  token = process.env.VERCEL_TOKEN,
+  fetchImpl = fetch,
+  waitImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
+  try {
+    return await collectRemoteDeploymentOnce(token, fetchImpl);
+  } catch (error) {
+    // A read-only provider request may fail during a deployment. Retry the
+    // entire snapshot once, so every identity is re-read together. Never
+    // retry a mismatch or malformed response as if it were healthy.
+    if (!TRANSIENT_DEPLOYMENT_READ.test(error?.message ?? "")) throw error;
+  }
+  await waitImpl(1_000);
+  return collectRemoteDeploymentOnce(token, fetchImpl);
 }
 
 function isKnownDisabledReplyProbe(entry) {
