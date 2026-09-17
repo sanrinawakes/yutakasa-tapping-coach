@@ -95,7 +95,7 @@ test("a missing report sends only the two approved operator alerts, once per dat
   }
 });
 
-test("one missing recipient, a stale cursor, and an old unresolved delivery each trigger an alert", async () => {
+test("missing or extra recipients, a stale cursor, and an old unresolved delivery each trigger an alert", async () => {
   const baseline = mock();
   const oneMissing = mock({ deliveries: [
     { report_date_jst: "2026-09-16", recipient: env.YUTAKASA_REPORT_RECIPIENT_1,
@@ -109,12 +109,23 @@ test("one missing recipient, a stale cursor, and an old unresolved delivery each
     { report_date_jst: "2026-09-16", recipient: env.YUTAKASA_REPORT_RECIPIENT_2,
       status: "accepted", provider_last_event: "delivered" },
   ] });
+  const extraRecipient = mock({ deliveries: [
+    { report_date_jst: "2026-09-16", recipient: env.YUTAKASA_REPORT_RECIPIENT_1,
+      status: "accepted", provider_last_event: "delivered" },
+    { report_date_jst: "2026-09-16", recipient: env.YUTAKASA_REPORT_RECIPIENT_2,
+      status: "accepted", provider_last_event: "delivered" },
+    { report_date_jst: "2026-09-16", recipient: "wrong-recipient@example.com",
+      status: "accepted", provider_last_event: "delivered" },
+  ] });
   assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: baseline.fetchImpl })).state, "healthy");
   assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: oneMissing.fetchImpl })).state, "delivery_unresolved");
   assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: backlog.fetchImpl })).state, "backlog_unresolved");
   assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: oldFailure.fetchImpl })).state, "delivery_unresolved");
   assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: latestBounce.fetchImpl })).state, "delivery_unresolved");
-  for (const client of [oneMissing, backlog, oldFailure, latestBounce]) assert.equal(client.providerMessages.size, 2);
+  assert.equal((await runDailyReportWatchdog({ env, now: NOW, fetchImpl: extraRecipient.fetchImpl })).state, "delivery_unresolved");
+  for (const client of [oneMissing, backlog, oldFailure, latestBounce, extraRecipient]) {
+    assert.equal(client.providerMessages.size, 2);
+  }
 });
 
 test("source outage still produces an alert with no private exception text", async () => {

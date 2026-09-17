@@ -120,6 +120,7 @@ async function reportState(config, reportDateJst, recipients, fetchImpl) {
   });
   const deliveries = await sourceJson(config, `rest/v1/yutakasa_daily_report_deliveries?${query}`, { fetchImpl });
   if (!Array.isArray(deliveries) || deliveries.length > 20) fail("source_response_invalid");
+  if (deliveries.length !== recipients.length) return "delivery_unresolved";
   const recipientRows = recipients.map((recipient) => deliveries.filter((row) => row?.recipient === recipient));
   if (recipientRows.some((rows) => rows.length !== 1 || rows[0].report_date_jst !== reportDateJst ||
       rows[0].status !== "accepted" || ADVERSE_EVENTS.has(rows[0].provider_last_event))) {
