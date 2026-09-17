@@ -110,6 +110,59 @@ test("a recent synthetic identity is never reaped", async () => {
   assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
 });
 
+function activeRehearsalDatabase({ workStatus = "queued", extraRecent = false,
+  ageMinutes = 5 } = {}) {
+  const runId = "22222222-2222-4222-8222-222222222222";
+  const workId = "44444444-4444-4444-8444-444444444444";
+  const ticketId = "55555555-5555-4555-8555-555555555555";
+  const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
+  const account = { id, email, status: "active", subscription_status: "active",
+    first_payment_date: null, created_at: new Date(Date.now() - ageMinutes * 60_000).toISOString(),
+    myasp_data: { automation_test_identity: "yutakasa-ai-repair-smoke-v1",
+      source: "system_monitor_no_payment", smoke_run_id: runId } };
+  const calls = [];
+  const fetchImpl = async (rawUrl, init) => {
+    const url = new URL(rawUrl);
+    const table = url.pathname.split("/").at(-1);
+    calls.push({ method: init.method, table });
+    if (table === "subscribers") return Response.json(extraRecent
+      ? [account, { ...account, id: "66666666-6666-4666-8666-666666666666",
+        email: "yutakasa-auto-smoke+77777777-7777-4777-8777-777777777777@example.invalid",
+        myasp_data: { ...account.myasp_data, smoke_run_id: "77777777-7777-4777-8777-777777777777" } }]
+      : [account]);
+    if (table === "support_tickets") return Response.json([{ id: ticketId, user_email: email,
+      category: "technical", subject: "チャットの見出しが空白になる",
+      status: "in_progress", automation_status: "awaiting_repair", decision_required: false }]);
+    if (table === "yutakasa_ticket_repair_jobs") return Response.json([{ work_id: workId,
+      ticket_id: ticketId, status: workStatus }]);
+    if (table === "support_messages") return Response.json([
+      { sender_type: "user", body: "チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。" },
+      { sender_type: "system", body: "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。" },
+    ]);
+    if (["support_attachments", "chat_threads", "otp_codes"].includes(table)) return Response.json([]);
+    throw new Error(`unexpected ${table}`);
+  };
+  return { env: { ...env, YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID: runId,
+    YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: workId }, fetchImpl, calls };
+}
+
+test("one exact active full rehearsal can coexist with functional smoke without deletion", async () => {
+  const db = activeRehearsalDatabase();
+  assert.deepEqual(await reapStaleSyntheticIdentities(db.env, db.fetchImpl), { reaped: 0 });
+  assert.equal(db.calls.every((call) => call.method === "GET"), true);
+  assert.equal(db.calls.some((call) => call.table === "support_messages"), true);
+});
+
+test("the rehearsal exception rejects stale work and another recent identity", async () => {
+  for (const options of [{ workStatus: "manual_review" }, { extraRecent: true },
+    { ageMinutes: 241 }]) {
+    const db = activeRehearsalDatabase(options);
+    await assert.rejects(() => reapStaleSyntheticIdentities(db.env, db.fetchImpl),
+      (error) => error instanceof FunctionalSmokeError);
+    assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
+  }
+});
+
 test("ambiguous prefix residue refuses all deletion", async () => {
   const db = staleDatabase({ ambiguous: true });
   await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),

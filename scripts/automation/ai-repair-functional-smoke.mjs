@@ -12,6 +12,8 @@ export const TEST_SUPPORT_SUBJECT = `${TEST_MESSAGE_MARKER} support`;
 export const TEST_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} technical support route check`;
 export const BRIDGE_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} ゼロ幅スペースだけを渡すと、見出しは空白になります。`;
 export const TEST_SUPPORT_ACK = "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。";
+const REHEARSAL_SUBJECT = "チャットの見出しが空白になる";
+const REHEARSAL_BODY = "チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
@@ -508,6 +510,12 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
 
 /** Only old, exact, no-payment synthetic identities can be reaped. */
 export async function reapStaleSyntheticIdentities(env, fetchImpl, nowMs = Date.now()) {
+  const rehearsalRunId = env.YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID;
+  const rehearsalWorkId = env.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID;
+  if ((rehearsalRunId || rehearsalWorkId) &&
+      (!UUID.test(rehearsalRunId ?? "") || !UUID.test(rehearsalWorkId ?? ""))) {
+    fail("smoke_rehearsal_allowlist_invalid");
+  }
   const accounts = await databaseRequest(env, fetchImpl, "subscribers", {
     email: "like.yutakasa-auto-smoke*",
     select: "id,email,status,subscription_status,first_payment_date,myasp_data,created_at",
@@ -523,6 +531,47 @@ export async function reapStaleSyntheticIdentities(env, fetchImpl, nowMs = Date.
     const runId = match[1];
     validateAccount(account, account.email, runId);
     const createdAt = Date.parse(account.created_at ?? "");
+    if (runId === rehearsalRunId) {
+      if (!Number.isFinite(createdAt) || createdAt > nowMs ||
+          nowMs - createdAt > 4 * 60 * 60 * 1_000) {
+        fail("smoke_rehearsal_identity_expired");
+      }
+      const tickets = await databaseRequest(env, fetchImpl, "support_tickets", {
+        user_email: `eq.${account.email}`,
+        select: "id,user_email,category,subject,status,automation_status,decision_required",
+        limit: "2",
+      });
+      const ticket = tickets[0];
+      if (tickets.length !== 1 || !UUID.test(ticket?.id ?? "") ||
+          ticket.user_email !== account.email || ticket.category !== "technical" ||
+          ticket.subject !== REHEARSAL_SUBJECT || ticket.status !== "in_progress" ||
+          ticket.automation_status !== "awaiting_repair" ||
+          ticket.decision_required !== false) fail("smoke_rehearsal_ticket_invalid");
+      const jobs = await databaseRequest(env, fetchImpl, "yutakasa_ticket_repair_jobs", {
+        work_id: `eq.${rehearsalWorkId}`,
+        select: "work_id,ticket_id,status", limit: "2",
+      });
+      if (jobs.length !== 1 || jobs[0]?.work_id !== rehearsalWorkId ||
+          jobs[0]?.ticket_id !== ticket.id ||
+          !["queued", "investigating", "pr_open"].includes(jobs[0]?.status)) {
+        fail("smoke_rehearsal_work_invalid");
+      }
+      const messages = await databaseRequest(env, fetchImpl, "support_messages", {
+        ticket_id: `eq.${ticket.id}`, select: "sender_type,body", limit: "4",
+      });
+      if (messages.length !== 2 ||
+          messages.filter((message) => message.sender_type === "user" &&
+            message.body === REHEARSAL_BODY).length !== 1 ||
+          messages.filter((message) => message.sender_type === "system" &&
+            message.body === TEST_SUPPORT_ACK).length !== 1) {
+        fail("smoke_rehearsal_messages_invalid");
+      }
+      const attachments = await databaseRequest(env, fetchImpl, "support_attachments", {
+        ticket_id: `eq.${ticket.id}`, select: "id", limit: "1",
+      });
+      if (attachments.length !== 0) fail("smoke_rehearsal_attachments_invalid");
+      continue;
+    }
     if (!Number.isFinite(createdAt) || createdAt > nowMs || nowMs - createdAt < STALE_AFTER_MS) {
       fail("smoke_synthetic_identity_still_recent");
     }
