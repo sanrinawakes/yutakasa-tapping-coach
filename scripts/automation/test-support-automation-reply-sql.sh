@@ -40,6 +40,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-license.sql
   scripts/automation/ticket-clarification.sql \
   scripts/automation/ticket-clarification.sqlcheck.sql \
   scripts/automation/ticket-completion.sql \
+  scripts/automation/ticket-completion-notice.sql \
+  scripts/automation/ticket-completion-notice.sql \
   scripts/automation/ticket-completion.sqlcheck.sql \
   scripts/automation/ticket-repair-handoff-smoke-cleanup.sql \
   scripts/automation/ticket-repair-handoff-smoke-cleanup.sqlcheck.sql \

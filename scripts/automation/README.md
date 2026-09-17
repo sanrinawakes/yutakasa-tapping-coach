@@ -59,20 +59,42 @@ and the release observation ledger cannot create a truthful proof row on their
 own. No per-ticket owner approval is needed once that exact evidence is
 available, but there is currently no production-eligible proof producer.
 
-With `YUTAKASA_TICKET_COMPLETION_ENABLED=true`, the reconciliation workflow
+Apply `ticket-completion-notice.sql` immediately after `ticket-completion.sql`.
+It installs an enabled trigger that reserves exactly one private notification
+outbox row in the same transaction as the in-app completion reply. Without
+that trigger the completion context reports `notice_ready=false` and the caller
+stops before writing a reply. The migration refuses to run over an existing
+completed proof because those messages need an explicit notification audit.
+
+With both `YUTAKASA_TICKET_COMPLETION_ENABLED=true` and
+`YUTAKASA_TICKET_COMPLETION_NOTICE_ENABLED=true`, the reconciliation workflow
 tries the proof route before the existing manual review transition. The
 database rechecks the ticket and latest customer message, technical category,
 absence of attachments and owner-decision terms, exact PR/release/production
 identity, and three consecutive healthy observations on the same deployment
 spanning at least twenty minutes. One transaction inserts a fixed,
 scenario-specific in-app reply, resolves the ticket, marks the job replied,
-and writes an audit log; a retry returns the original message. No email is
-sent by this path. A missing or stale proof remains manual review. Keep the
-flag absent or `false` until the trusted runner, proof provenance check,
-production synthetic test, and live readback have been verified. The old
-support `reply` API still returns HTTP 409.
+and reserves the fixed "サポート画面へ返信しました" notification; a retry returns
+the original message. The scheduled outbox worker uses the existing
+`YUTAKASA_RESEND_API_KEY` GitHub Secret and a stable `Idempotency-Key` for
+one provider POST. Resend retains keys for 24 hours, so the worker stops
+automatic retries after 23 hours and records `needs_review` if the outcome is
+still uncertain. An `accepted` row means Resend returned an email ID; it does
+not prove inbox delivery. The fixed notification contains no ticket message
+body. Synthetic support addresses are suppressed at reservation. A
+`needs_review` notice remains in each scheduled due scan, keeping the workflow
+failed and visible until someone reconciles the provider outcome. Other repair
+jobs still enter manual review, while new automatic completions pause.
 
-The reconcile workflow runs at minutes 7, 17, 27, 37, 47, and 57 UTC, avoiding GitHub's busiest top-of-hour schedule boundary while retaining ten-minute spacing. GitHub can still delay or omit a scheduled event, so this timing is not a delivery guarantee. It also has an explicit manual `workflow_dispatch` entry point. Its default `probe` mode only reads the number of due release reviews and expired final investigation claims; it never calls the recovery or review RPC, the AI model, or a customer send. `reconcile` mode runs the same guarded review path as the schedule and must be selected explicitly. Both modes require the main branch, the exact repository, and `YUTAKASA_TICKET_RECONCILE_ENABLED=true`. A successful probe proves the workflow can start and read its database; it does not prove the GitHub schedule fires or that a real repair completed.
+A missing or stale ticket proof remains manual review. Keep both flags absent
+or `false` until the trusted runner, proof provenance check, production
+synthetic reply and outbox rehearsal, provider readback, and scheduled-run
+checks have been verified. Railway must also have
+`TICKET_RECONCILE_FALLBACK_ENABLED=true` and
+`TICKET_COMPLETION_NOTICE_ENABLED=true` before automatic completion is enabled.
+The old support `reply` API still returns HTTP 409.
+
+The reconcile workflow runs at minutes 7, 17, 27, 37, 47, and 57 UTC, avoiding GitHub's busiest top-of-hour schedule boundary while retaining ten-minute spacing. GitHub can still delay or omit a scheduled event, so this timing is not a delivery guarantee. It also has an explicit manual `workflow_dispatch` entry point. Its default `probe` mode only reads the number of due release reviews and expired final investigation claims, plus due notices when the notice flag is enabled; it never calls the recovery or review RPC, the AI model, or a customer send. `reconcile` mode runs the same guarded review path as the schedule and must be selected explicitly. Both modes require the main branch, the exact repository, and `YUTAKASA_TICKET_RECONCILE_ENABLED=true`. A successful probe proves the workflow can start and read its database; it does not prove the GitHub schedule fires or that a real repair completed.
 
 `ai-repair-one-shot-smoke.yml` is a manual, main-only production check independent of the repair-release ledger. It pins checkout to the dispatch SHA, verifies that it is the Ready Vercel Production Alias SHA, and runs the synthetic support notification regression tests. It then exercises desktop and mobile chat and creates one UUID-marked technical ticket through the authenticated support API. The same request ID must return the original ticket on retry; the ticket must remain queued and be excluded by the monitor's read-only PostgREST filter. The internal support queue GET is deliberately avoided because it can recover real customers' stale locks. The administrator list excludes this synthetic ticket. Cleanup validates the synthetic account and exact ticket state and messages, refuses deletion if an administrator replied or attachments, work logs, repair jobs, links, drafts or clarifications exist, then conditionally deletes the ticket using its last `updated_at` before deleting the thread and subscriber. It reads back all dependent rows twice. This workflow does not set the scheduled observer flag or certify a repair release. A successful run proves the application guard path; the operator should separately check Resend for the synthetic subject marker before claiming provider-side zero sends.
 
@@ -80,7 +102,7 @@ The reconcile workflow runs at minutes 7, 17, 27, 37, 47, and 57 UTC, avoiding G
 
 The claimed synthetic ticket context is validated inside the workflow and is **not sent to Terra or GitHub**. Terra receives the fixed text `OK` only. This test does not run `ticket-repair-investigate.mjs` or prove that Terra can turn a ticket report into a code patch; that path requires a separate isolated staging test with a known defect before live repair is enabled.
 
-For a Railway fallback, set the monitor-service-only `TICKET_RECONCILE_FALLBACK_ENABLED=true` only after the workflow's no-op probe succeeds and its scheduled behavior has been evaluated. The default is off. When enabled, the monitor makes read-only database queries for due release reviews and investigation claims past the final two-hour deadline. If either is due, the monitor records `ticket_reconcile_work_due`, checks recent GitHub runs to avoid a duplicate queued or running workflow, and dispatches `reconcile` with fixed inputs after releasing its monitor lease. Dispatch acceptance never counts as a completed review. A failed GitHub lookup or dispatch makes the cron exit nonzero and sends a fixed `ticket_reconcile_dispatch_failed` alert; no ticket body or work ID is sent to GitHub. The database RPCs recheck due conditions and ownership, so a delayed or duplicate GitHub run cannot send a customer reply.
+For a Railway fallback, set the monitor-service-only `TICKET_RECONCILE_FALLBACK_ENABLED=true` only after the workflow's no-op probe succeeds and its scheduled behavior has been evaluated. The default is off. When enabled, the monitor makes read-only database queries for due release reviews and investigation claims past the final two-hour deadline. Once the notice migration is applied, set Railway `TICKET_COMPLETION_NOTICE_ENABLED=true` to add a bounded, read-only due-outbox query. With that flag absent or false, Railway never queries the outbox table. If a review, expired claim, or notice is due, the monitor records `ticket_reconcile_work_due`, checks recent GitHub runs to avoid a duplicate queued or running workflow, and dispatches `reconcile` with fixed inputs after releasing its monitor lease. Dispatch acceptance never counts as a completed review or notification. A failed GitHub lookup or dispatch makes the cron exit nonzero and sends a fixed `ticket_reconcile_dispatch_failed` alert; no ticket body or work ID is sent to GitHub. The database RPCs recheck due conditions and ownership, so a delayed or duplicate GitHub run cannot send a customer reply.
 
 The built-in GitHub Actions `GITHUB_TOKEN` cannot be used by Railway, and using it to create a PR would suppress the required PR workflow triggers. Retain a scoped dispatch token for Railway and a scoped repair token or GitHub App installation token for PR creation.
 

@@ -634,6 +634,10 @@ export async function runLeasedMonitor({
   let observationError;
   let reconcileInspection;
   try {
+    if (secrets.TICKET_COMPLETION_NOTICE_ENABLED==="true" &&
+        secrets.TICKET_RECONCILE_FALLBACK_ENABLED!=="true") {
+      fail("ticket_reconcile_fallback_required");
+    }
     result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
     if (secrets.YUTAKASA_DRIVE_SCHEDULED_ENABLED === "true") {
       const driveSchedule = await driveScheduleImpl({
@@ -669,8 +673,11 @@ export async function runLeasedMonitor({
       if (!Number.isSafeInteger(reconcileInspection?.dueReviews) ||
           reconcileInspection.dueReviews<0 || reconcileInspection.dueReviews>100 ||
           ![0,1].includes(reconcileInspection.expiredClaims) ||
+          !Number.isSafeInteger(reconcileInspection.dueNotices) ||
+          reconcileInspection.dueNotices<0 || reconcileInspection.dueNotices>21 ||
           reconcileInspection.due !== (reconcileInspection.dueReviews>0 ||
-            reconcileInspection.expiredClaims>0)) fail("ticket_reconcile_inspection_invalid");
+            reconcileInspection.expiredClaims>0 ||
+            reconcileInspection.dueNotices>0)) fail("ticket_reconcile_inspection_invalid");
       if (reconcileInspection.due) {
         result.reasonCodes=[...new Set([...result.reasonCodes,"ticket_reconcile_work_due"])].sort();
         result.actionRequired=true;

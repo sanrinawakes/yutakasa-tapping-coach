@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
 import { completeVerifiedTicketRepair } from "./ticket-completion.mjs";
+import { drainCompletionNotices } from "./ticket-completion-notice.mjs";
 import { RepairDispatchError } from "./dispatch-repair.mjs";
 import { inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 
@@ -28,7 +29,8 @@ async function rpc(env, fetchImpl, name, body={}) {
 }
 
 export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
-  draftImpl=draftVerifiedTicketReply,completionImpl=completeVerifiedTicketRepair}={}) {
+  draftImpl=draftVerifiedTicketReply,completionImpl=completeVerifiedTicketRepair,
+  noticeImpl=drainCompletionNotices}={}) {
   const scheduled=env.GITHUB_EVENT_NAME==="schedule" && !env.TICKET_RECONCILE_MODE;
   const manual=env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
     env.TICKET_RECONCILE_MODE==="reconcile";
@@ -38,6 +40,12 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
       typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" || env.SUPABASE_SERVICE_ROLE_KEY.length<20) {
     fail("ticket_reconcile_configuration_invalid");
   }
+  // Drain replies from earlier runs before unrelated repair reconciliation can
+  // fail. A second pass below handles completions created in this run.
+  let priorNotices={examined:0,accepted:0,needsReview:0};
+  let noticeFailure=false;
+  try { priorNotices=await noticeImpl({env,fetchImpl}); }
+  catch { noticeFailure=true; }
   const recovery=await rpc(env,fetchImpl,"recover_yutakasa_ticket_repair_jobs");
   if (!Array.isArray(recovery) || recovery.length!==1 ||
       !Number.isSafeInteger(recovery[0]?.recovered) || recovery[0].recovered<0 ||
@@ -53,7 +61,8 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   let completed=0;
   let completionFailures=0;
   for (const job of jobs) {
-    if (env.TICKET_COMPLETION_ENABLED==="true") {
+    if (!noticeFailure && env.TICKET_COMPLETION_ENABLED==="true" &&
+        env.TICKET_COMPLETION_NOTICE_ENABLED==="true") {
       try {
         const completion=await completionImpl({workId:job.work_id,env,fetchImpl});
         if (["completed","existing"].includes(completion?.status)) { completed+=1; continue; }
@@ -78,10 +87,19 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     }
     if (receipt[0].status==="manual_review") manualReviews+=1;
   }
+  let newNotices={examined:0,accepted:0,needsReview:0};
+  if (!noticeFailure) {
+    try { newNotices=await noticeImpl({env,fetchImpl}); }
+    catch { noticeFailure=true; }
+  }
   // A full page is not a healthy state. The next schedule can continue, and
   // this run remains visibly failed until the backlog falls below the bound.
   if (jobs.length===100 || recovery[0].recovered===100) fail("ticket_reconcile_backlog_remaining");
+  if (noticeFailure) fail("ticket_reconcile_notification_unconfirmed");
   return {examined:jobs.length,manualReviews,drafted,draftFailures,completed,completionFailures,
+    noticesExamined:priorNotices.examined+newNotices.examined,
+    noticesAccepted:priorNotices.accepted+newNotices.accepted,
+    noticesNeedsReview:priorNotices.needsReview+newNotices.needsReview,
     recoveredClaims:recovery[0].recovered};
 }
 
