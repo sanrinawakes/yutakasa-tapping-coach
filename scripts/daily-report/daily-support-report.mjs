@@ -574,6 +574,9 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
   const updated = new Set(source.updatedTickets.map((row) => row.id));
   const sorted = [...source.tickets].sort((a, b) => a.id.localeCompare(b.id));
   const currentOpenByStatus = countBy(source.openTickets, "status");
+  const actionRequired = source.openTickets.filter((row) => row.decision_required ||
+    ["manual_review", "failed", "blocked_decision"].includes(row.automation_status))
+    .sort((a, b) => a.id.localeCompare(b.id));
   const senderLabels = { user: "利用者投稿", admin: "運営返信", system: "システム投稿" };
   const events = [
     ...source.messages.map((row) => ({ id: row.id, ticketId: row.ticket_id, at: row.created_at, label: senderLabels[row.sender_type] })),
@@ -589,13 +592,22 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     manual_review: "運営確認待ち", blocked_decision: "運営判断待ち",
     completed: "完了", failed: "自動処理失敗",
   };
+  const actionLines = actionRequired.slice(0, MAX_LISTED_TICKETS).map((ticket) =>
+    `ID ${ticket.id} | 自動処理:${automationLabels[ticket.automation_status]}` +
+    `${ticket.decision_required ? " | 運営判断要" : ""}` +
+    ` | 最終更新 ${jstTime(ticket.updated_at)}`);
+  if (actionRequired.length > MAX_LISTED_TICKETS) {
+    actionLines.push(`ほか${actionRequired.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
+  }
   const lines = [
     `対象期間: ${date} 00:00–24:00（日本時間）`,
     `作成日時: ${jstTime(preparedAt.toISOString())}`,
     "データ元: 豊かさBOTの問い合わせDB。状態は作成時点の値です。",
     "",
     `現在の未解決: ${source.openTickets.length}件（未対応${currentOpenByStatus.get("open") || 0}件、対応中${currentOpenByStatus.get("in_progress") || 0}件、利用者回答待ち${currentOpenByStatus.get("waiting_user") || 0}件）`,
-    `うち運営判断要${source.openTickets.filter((row) => row.decision_required).length}件、自動処理失敗${source.openTickets.filter((row) => row.automation_status === "failed").length}件、運営判断待ち${source.openTickets.filter((row) => row.automation_status === "blocked_decision").length}件`,
+    `うち運営判断要${source.openTickets.filter((row) => row.decision_required).length}件、自動処理失敗${source.openTickets.filter((row) => row.automation_status === "failed").length}件、運営判断待ち${source.openTickets.filter((row) => row.automation_status === "blocked_decision").length}件、運営確認待ち${source.openTickets.filter((row) => row.automation_status === "manual_review").length}件`,
+    `現在、運営が対応するチケット: ${actionRequired.length}件`,
+    ...actionLines,
     "",
     `前日に動きがあったチケット: ${sorted.length}件（新規${created.size}件、更新時刻が期間内${updated.size}件・新規を含む）`,
     `やりとり: 利用者${messages.get("user") || 0}件、運営${messages.get("admin") || 0}件、システム${messages.get("system") || 0}件`,

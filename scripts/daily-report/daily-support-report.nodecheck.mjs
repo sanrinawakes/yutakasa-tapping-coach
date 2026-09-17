@@ -436,6 +436,17 @@ test("an old unresolved ticket is counted even on a day with no new activity", (
   assert.match(report.text, /運営判断待ち1件/);
 });
 
+test("an old manual review remains visible as an action in every daily report", () => {
+  const records = { createdTickets: [], updatedTickets: [], messages: [], workLogs: [], tickets: [],
+    openTickets: [{ id: TICKET_ID, status: "in_progress", decision_required: false,
+      user_email: "PRIVATE-ADDRESS@example.com", automation_status: "manual_review",
+      updated_at: "2026-09-11T00:00:00.000Z" }] };
+  const report = buildDailyReport("2026-09-16", records, NOW);
+  assert.match(report.text, /運営確認待ち1件/);
+  assert.match(report.text, new RegExp(`現在、運営が対応するチケット:[\\s\\S]*ID ${TICKET_ID} \\| 自動処理:運営確認待ち`));
+  assert.equal(report.text.includes("PRIVATE-ADDRESS"), false);
+});
+
 test("current unresolved pagination retrieves the 501st row", async () => {
   const openTickets = Array.from({ length: 501 }, (_, index) => ({
     id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`,
