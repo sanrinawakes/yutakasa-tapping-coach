@@ -66,7 +66,7 @@ BEGIN
   SELECT * INTO v_ticket FROM public.support_tickets t
     WHERE t.id=v_job.ticket_id FOR UPDATE;
   SELECT * INTO v_release FROM public.yutakasa_repair_releases r
-    WHERE r.pr_number=p_pr_number;
+    WHERE r.pr_number=p_pr_number FOR SHARE;
   IF v_job.status<>'pr_open' OR v_job.pr_number IS DISTINCT FROM p_pr_number
     OR v_job.head_sha IS DISTINCT FROM p_head_sha
     OR v_job.latest_user_message_id IS DISTINCT FROM p_latest_user_message_id
@@ -196,7 +196,7 @@ BEGIN
     RETURN QUERY SELECT v_existing.id,FALSE; RETURN;
   END IF;
   SELECT * INTO v_release FROM public.yutakasa_repair_releases r
-    WHERE r.pr_number=v_job.pr_number;
+    WHERE r.pr_number=v_job.pr_number FOR SHARE;
   IF v_job.status<>'pr_open' OR v_ticket.status<>'in_progress'
     OR v_ticket.automation_status<>'awaiting_repair'
     OR v_ticket.category<>'technical' OR v_ticket.decision_required
@@ -215,6 +215,7 @@ BEGIN
     OR v_proof.merge_sha IS DISTINCT FROM v_release.merge_sha
     OR v_proof.deployment_id IS DISTINCT FROM v_release.deployment_id
     OR v_release.status<>'verified' OR v_release.verified_at IS NULL
+    OR v_release.verified_at>clock_timestamp()+INTERVAL '2 minutes'
     OR v_release.healthy_count<3 OR v_release.first_healthy_at IS NULL
     OR v_release.last_healthy_at IS NULL
     OR v_release.last_healthy_at-v_release.first_healthy_at<INTERVAL '20 minutes'
