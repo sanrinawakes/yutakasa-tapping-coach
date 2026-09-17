@@ -42,3 +42,5 @@ jobs:
         run: npm run build
       - name: Docker build
         run: docker build --file scripts/daily-report/Dockerfile --tag yutakasa-daily-support-report:ci .
+      - name: Watchdog Docker build
+        run: docker build --file scripts/daily-report/Watchdog.Dockerfile --tag yutakasa-daily-report-watchdog:ci .

@@ -65,6 +65,30 @@ GitHub Actionsのスケジュールは遅延する場合があるため、25分�
 公開リポジトリの定期ワークフローは、リポジトリに60日間活動がないとGitHubが
 自動停止する。GitHub側の定期実行履歴も運用上確認する。
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
+
+GitHubの定時起動を補うRailwayサービス `yutakasa-daily-report-watchdog` も定義する。
+毎時35分（UTC）に**同じ** `daily-support-report-watchdog.mjs` を起動するため、
+対象日、宛先、本文、Resendの `Idempotency-Key` はGitHub実行と一致する。
+両方が失敗通知を試みても、Resendの24時間の冪等期間内では宛先ごとに1通となる。
+Railwayがcronを起動しない障害とGitHubが定時実行を起動しない障害はそれぞれ
+あり得るため、両方の実行履歴を確認する。Resend自体の停止はこの二重化で解決しない。
+
+Railway側の定義は `scripts/automation/.railway/railway.ts` に含めたが、
+**この変更をマージするだけでは新サービスは作成されない**。
+まず作業ディレクトリをRailwayの `yutakasa-support-automation` プロジェクトの
+`production` 環境へlinkする。ACTI等の別プロジェクトへlinkしたままplanを
+実行すると、別サービスの削除案が出るため、そのplanは絶対に適用しない。
+新サービスを空の状態で作成し、次の5変数を設定してから、
+`railway config plan --file scripts/automation/.railway/railway.ts` を実行する。
+既存の日報・監視サービスに予期しない変更や削除がないことを確認した場合だけ
+設定を適用する。新サービスには
+`YUTAKASA_SUPABASE_URL`、`YUTAKASA_SUPABASE_SERVICE_ROLE_KEY`、
+`YUTAKASA_RESEND_API_KEY`、`YUTAKASA_REPORT_RECIPIENT_1`、
+`YUTAKASA_REPORT_RECIPIENT_2` を設定する。後ろの2件は承認済み日報宛先と
+完全一致させる。監視スクリプトは宛先ハッシュも照合し、一致しなければ送信しない。
+変数設定とplan確認後にのみRailway定義を適用し、正常な日報の日に
+手動実行で `state: healthy`・通知0件を確認する。次の `:35` cron起動と
+同じ結果を確認してから運用中と判断する。
 前日分の障害監視は `yutakasa_monitor_runs` の完了記録から集計する。
 監視用SQLの未導入・取得失敗・記録0件・記録のない時間帯は
 「監視結果未確認」と明記する。自動修正PRについては専用の
@@ -82,6 +106,7 @@ CIの表示は集計時点の状態であり、本番検証済みは専用台帳
 node --test scripts/daily-report/*.nodecheck.mjs
 sh scripts/daily-report/test-ledger-sql.sh
 docker build --file scripts/daily-report/Dockerfile --tag yutakasa-daily-support-report:local .
+docker build --file scripts/daily-report/Watchdog.Dockerfile --tag yutakasa-daily-report-watchdog:local .
 railway config plan --file scripts/daily-report/.railway/railway.ts
 ```
 

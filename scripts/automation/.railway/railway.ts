@@ -22,6 +22,29 @@ const report = service("yutakasa-daily-support-report", {
   },
 });
 
+const reportWatchdog = service("yutakasa-daily-report-watchdog", {
+  source: github("sanrinawakes/yutakasa-tapping-coach", { branch: "main" }),
+  build: {
+    builder: "DOCKERFILE",
+    dockerfilePath: "/scripts/daily-report/Watchdog.Dockerfile",
+    watchPatterns: ["scripts/daily-report/**"],
+  },
+  deploy: {
+    startCommand: "node /app/daily-support-report-watchdog.mjs",
+    // GitHub checks at :25; this independent Railway run follows at :35.
+    cronSchedule: "35 * * * *",
+    restartPolicyType: "NEVER",
+    numReplicas: 1,
+  },
+  env: {
+    YUTAKASA_SUPABASE_URL: preserve(),
+    YUTAKASA_SUPABASE_SERVICE_ROLE_KEY: preserve(),
+    YUTAKASA_RESEND_API_KEY: preserve(),
+    YUTAKASA_REPORT_RECIPIENT_1: preserve(),
+    YUTAKASA_REPORT_RECIPIENT_2: preserve(),
+  },
+});
+
 const monitor = service("yutakasa-support-monitor", {
   source: github("sanrinawakes/yutakasa-tapping-coach", { branch: "main" }),
   build: {
@@ -50,5 +73,5 @@ const monitor = service("yutakasa-support-monitor", {
 });
 
 export default defineRailway(() =>
-  project("yutakasa-support-automation", { resources: [report, monitor] }),
+  project("yutakasa-support-automation", { resources: [report, monitor, reportWatchdog] }),
 );
