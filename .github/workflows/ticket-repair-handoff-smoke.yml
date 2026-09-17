@@ -1,0 +1,44 @@
+name: One-shot support repair handoff smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A synthetic subscriber must never overlap a release observation or another
+# one-shot run, even though the ticket is excluded from the production queue.
+concurrency:
+  group: yutakasa-ai-repair-observe
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Verify support notification and handoff cleanup contracts
+        run: |
+          npm test -- src/lib/server/support-service.test.ts
+          node --test scripts/automation/ticket-repair-handoff-smoke.nodecheck.mjs scripts/automation/ai-repair-functional-smoke.nodecheck.mjs
+      - name: Probe isolated claim, handoff, queued job, and cleanup
+        env:
+          TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
+        run: node scripts/automation/ticket-repair-handoff-smoke.mjs
