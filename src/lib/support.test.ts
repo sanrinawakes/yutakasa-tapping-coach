@@ -34,6 +34,8 @@ describe("support helpers", () => {
     expect(
       requiresOwnerDecision("technical", "画面が止まる", "個人データを削除してください")
     ).toBe(true);
+    expect(requiresOwnerDecision("technical", "Login", "I need a refund for this payment.")).toBe(true);
+    expect(requiresOwnerDecision("other", "Privacy", "Please delete my personal data.")).toBe(true);
   });
 
   it("accepts valid UUIDs and rejects malformed request IDs", () => {
