@@ -23,6 +23,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: node --test scripts/automation/ticket-repair-regression-evidence.nodecheck.mjs
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --maxWorkers=2
