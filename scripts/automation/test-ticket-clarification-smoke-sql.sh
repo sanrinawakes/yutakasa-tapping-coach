@@ -21,6 +21,7 @@ for file in scripts/support-migration-harness.sql \
   scripts/automation/ticket-repair-bridge.sql \
   scripts/automation/ticket-reply-draft.sql \
   scripts/automation/ticket-clarification.sql \
+  scripts/automation/ticket-clarification-notice.sql \
   scripts/automation/ticket-clarification-smoke-cleanup.sql \
   scripts/automation/ticket-clarification-smoke-cleanup.sqlcheck.sql; do
   if [[ "$file" == scripts/automation/repair-release-ledger.sql ]]; then

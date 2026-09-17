@@ -796,6 +796,11 @@ export async function appendAutomationClarification(params: {
   latestUserMessageId: string;
   ticketVersion: string;
 }): Promise<{ message_id: string; created: boolean }> {
+  const { data: noticeReady, error: noticeError } = await getSupabase()
+    .rpc("yutakasa_clarification_notice_ready");
+  if (noticeError || noticeReady !== true) {
+    throw new SupportRequestError("返信通知の予約を確認できません。", 409);
+  }
   const { data, error } = await getSupabase().rpc("append_yutakasa_ticket_clarification", {
     p_ticket_id: params.ticketId,
     p_lock_token: params.lockToken,

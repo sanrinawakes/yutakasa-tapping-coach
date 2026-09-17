@@ -15,7 +15,8 @@ const ACK = "お問い合わせを受け付けました。内容を確認して�
 const REPLY = "お問い合わせありがとうございます。状況を確認するため、問題が起きた画面、直前に行った操作、表示されたエラー文（あれば）、発生した日時を教えてください。パスワードや認証コードは送らないでください。";
 const RELATED = ["support_messages", "support_work_logs", "support_attachments",
   "yutakasa_ticket_clarifications", "yutakasa_repair_ticket_links",
-  "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts"];
+  "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts",
+  "yutakasa_ticket_clarification_notices"];
 
 export class ClarificationSmokeError extends Error {
   constructor(code) { super(code); this.name = "ClarificationSmokeError"; this.code = code; }
@@ -164,7 +165,8 @@ async function cleanup(env, fetchImpl, runId, requestId, lockToken, email) {
 }
 
 async function assertCompleted(env, fetchImpl, ticketId, email, userMessageId, replyMessageId) {
-  const [tickets, messages, logs, ledger, attachments, links, jobs, drafts] = await Promise.all([
+  const [tickets, messages, logs, ledger, notices, attachments, links, jobs, drafts] =
+    await Promise.all([
     rows(env, fetchImpl, "support_tickets", { id: `eq.${ticketId}` },
       "id,user_email,status,automation_status,automation_lock_token,decision_required"),
     rows(env, fetchImpl, "support_messages", { ticket_id: `eq.${ticketId}` },
@@ -173,6 +175,9 @@ async function assertCompleted(env, fetchImpl, ticketId, email, userMessageId, r
       "event_type,metadata"),
     rows(env, fetchImpl, "yutakasa_ticket_clarifications", { ticket_id: `eq.${ticketId}` },
       "ticket_id,latest_user_message_id,reply_message_id"),
+    rows(env, fetchImpl, "yutakasa_ticket_clarification_notices",
+      { ticket_id: `eq.${ticketId}` },
+      "ticket_id,message_id,status,provider_email_id,attempt_count"),
     ...["support_attachments", "yutakasa_repair_ticket_links",
       "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts"].map((table) =>
       rows(env, fetchImpl, table, { ticket_id: `eq.${ticketId}` }, "ticket_id")),
@@ -195,6 +200,9 @@ async function assertCompleted(env, fetchImpl, ticketId, email, userMessageId, r
     ledger.length !== 1 || ledger[0].ticket_id !== ticketId ||
     ledger[0].latest_user_message_id !== userMessageId ||
     ledger[0].reply_message_id !== replyMessageId ||
+    notices.length !== 1 || notices[0].ticket_id !== ticketId ||
+    notices[0].message_id !== replyMessageId || notices[0].status !== "suppressed" ||
+    notices[0].provider_email_id !== null || notices[0].attempt_count !== 0 ||
     attachments.length || links.length || jobs.length || drafts.length) {
     fail("clarification_smoke_state_invalid");
   }

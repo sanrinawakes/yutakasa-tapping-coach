@@ -102,6 +102,10 @@ function fixture({ flagEnabled = true, replyCreated = true, cleanupFails = false
         case "yutakasa_ticket_clarifications": return response(200, [{
           ticket_id: TICKET, latest_user_message_id: USER, reply_message_id: REPLY_ID,
         }]);
+        case "yutakasa_ticket_clarification_notices": return response(200, [{
+          ticket_id: TICKET, message_id: REPLY_ID, status: "suppressed",
+          provider_email_id: null, attempt_count: 0,
+        }]);
         default: return response(200, []);
       }
     }

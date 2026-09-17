@@ -60,6 +60,37 @@ test("notice-only backlog triggers fixed reconcile dispatch after read-only prob
   assert.equal(JSON.stringify(calls[1].init.body).includes(workId),false);
 });
 
+test("clarification notice backlog triggers the same fixed reconcile dispatch",async()=>{
+  const requests=[];
+  const enabled={...secrets,TICKET_CLARIFICATION_NOTICE_ENABLED:"true"};
+  const inspection=await inspectDueTicketReconciliations({secrets:enabled,now,
+    fetchImpl:async(url,init)=>{
+      requests.push({url:String(url),init});
+      return new Response(JSON.stringify(requests.length===3?[{ticket_id:workId}]:[]));
+    }});
+  assert.deepEqual(inspection,{dueReviews:0,expiredClaims:0,dueNotices:1,due:true});
+  assert.equal(requests[2].url.endsWith("/rpc/list_due_yutakasa_clarification_notices"),true);
+  assert.equal(requests[2].init.method,"POST");
+  const calls=[];
+  await dispatchDueTicketReconciliation({secrets:enabled,inspection,
+    fetchImpl:async(url,init)=>{
+      calls.push({url:String(url),init});
+      return calls.length===1?new Response(JSON.stringify({workflow_runs:[]})):
+        new Response(null,{status:204});
+    }});
+  assert.deepEqual(JSON.parse(calls[1].init.body),{ref:"main",inputs:{mode:"reconcile"}});
+  assert.equal(JSON.stringify(calls[1].init.body).includes(workId),false);
+});
+
+test("enabled clarification notice probe fails closed when its RPC is unavailable",async()=>{
+  let requests=0;
+  await assert.rejects(()=>inspectDueTicketReconciliations({secrets:{
+    ...secrets,TICKET_CLARIFICATION_NOTICE_ENABLED:"true"},now,
+    fetchImpl:async()=>new Response(JSON.stringify([]),{status:++requests===3?404:200})}),
+  (error)=>error instanceof RepairDispatchError &&
+    error.code==="ticket_reconcile_clarification_notice_probe_unavailable");
+});
+
 test("notice probe is absent when disabled and fails closed when enabled but unavailable",async()=>{
   let calls=0;
   const disabled=await inspectDueTicketReconciliations({secrets,now,fetchImpl:async()=>{

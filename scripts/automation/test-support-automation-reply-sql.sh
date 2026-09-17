@@ -38,7 +38,10 @@ for file in scripts/support-migration-harness.sql supabase-migration-license.sql
   scripts/automation/ticket-reply-draft.sql \
   scripts/automation/ticket-reply-draft.sqlcheck.sql \
   scripts/automation/ticket-clarification.sql \
+  scripts/automation/ticket-clarification-notice.sql \
+  scripts/automation/ticket-clarification-notice.sql \
   scripts/automation/ticket-clarification.sqlcheck.sql \
+  scripts/automation/ticket-clarification-notice.sqlcheck.sql \
   scripts/automation/ticket-completion.sql \
   scripts/automation/ticket-completion-notice.sql \
   scripts/automation/ticket-completion-notice.sql \
