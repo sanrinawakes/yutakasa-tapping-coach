@@ -6,6 +6,7 @@ import {
   claimSupportTicket,
   createSupportTicket,
   finishLockedSupportTicket,
+  getAdminSupportTicket,
   listPendingAutomatedSupportTickets,
   recoverStaleSupportAutomationTickets,
   renewSupportAutomationLock,
@@ -45,6 +46,7 @@ describe("support automation leases", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.TICKET_REPLY_DRAFTS_ENABLED;
   });
 
   it("recovers an abandoned investigation and records why it was requeued", async () => {
@@ -182,6 +184,7 @@ describe("support automation leases", () => {
   });
 
   it("uses an atomic latest-message check for a reviewed draft and does not resend on retry", async () => {
+    process.env.TICKET_REPLY_DRAFTS_ENABLED = "true";
     const latestId = "a61fb99e-874b-4111-a95a-4f4cb268e48c";
     const workId = "a1fc220d-19a8-447a-a19d-feac919af642";
     const rpc = vi.fn().mockResolvedValue({data:[{message_id:ticketId,created:false}],error:null});
@@ -202,6 +205,37 @@ describe("support automation leases", () => {
     expect(rpc).toHaveBeenCalledTimes(1);
     await expect(appendAdminSupportMessage({ticketId,body:"現在の表示を教えてください。",
       expectedLatestUserMessageId:latestId,draftWorkId:workId,resolve:true})).rejects.toThrow();
+  });
+
+  it("opens a manual-review ticket before the draft table migration when the flag is off", async () => {
+    delete process.env.TICKET_REPLY_DRAFTS_ENABLED;
+    const userMessage = {id:"a61fb99e-874b-4111-a95a-4f4cb268e48c",
+      ticket_id:ticketId,sender_type:"user",sender_email:"member@example.com",
+      body:"送信できません",created_at:"2026-08-02T00:00:00.000Z"};
+    const rows:Record<string,unknown[]> = {
+      support_work_logs:[],support_messages:[userMessage],support_attachments:[],
+    };
+    const from=vi.fn((table:string)=>{
+      if(table==="yutakasa_ticket_reply_drafts") throw new Error("draft table absent");
+      return {
+        select:vi.fn().mockReturnThis(),eq:vi.fn().mockReturnThis(),
+        maybeSingle:vi.fn().mockResolvedValue({data:{...ticket(),
+          automation_status:"manual_review"},error:null}),
+        order:vi.fn().mockResolvedValue({data:rows[table] ?? [],error:null}),
+      };
+    });
+    getSupabaseMock.mockReturnValue({from} as never);
+    for (const flag of [undefined,"false","TRUE"]) {
+      if (flag === undefined) delete process.env.TICKET_REPLY_DRAFTS_ENABLED;
+      else process.env.TICKET_REPLY_DRAFTS_ENABLED = flag;
+      await expect(getAdminSupportTicket(ticketId,{markRead:false}))
+        .resolves.toMatchObject({ticket:{id:ticketId},reply_draft:null,
+          messages:[{id:userMessage.id}]});
+      expect(from).not.toHaveBeenCalledWith("yutakasa_ticket_reply_drafts");
+      await expect(appendAdminSupportMessage({ticketId,body:"状況を教えてください。",
+        expectedLatestUserMessageId:userMessage.id,draftWorkId:lockToken,
+        resolve:false})).rejects.toThrow("返信案は現在利用できません");
+    }
   });
 
   it("asks a fixed in-app clarification through the guarded RPC without email",async()=>{

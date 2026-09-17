@@ -618,7 +618,8 @@ export async function getAdminSupportTicket(
     body: string;
     created_at: string;
   } | null = null;
-  if (latestUser && ticket.automation_status === "manual_review" &&
+  if (process.env.TICKET_REPLY_DRAFTS_ENABLED === "true" && latestUser &&
+      ticket.automation_status === "manual_review" &&
       ticket.status === "in_progress" &&
       ticket.category === "technical" && !ticket.decision_required) {
     const { data: draft, error: draftError } = await getSupabase()
@@ -658,6 +659,9 @@ export async function appendAdminSupportMessage(params: {
   const checked = Boolean(params.expectedLatestUserMessageId && params.draftWorkId);
   if (Boolean(params.expectedLatestUserMessageId) !== Boolean(params.draftWorkId)) {
     throw new SupportRequestError("返信案の指定が正しくありません。", 400);
+  }
+  if (checked && process.env.TICKET_REPLY_DRAFTS_ENABLED !== "true") {
+    throw new SupportRequestError("返信案は現在利用できません。", 409);
   }
   if (checked && params.resolve) {
     throw new SupportRequestError("確認待ちの返信案で対応完了にはできません。", 400);
