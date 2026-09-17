@@ -164,7 +164,8 @@ test("an unconfirmed cleanup prevents healthy evidence", async () => {
   assert.notEqual(db.getAccount(), null);
 });
 
-function syntheticSupportDatabase({ unexpectedWorkLog = false, ticketDeleteFails = false } = {}) {
+function syntheticSupportDatabase({ unexpectedWorkLog = false, ticketDeleteFails = false,
+  adminReply = false, changedState = false, concurrentUpdate = false } = {}) {
   const runId = "22222222-2222-4222-8222-222222222222";
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
   const ticketId = "44444444-4444-4444-8444-444444444444";
@@ -176,9 +177,23 @@ function syntheticSupportDatabase({ unexpectedWorkLog = false, ticketDeleteFails
     created_at: new Date(Date.now() - 40 * 60_000).toISOString() };
   const ticket = { id: ticketId, user_email: email,
     subject: "__YUTAKASA_AI_REPAIR_SMOKE_V1__ support", client_request_id: requestId,
-    status: "open", automation_status: "queued", decision_required: false };
+    category: "technical", status: "open", automation_status: changedState ? "investigating" : "queued",
+    decision_required: false, updated_at: "2026-09-17T00:00:00.000Z" };
   let accounts = [account, { id: "33333333-3333-4333-8333-333333333333", email: "customer@example.com" }];
   let tickets = [ticket];
+  let messages = [
+    { id: "77777777-7777-4777-8777-777777777777", ticket_id: ticketId,
+      sender_type: "user", sender_email: email,
+      body: "__YUTAKASA_AI_REPAIR_SMOKE_V1__ technical support route check",
+      client_request_id: requestId },
+    { id: "88888888-8888-4888-8888-888888888888", ticket_id: ticketId,
+      sender_type: "system", sender_email: null,
+      body: "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。",
+      client_request_id: "99999999-9999-4999-8999-999999999999" },
+    ...(adminReply ? [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ticket_id: ticketId,
+      sender_type: "admin", sender_email: "admin@example.com", body: "返信済み",
+      client_request_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }] : []),
+  ];
   let threads = [{ id: threadId, user_email: email, title: "新しいチャット", created_at: new Date().toISOString() }];
   const calls = [];
   const fetchImpl = async (rawUrl, init) => {
@@ -202,8 +217,17 @@ function syntheticSupportDatabase({ unexpectedWorkLog = false, ticketDeleteFails
         assert.equal(url.searchParams.get("id"), `eq.${ticketId}`);
         assert.equal(url.searchParams.get("user_email"), `eq.${email}`);
         assert.equal(url.searchParams.get("client_request_id"), `eq.${requestId}`);
+        assert.equal(url.searchParams.get("status"), "eq.open");
+        assert.equal(url.searchParams.get("automation_status"), "eq.queued");
+        assert.equal(url.searchParams.get("decision_required"), "eq.false");
+        assert.equal(url.searchParams.get("updated_at"), `eq.${ticket.updated_at}`);
         if (ticketDeleteFails) return Response.json([]);
+        if (concurrentUpdate) {
+          ticket.updated_at = "2026-09-17T00:00:01.000Z";
+          return Response.json([]);
+        }
         tickets = [];
+        messages = [];
         return Response.json([{ id: ticketId }]);
       }
       return Response.json(tickets);
@@ -221,7 +245,11 @@ function syntheticSupportDatabase({ unexpectedWorkLog = false, ticketDeleteFails
       assert.equal(url.searchParams.get("select"), "ticket_id");
       return Response.json(unexpectedWorkLog ? [{ ticket_id: ticketId }] : []);
     }
-    if (["support_messages", "support_attachments", "yutakasa_repair_ticket_links",
+    if (table === "support_messages") {
+      assert.ok(["ticket_id", "id,ticket_id,sender_type,sender_email,body,client_request_id"].includes(url.searchParams.get("select")));
+      return Response.json(messages);
+    }
+    if (["support_attachments", "yutakasa_repair_ticket_links",
       "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts",
       "yutakasa_ticket_clarifications", "chat_messages", "otp_codes"].includes(table)) {
       if (!["chat_messages", "otp_codes"].includes(table)) {
@@ -259,6 +287,29 @@ test("unconfirmed synthetic ticket deletion never reaches subscriber deletion", 
   assert.deepEqual(db.calls.filter((call) => call.method === "DELETE").map((call) => call.table), ["support_tickets"]);
 });
 
+test("an administrator reply prevents synthetic ticket deletion and preserves the subscriber", async () => {
+  const db = syntheticSupportDatabase({ adminReply: true });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_support_messages_changed");
+  assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
+  assert.equal(db.getState().tickets.length, 1);
+});
+
+test("a changed ticket state prevents synthetic ticket deletion", async () => {
+  const db = syntheticSupportDatabase({ changedState: true });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_support_ticket_changed");
+  assert.equal(db.calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("concurrent updated_at change makes the conditional delete return zero", async () => {
+  const db = syntheticSupportDatabase({ concurrentUpdate: true });
+  await assert.rejects(() => reapStaleSyntheticIdentities(env, db.fetchImpl),
+    (error) => error instanceof FunctionalSmokeError && error.code === "smoke_cleanup_ticket_unconfirmed");
+  assert.deepEqual(db.calls.filter((call) => call.method === "DELETE").map((call) => call.table), ["support_tickets"]);
+  assert.equal(db.getState().accounts.length, 2);
+});
+
 test("support smoke confirms idempotent authenticated API storage and read-only queue isolation", async () => {
   const runId = "22222222-2222-4222-8222-222222222222";
   const email = `yutakasa-auto-smoke+${runId}@example.invalid`;
@@ -277,7 +328,7 @@ test("support smoke confirms idempotent authenticated API storage and read-only 
       assert.equal(input.category, "technical");
       if (!ticket) {
         ticket = { id: ticketId, user_email: email, subject: input.subject,
-          client_request_id: input.clientRequestId, status: "open",
+          client_request_id: input.clientRequestId, category: "technical", status: "open",
           automation_status: "queued", decision_required: false };
         messages = [
           { id: messageId, ticket_id: ticketId, sender_type: "user", body: input.body,

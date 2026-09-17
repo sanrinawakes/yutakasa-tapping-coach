@@ -9,6 +9,7 @@ const TEST_ACCOUNT_MARKER = "yutakasa-ai-repair-smoke-v1";
 const TEST_MESSAGE_MARKER = "__YUTAKASA_AI_REPAIR_SMOKE_V1__";
 const TEST_SUPPORT_SUBJECT = `${TEST_MESSAGE_MARKER} support`;
 const TEST_SUPPORT_BODY = `${TEST_MESSAGE_MARKER} technical support route check`;
+const TEST_SUPPORT_ACK = "お問い合わせを受け付けました。内容を確認して対応します。調査内容によっては2〜3日かかる場合があります。対応後、この画面でご連絡します。";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
@@ -119,7 +120,7 @@ async function listMessages(env, fetchImpl, threadId) {
 async function listSupportTickets(env, fetchImpl, email) {
   const rows = await databaseRequest(env, fetchImpl, "support_tickets", {
     user_email: `eq.${email}`,
-    select: "id,user_email,subject,client_request_id,status,automation_status,decision_required",
+    select: "id,user_email,category,subject,client_request_id,status,automation_status,decision_required,updated_at",
     limit: "2",
   });
   if (rows.length > 1 || rows.some((row) => !UUID.test(row?.id ?? "") ||
@@ -133,6 +134,31 @@ async function supportRows(env, fetchImpl, table, ticketId) {
   return databaseRequest(env, fetchImpl, table, {
     ticket_id: `eq.${ticketId}`, select: "ticket_id", limit: "20",
   });
+}
+
+async function verifySyntheticTicketBeforeDelete(env, fetchImpl, email, ticket) {
+  if (ticket.category !== "technical" || ticket.status !== "open" ||
+      ticket.automation_status !== "queued" || ticket.decision_required !== false ||
+      typeof ticket.updated_at !== "string" ||
+      !Number.isFinite(Date.parse(ticket.updated_at))) {
+    fail("smoke_support_ticket_changed");
+  }
+  const messages = await databaseRequest(env, fetchImpl, "support_messages", {
+    ticket_id: `eq.${ticket.id}`,
+    select: "id,ticket_id,sender_type,sender_email,body,client_request_id",
+    limit: "3",
+  });
+  if (messages.length !== 2 || messages.some((row) =>
+      !UUID.test(row?.id ?? "") || row.ticket_id !== ticket.id) ||
+      messages.filter((row) => row.sender_type === "user" &&
+        row.sender_email === email && row.body === TEST_SUPPORT_BODY &&
+        row.client_request_id === ticket.client_request_id).length !== 1 ||
+      messages.filter((row) => row.sender_type === "system" &&
+        row.sender_email === null && row.body === TEST_SUPPORT_ACK &&
+        UUID.test(row.client_request_id ?? "") &&
+        row.client_request_id !== ticket.client_request_id).length !== 1) {
+    fail("smoke_support_messages_changed");
+  }
 }
 
 async function assertMessagesSaved(env, fetchImpl, threadId, prompts) {
@@ -278,6 +304,7 @@ export async function checkSyntheticSupportTicket(env, fetchImpl, email, token) 
   const tickets = await listSupportTickets(env, fetchImpl, email);
   if (tickets.length !== 1 || tickets[0].id !== first.result.ticket_id ||
       tickets[0].client_request_id !== clientRequestId ||
+      tickets[0].category !== "technical" ||
       tickets[0].status !== "open" || tickets[0].automation_status !== "queued" ||
       tickets[0].decision_required !== false) fail("smoke_support_persistence_invalid");
   const messages = await databaseRequest(env, fetchImpl, "support_messages", {
@@ -321,6 +348,7 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
   // Never erase a ticket that acquired external files or repair work. Such a
   // row means the queue isolation failed and needs investigation.
   for (const ticket of tickets) {
+    await verifySyntheticTicketBeforeDelete(env, fetchImpl, email, ticket);
     for (const table of SUPPORT_UNEXPECTED_DEPENDENTS) {
       if ((await supportRows(env, fetchImpl, table, ticket.id)).length !== 0) {
         fail("smoke_support_unexpected_side_effect");
@@ -332,10 +360,19 @@ async function cleanupAndVerify(env, fetchImpl, email, runId) {
   });
   if (otps.length !== 0) fail("smoke_unexpected_otp_data");
   for (const ticket of tickets) {
+    const current = await listSupportTickets(env, fetchImpl, email);
+    if (current.length !== 1 || current[0].id !== ticket.id) {
+      fail("smoke_support_ticket_changed");
+    }
+    await verifySyntheticTicketBeforeDelete(env, fetchImpl, email, current[0]);
     const deleted = await databaseRequest(env, fetchImpl, "support_tickets", {
       id: `eq.${ticket.id}`,
       user_email: `eq.${email}`,
       client_request_id: `eq.${ticket.client_request_id}`,
+      status: "eq.open",
+      automation_status: "eq.queued",
+      decision_required: "eq.false",
+      updated_at: `eq.${current[0].updated_at}`,
       select: "id",
     }, "DELETE");
     if (deleted.length !== 1 || deleted[0]?.id !== ticket.id) fail("smoke_cleanup_ticket_unconfirmed");
