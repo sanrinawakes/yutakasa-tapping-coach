@@ -20,7 +20,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS yutakasa_ticket_reply_drafts_used_message_idx
   ON public.yutakasa_ticket_reply_drafts(used_message_id)
   WHERE used_message_id IS NOT NULL;
 ALTER TABLE public.yutakasa_ticket_reply_drafts ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.yutakasa_ticket_reply_drafts FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.yutakasa_ticket_reply_drafts FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.yutakasa_ticket_reply_drafts TO service_role;
 
 -- The private context is returned only to a service-role caller after release
