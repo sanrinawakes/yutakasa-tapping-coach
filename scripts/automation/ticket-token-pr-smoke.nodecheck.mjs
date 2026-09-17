@@ -94,10 +94,12 @@ test("cleanup closes only the exact draft and deletes only its unchanged branch"
         base: { ref: "main" }, head: { ref: branch, sha: headSha,
           repo: { full_name: repo } } }]), { status: 200 });
     }
-    if (parsed.pathname.endsWith("/pulls/99") && init.method === "PATCH") {
-      closed = true;
-      return new Response(JSON.stringify({ number: 99, state: "closed", merged_at: null }),
-        { status: 200 });
+    if (parsed.pathname.endsWith("/pulls/99")) {
+      if (init.method === "PATCH") closed = true;
+      return new Response(JSON.stringify({ number: 99, title, body,
+        state: closed ? "closed" : "open", draft: true, merged_at: null,
+        base: { ref: "main" }, head: { ref: branch, sha: headSha,
+          repo: { full_name: repo } } }), { status: 200 });
     }
     if (parsed.pathname.includes("/git/ref/heads/") && init.method === "GET") {
       return deleted ? new Response(null, { status: 404 }) :

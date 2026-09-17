@@ -142,7 +142,10 @@ async function findPr(env, fetchImpl, state) {
   if (!Array.isArray(rows) || rows.length > 10) fail("smoke_pr_lookup_invalid");
   if (rows.length === 0) return null;
   if (rows.length !== 1) fail("smoke_pr_ambiguous");
-  const pr = rows[0];
+  return validatePr(rows[0], state);
+}
+
+function validatePr(pr, state) {
   if (!Number.isSafeInteger(pr?.number) || pr.number < 1 ||
       pr.title !== state.title || pr.body !== state.body ||
       pr.base?.ref !== "main" || pr.head?.ref !== state.branch ||
@@ -336,8 +339,8 @@ export async function cleanupTokenPrSmoke({ env = process.env,
     await deleteRef(env, state);
   }
   const remaining = await api(env, fetchImpl, `/git/ref/heads/${state.branch}`, { allow404: true });
-  const finalPr = await findPr(env, fetchImpl, state);
-  if (remaining !== null || (finalPr && (finalPr.state !== "closed" || finalPr.merged_at !== null))) {
+  const finalPr = pr ? validatePr(await api(env, fetchImpl, `/pulls/${pr.number}`), state) : null;
+  if (remaining !== null || (finalPr && finalPr.state !== "closed")) {
     fail("smoke_cleanup_unconfirmed");
   }
   return { ok: true, status: "cleaned", prClosed: finalPr !== null,
