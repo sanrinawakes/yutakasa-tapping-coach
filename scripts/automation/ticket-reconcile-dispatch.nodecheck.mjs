@@ -82,6 +82,46 @@ test("clarification notice backlog triggers the same fixed reconcile dispatch",a
   assert.equal(JSON.stringify(calls[1].init.body).includes(workId),false);
 });
 
+test("technical escalation backlog dispatches fixed reconciliation without a ticket ID",async()=>{
+  const requests=[];
+  const enabled={...secrets,TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED:"true"};
+  const messageId="a4bf91ce-065c-4675-bc24-df2489096c12";
+  const inspection=await inspectDueTicketReconciliations({secrets:enabled,now,
+    fetchImpl:async(url,init)=>{
+      requests.push({url:String(url),init});
+      return new Response(JSON.stringify(requests.length===3
+        ?[{ticket_id:workId,latest_user_message_id:messageId}]:[]));
+    }});
+  assert.deepEqual(inspection,{dueReviews:0,expiredClaims:0,dueNotices:1,due:true});
+  assert.equal(requests[2].url.endsWith("/rpc/list_due_yutakasa_technical_escalation_notices"),true);
+  assert.equal(requests[2].init.method,"POST");
+  const calls=[];
+  await dispatchDueTicketReconciliation({secrets:enabled,inspection,
+    fetchImpl:async(url,init)=>{
+      calls.push({url:String(url),init});
+      return calls.length===1?new Response(JSON.stringify({workflow_runs:[]})):
+        new Response(null,{status:204});
+    }});
+  assert.deepEqual(JSON.parse(calls[1].init.body),{ref:"main",inputs:{mode:"reconcile"}});
+  assert.equal(JSON.stringify(calls[1].init.body).includes(workId),false);
+});
+
+test("technical escalation probe fails closed on unavailable or malformed RPC",async()=>{
+  for(const body of [null,[{ticket_id:workId,latest_user_message_id:"private text"}]]){
+    let requests=0;
+    await assert.rejects(()=>inspectDueTicketReconciliations({secrets:{
+      ...secrets,TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED:"true"},now,
+      fetchImpl:async()=>{
+        requests+=1;
+        return new Response(JSON.stringify(requests===3?(body??[]):[]),
+          {status:body===null&&requests===3?404:200});
+      }}),
+    (error)=>error instanceof RepairDispatchError&&
+      error.code===(body===null?"ticket_reconcile_technical_notice_probe_unavailable":
+        "ticket_reconcile_technical_notice_probe_invalid"));
+  }
+});
+
 test("enabled clarification notice probe fails closed when its RPC is unavailable",async()=>{
   let requests=0;
   await assert.rejects(()=>inspectDueTicketReconciliations({secrets:{
