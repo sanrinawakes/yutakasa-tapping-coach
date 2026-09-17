@@ -1,0 +1,62 @@
+name: One-shot scoped GitHub draft PR permission proof
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-token-pr-smoke
+  cancel-in-progress: false
+
+jobs:
+  publish-and-clean:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_TOKEN_PR_SMOKE_ENABLED == 'true' &&
+      vars.YUTAKASA_TICKET_REPAIR_ENABLED == 'false' &&
+      vars.YUTAKASA_AUTO_MERGE_ENABLED == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check one-shot gates and guarded cleanup behavior
+        run: node --test scripts/automation/ticket-token-pr-smoke.nodecheck.mjs
+      - name: Push a fixed synthetic branch and verify draft PR CI
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          YUTAKASA_TOKEN_PR_SMOKE_ENABLED: ${{ vars.YUTAKASA_TOKEN_PR_SMOKE_ENABLED }}
+          YUTAKASA_TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+          GH_READ_TOKEN: ${{ github.token }}
+          SMOKE_STATE_PATH: ${{ runner.temp }}/token-pr-smoke-state.json
+        run: node scripts/automation/ticket-token-pr-smoke.mjs run
+      - name: Close only this draft PR and delete only its unchanged branch
+        if: always()
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ secrets.YUTAKASA_REPAIR_GH_TOKEN }}
+          GH_READ_TOKEN: ${{ github.token }}
+          SMOKE_STATE_PATH: ${{ runner.temp }}/token-pr-smoke-state.json
+        run: node scripts/automation/ticket-token-pr-smoke.mjs cleanup
