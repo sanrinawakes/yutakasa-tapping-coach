@@ -10,16 +10,21 @@ import { pathToFileURL } from "node:url";
 
 import { collectRemoteDeployment } from "./remote-production.mjs";
 import { runProductionFunctionalSmoke } from "./ai-repair-functional-smoke.mjs";
+import { checkRecordedZeroWidthCondition, checkUiCondition,
+  checkZeroWidthProductionEvidence, TicketConditionError,
+  ZERO_WIDTH_CONDITION } from "./ticket-customer-condition-proof.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
-const SCENARIOS = new Set(["chat_send_reload_persistence", "chat_stream_completion"]);
+const SCENARIOS = new Set(["chat_send_reload_persistence", "chat_stream_completion",
+  ZERO_WIDTH_CONDITION.scenarioKey]);
 const TEST_PATHS = Object.freeze({
   chat_send_reload_persistence: "src/app/chat/page.test.tsx",
   chat_stream_completion: "src/app/api/chat/route.test.ts",
+  chat_title_zero_width: "src/lib/chat-thread.test.ts",
 });
 const OWNER_TERMS = /(返金|払い戻し|解約|契約|請求|決済|課金|料金|支払|領収|法律|訴訟|補償|個人情報|削除|refund|billing|payment|cancel|contract|legal)/iu;
 const CANDIDATE_KEYS = [
@@ -116,6 +121,14 @@ export function checkReleaseBinding({ input, artifact, pr, mergeCommit, job, lin
     /(消え|保存され|残ら|表示され)/u.test(body);
   const stream = typeof body === "string" &&
     /(回答|返信)/u.test(body) && /(途中|止ま|切れ|完了しな)/u.test(body);
+  if (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey) {
+    try { checkRecordedZeroWidthCondition({ ticket, latestMessages, attachments,
+      newerAdminMessages }); }
+    catch (error) {
+      if (error instanceof TicketConditionError) fail(error.code);
+      throw error;
+    }
+  }
   if (pr?.number !== input.prNumber || pr?.state !== "closed" || pr?.merged !== true ||
       !Number.isFinite(Date.parse(pr?.merged_at ?? "")) ||
       pr?.base?.ref !== "main" || pr?.head?.repo?.full_name !== REPO ||
@@ -146,6 +159,7 @@ export function checkReleaseBinding({ input, artifact, pr, mergeCommit, job, lin
         Date.parse(message.created_at) >= latestAt) ||
       (input.scenarioKey === "chat_send_reload_persistence" && (!persistence || stream)) ||
       (input.scenarioKey === "chat_stream_completion" && (!stream || persistence)) ||
+      (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey && (persistence || stream)) ||
       release?.pr_number !== input.prNumber || release?.head_sha !== artifact.headSha ||
       release?.merge_sha !== input.mainSha ||
       !["observing", "verified"].includes(release?.status) ||
@@ -173,7 +187,42 @@ export function checkProductionSmoke(evidence, binding, scenarioKey) {
       Math.abs(Date.now() - Date.parse(evidence.observedAt)) > 5 * 60 * 1000) {
     fail("production_scenario_measurement_invalid");
   }
+  if (scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey) {
+    try { checkZeroWidthProductionEvidence(evidence, binding); }
+    catch (error) {
+      if (error instanceof TicketConditionError) fail(error.code);
+      throw error;
+    }
+  }
   return digest(JSON.stringify({ scenarioKey, evidence }));
+}
+
+async function recordCompletionProof(input, artifact, binding, productionSuccessSha256,
+  env, fetchImpl) {
+  const response = await fetchImpl(`${env.SUPABASE_URL}/rest/v1/rpc/record_yutakasa_ticket_completion_proof`, {
+    method: "POST", headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ p_work_id: input.workId,
+      p_latest_user_message_id: binding.latestUserMessageId,
+      p_pr_number: input.prNumber, p_head_sha: artifact.headSha,
+      p_merge_sha: binding.mergeSha, p_deployment_id: binding.deploymentId,
+      p_scenario_key: input.scenarioKey, p_scenario_sha256: artifact.scenarioSha256,
+      p_before_failure_sha256: artifact.beforeFailureSha256,
+      p_after_success_sha256: artifact.afterSuccessSha256,
+      p_production_success_sha256: productionSuccessSha256,
+      p_before_after_run_id: input.beforeAfterRunId,
+      p_production_run_id: input.productionRunId }),
+    redirect: "error", signal: AbortSignal.timeout(15_000),
+  }).catch(() => fail("production_proof_record_request_failed"));
+  if (response.status !== 200) fail("production_proof_record_http_invalid");
+  const raw = await response.text();
+  if (Buffer.byteLength(raw) > 4_096) fail("production_proof_record_response_large");
+  let rows;
+  try { rows = JSON.parse(raw); } catch { fail("production_proof_record_response_invalid"); }
+  if (!Array.isArray(rows) || rows.length !== 1 ||
+      typeof rows[0]?.created !== "boolean") fail("production_proof_record_unconfirmed");
+  return rows[0].created;
 }
 
 async function readArtifact(file) {
@@ -267,6 +316,7 @@ async function releaseRows(input, artifact, env, fetchImpl) {
 export async function runProductionCandidate({
   env = process.env, fetchImpl = globalThis.fetch,
   deploymentImpl = collectRemoteDeployment, smokeImpl = runProductionFunctionalSmoke,
+  root = process.cwd(),
 } = {}) {
   const input = checkInputs(env);
   const artifact = await readArtifact(env.CANDIDATE_PATH);
@@ -287,12 +337,22 @@ export async function runProductionCandidate({
   const beforeRows = await releaseRows(input, artifact, env, fetchImpl);
   const binding = checkReleaseBinding({ input, artifact, pr, mergeCommit,
     ...beforeRows, deployment });
+  if (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey) {
+    const ui = JSON.parse(await readFile(path.join(root,
+      "src/lib/support-technical-scenarios.json"), "utf8"));
+    try { checkUiCondition(ui); }
+    catch (error) {
+      if (error instanceof TicketConditionError) fail(error.code);
+      throw error;
+    }
+  }
   // This existing isolated E2E creates a no-payment user, sends on desktop and
   // mobile, confirms stream completion, DB save and reload, then verifies cleanup.
   // It measures the selected symptom's invariant but cannot reconstruct the
   // customer's free-text environmental conditions.
   const smoke = await smokeImpl({ release: { merge_sha: binding.mergeSha },
-    deployment, env, fetchImpl, includeSupportTicket: false });
+    deployment, env, fetchImpl, includeSupportTicket: false,
+    titleScenario: input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey });
   const productionSuccessSha256 = checkProductionSmoke(smoke, binding, input.scenarioKey);
   const [afterDeployment, afterRows, afterPr] = await Promise.all([
     deploymentImpl({ token: env.VERCEL_TOKEN, fetchImpl }),
@@ -309,6 +369,33 @@ export async function runProductionCandidate({
       digest(afterRows.ticket.subject) !== binding.subjectSha256) {
     fail("production_changed_during_measurement");
   }
+  let proofRecorded = false;
+  if (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey) {
+    await recordCompletionProof(input, artifact, binding, productionSuccessSha256,
+      env, fetchImpl);
+    const recorded = await rows(env, fetchImpl, "yutakasa_ticket_completion_proofs", {
+      work_id: `eq.${input.workId}`,
+      select: "work_id,ticket_id,latest_user_message_id,pr_number,head_sha,merge_sha,deployment_id,scenario_key,scenario_sha256,before_failure_sha256,after_success_sha256,production_success_sha256,before_after_run_id,production_run_id",
+      limit: "2",
+    });
+    if (recorded.length !== 1 || recorded[0].work_id !== input.workId ||
+        recorded[0].ticket_id !== binding.ticketId ||
+        recorded[0].latest_user_message_id !== binding.latestUserMessageId ||
+        recorded[0].pr_number !== input.prNumber ||
+        recorded[0].head_sha !== artifact.headSha ||
+        recorded[0].merge_sha !== binding.mergeSha ||
+        recorded[0].deployment_id !== binding.deploymentId ||
+        recorded[0].scenario_key !== input.scenarioKey ||
+        recorded[0].scenario_sha256 !== artifact.scenarioSha256 ||
+        recorded[0].before_failure_sha256 !== artifact.beforeFailureSha256 ||
+        recorded[0].after_success_sha256 !== artifact.afterSuccessSha256 ||
+        recorded[0].production_success_sha256 !== productionSuccessSha256 ||
+        Number(recorded[0].before_after_run_id) !== input.beforeAfterRunId ||
+        Number(recorded[0].production_run_id) !== input.productionRunId) {
+      fail("production_proof_readback_mismatch");
+    }
+    proofRecorded = true;
+  }
   const result = {
     schema: "yutakasa-ticket-production-candidate-v1", workId: input.workId,
     prNumber: input.prNumber, scenarioKey: input.scenarioKey,
@@ -318,9 +405,10 @@ export async function runProductionCandidate({
     productionSuccessSha256, beforeAfterRunId: input.beforeAfterRunId,
     productionRunId: input.productionRunId, headSha: binding.headSha,
     mergeSha: binding.mergeSha, deploymentId: binding.deploymentId,
-    syntheticDataCleaned: true, customerConditionMatched: false,
-    ticketCompletionProofRecorded: false,
-    missingProof: "server_attested_ticket_replay_conditions_missing",
+    syntheticDataCleaned: true,
+    customerConditionMatched: proofRecorded,
+    ticketCompletionProofRecorded: proofRecorded,
+    missingProof: proofRecorded ? null : "server_attested_ticket_replay_conditions_missing",
   };
   if (typeof env.EVIDENCE_PATH === "string" && env.EVIDENCE_PATH) {
     await writeFile(env.EVIDENCE_PATH, `${JSON.stringify(result)}\n`, { mode: 0o600, flag: "wx" });
@@ -333,8 +421,9 @@ if (isMain) {
   runProductionCandidate().then(
     (result) => process.stdout.write(`${JSON.stringify({ ok: true,
       prNumber: result.prNumber, scenarioKey: result.scenarioKey,
-      syntheticDataCleaned: true, customerConditionMatched: false,
-      ticketCompletionProofRecorded: false })}\n`),
+      syntheticDataCleaned: result.syntheticDataCleaned,
+      customerConditionMatched: result.customerConditionMatched,
+      ticketCompletionProofRecorded: result.ticketCompletionProofRecorded })}\n`),
     (error) => { process.stdout.write(`${JSON.stringify({ ok: false,
       code: error instanceof ProductionCandidateError ? error.code : "production_candidate_failed" })}\n`);
       process.exitCode = 1; },

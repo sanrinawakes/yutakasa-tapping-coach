@@ -6,6 +6,7 @@ import { TicketRepairError, assertNoCustomerLeak, validatePrivateContext,
 import { TicketReconcileError, reconcileTicketRepairs,
   runTicketRepairReconcile } from "./ticket-repair-reconcile.mjs";
 import { retryPendingPromotions } from "./ai-repair-promote-sweep.mjs";
+import { ZERO_WIDTH_CONDITION } from "./ticket-customer-condition-proof.mjs";
 
 const workId="e1aa3fb1-afae-43b8-b139-bc0fa4682255";
 const ticketId="91fc220d-19a8-447a-a19d-feac919af642";
@@ -35,6 +36,17 @@ test("customer words and identifiers cannot enter a published patch",()=>{
     {...context,subject:"画面",messages:[{...context.messages[0],body:"Sato here"}]}),TicketRepairError);
   assert.throws(()=>assertNoCustomerLeak({patch:"+const x='customer@real-domain.jp';"},context),TicketRepairError);
   assertNoCustomerLeak({patch:"+const healthy = true;"},context);
+});
+
+test("the exact preset permits its public Unicode code point but no customer prose", () => {
+  const fixed = { ...context, subject: ZERO_WIDTH_CONDITION.subject,
+    messages: [{ ...context.messages[0], body: ZERO_WIDTH_CONDITION.body }] };
+  assertNoCustomerLeak({ patch: '+expect(createChatTitle("\\u200B")).toBe(DEFAULT_CHAT_TITLE);' }, fixed);
+  assert.throws(() => assertNoCustomerLeak({ patch: '+const label = "見出し";' }, fixed),
+    TicketRepairError);
+  assert.throws(() => assertNoCustomerLeak({ patch: '+expect(createChatTitle("\\u200B")).toBe(DEFAULT_CHAT_TITLE);' },
+    { ...fixed, messages: [{ ...fixed.messages[0], body: `${ZERO_WIDTH_CONDITION.body} My browser` }] }),
+  TicketRepairError);
 });
 
 test("Railway dispatch sends only a random UUID to the dedicated workflow",async()=>{

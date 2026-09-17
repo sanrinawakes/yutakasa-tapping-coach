@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import {
   RegressionEvidenceError, checkInputs, checkPullRequest, checkChangedFiles,
-  checkTestSource, checkRegressionReports,
+  checkTestSource, checkRegressionReports, trustedZeroWidthSpec,
 } from "./ticket-repair-regression-evidence.mjs";
 
 const workId = "d56b080a-a505-491a-9569-5ce865e803d7";
@@ -34,11 +34,27 @@ test("accepts only one pinned technical scenario and opaque work ID", () => {
   assert.equal(context.testFile, "src/app/chat/page.test.tsx");
   assert.equal(checkInputs({ workId, prNumber: 78, scenarioKey: "chat_stream_completion",
     runId: 450, repository, mainSha }).testFile, "src/app/api/chat/route.test.ts");
+  assert.equal(checkInputs({ workId, prNumber: 78, scenarioKey: "chat_title_zero_width",
+    runId: 450, repository, mainSha }).testFile, "src/lib/chat-thread.test.ts");
   assert.throws(() => checkInputs({ workId, prNumber: 78, scenarioKey: "generic_smoke",
     runId: 450, repository, mainSha }), rejected("regression_inputs_invalid"));
   assert.throws(() => checkInputs({ workId: "customer@example.com", prNumber: 78,
     scenarioKey: "chat_stream_completion", runId: 450, repository, mainSha }),
   rejected("regression_inputs_invalid"));
+});
+
+test("the zero-width proof uses a trusted exact assertion and only the two relevant files", () => {
+  const zeroWidth = checkInputs({ workId, prNumber: 78, scenarioKey: "chat_title_zero_width",
+    runId: 450, repository, mainSha });
+  const zeroWidthMarker = `repair-regression:${zeroWidth.fingerprint}:chat_title_zero_width`;
+  const source = trustedZeroWidthSpec(zeroWidthMarker);
+  assert.match(source, /createChatTitle\("\\u200B"\)/u);
+  assert.match(source, /sanitizeChatTitle\("\\u200B"\)/u);
+  checkChangedFiles(["src/lib/chat-thread.ts", "src/lib/chat-thread.test.ts"], zeroWidth.testFile);
+  assert.throws(() => checkChangedFiles(["src/lib/chat-thread.ts", "src/lib/chat-thread.test.ts",
+    "src/app/chat/page.tsx"], zeroWidth.testFile), rejected("regression_diff_invalid"));
+  assert.throws(() => trustedZeroWidthSpec("repair-regression:customer-body"),
+    rejected("regression_test_marker_invalid"));
 });
 
 test("requires current main base and exact draft repair branch", () => {

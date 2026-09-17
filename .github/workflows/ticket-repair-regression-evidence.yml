@@ -1,36 +1,55 @@
 name: Ticket repair regression evidence
 
 on:
-  workflow_dispatch:
-    inputs:
-      work_id:
-        description: Opaque work UUID; never customer text
-        required: true
-        type: string
-      pr_number:
-        description: Repair draft PR number
-        required: true
-        type: string
-      scenario_key:
-        description: Fixed supported technical symptom
-        required: true
-        type: choice
-        options:
-          - chat_send_reload_persistence
-          - chat_stream_completion
+  workflow_run:
+    workflows: [AI repair independent review]
+    types: [completed]
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
-  group: yutakasa-ticket-regression-${{ inputs.work_id }}
+  group: yutakasa-ticket-regression-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
-  compare:
+  prepare:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.select.outputs.eligible }}
+      work_id: ${{ steps.select.outputs.work_id }}
+      pr_number: ${{ steps.select.outputs.pr_number }}
+      scenario_key: ${{ steps.select.outputs.scenario_key }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - id: select
+        name: Select one exact private ticket without exposing its text
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA }}
+          REPAIR_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          REVIEW_RUN_ID: ${{ github.event.workflow_run.id }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/automation/ticket-repair-regression-prepare.mjs
+  compare:
+    needs: prepare
+    if: needs.prepare.outputs.eligible == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -46,9 +65,9 @@ jobs:
       - run: npm ci
       - name: Compare one new regression against the exact PR base and head
         env:
-          WORK_ID: ${{ inputs.work_id }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          SCENARIO_KEY: ${{ inputs.scenario_key }}
+          WORK_ID: ${{ needs.prepare.outputs.work_id }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          SCENARIO_KEY: ${{ needs.prepare.outputs.scenario_key }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF: ${{ github.ref }}
