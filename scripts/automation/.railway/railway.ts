@@ -69,6 +69,7 @@ const monitor = service("yutakasa-support-monitor", {
     TICKET_RECONCILE_FALLBACK_ENABLED: preserve(),
     TICKET_COMPLETION_NOTICE_ENABLED: preserve(),
     TICKET_CLARIFICATION_ENABLED: preserve(),
+    TICKET_CLARIFICATION_NOTICE_ENABLED: preserve(),
     GOOGLE_DRIVE_API_KEY: preserve(),
   },
 });

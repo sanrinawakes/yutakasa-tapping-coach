@@ -80,6 +80,7 @@ describe("support automation API", () => {
   afterEach(() => {
     delete process.env.CRON_SECRET;
     delete process.env.TICKET_CLARIFICATION_ENABLED;
+    delete process.env.TICKET_CLARIFICATION_NOTICE_ENABLED;
   });
 
   it("rejects an invalid automation secret", async () => {
@@ -138,6 +139,7 @@ describe("support automation API", () => {
 
   it("sends only a fixed, CAS-guarded clarification through the dedicated RPC",async()=>{
     process.env.TICKET_CLARIFICATION_ENABLED = "true";
+    process.env.TICKET_CLARIFICATION_NOTICE_ENABLED = "true";
     clarifyMock.mockResolvedValue({message_id:messageId,created:true});
     const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
       latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
@@ -152,6 +154,19 @@ describe("support automation API", () => {
     for (const value of [undefined,"false","TRUE"]) {
       if (value === undefined) delete process.env.TICKET_CLARIFICATION_ENABLED;
       else process.env.TICKET_CLARIFICATION_ENABLED=value;
+      const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
+        latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
+      expect(response.status).toBe(409);
+    }
+    expect(renewLockMock).not.toHaveBeenCalled();
+    expect(clarifyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects clarification until its durable notice outbox flag is enabled",async()=>{
+    process.env.TICKET_CLARIFICATION_ENABLED="true";
+    for(const value of [undefined,"false","TRUE"]){
+      if(value===undefined) delete process.env.TICKET_CLARIFICATION_NOTICE_ENABLED;
+      else process.env.TICKET_CLARIFICATION_NOTICE_ENABLED=value;
       const response=await PATCH(request("PATCH",{action:"clarify",ticketId,lockToken,
         latestUserMessageId:messageId,ticketVersion:ticket.updated_at}));
       expect(response.status).toBe(409);

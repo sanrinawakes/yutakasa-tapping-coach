@@ -137,7 +137,8 @@ export async function PATCH(request: NextRequest) {
     if (action === "reply") {
       throw new SupportRequestError("Automated customer replies are unavailable.", 409);
     }
-    if (action === "clarify" && process.env.TICKET_CLARIFICATION_ENABLED !== "true") {
+    if (action === "clarify" && (process.env.TICKET_CLARIFICATION_ENABLED !== "true" ||
+        process.env.TICKET_CLARIFICATION_NOTICE_ENABLED !== "true")) {
       throw new SupportRequestError("Automated clarifications are unavailable.", 409);
     }
     const ticketId = readTicketId(record.ticketId);

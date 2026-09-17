@@ -99,7 +99,9 @@ BEGIN
     SELECT * INTO v_ledger FROM public.yutakasa_ticket_clarifications c
       WHERE c.ticket_id=v_ticket.id;
     IF v_count=2 THEN
-      IF FOUND OR EXISTS(SELECT 1 FROM public.support_messages m
+      IF FOUND OR EXISTS(SELECT 1 FROM public.yutakasa_ticket_clarification_notices n
+          WHERE n.ticket_id=v_ticket.id) OR
+        EXISTS(SELECT 1 FROM public.support_messages m
           WHERE m.ticket_id=v_ticket.id AND m.sender_type='admin') OR
         (v_ticket.status='open' AND v_ticket.automation_status='queued' AND
           v_ticket.automation_lock_token IS NULL AND
@@ -123,6 +125,12 @@ BEGIN
       IF v_ledger.ticket_id IS DISTINCT FROM v_ticket.id OR
         v_ledger.latest_user_message_id IS DISTINCT FROM v_user.id OR
         v_ledger.reply_message_id IS DISTINCT FROM v_reply.id OR
+        (SELECT count(*) FROM public.yutakasa_ticket_clarification_notices n
+          WHERE n.ticket_id=v_ticket.id AND n.message_id=v_reply.id AND
+            n.recipient_email=v_email AND n.status='suppressed' AND
+            n.provider_email_id IS NULL AND n.attempt_count=0 AND
+            n.first_attempt_at IS NULL AND
+            n.idempotency_key='yutakasa-ticket-clarification/'||v_ticket.id::TEXT)<>1 OR
         v_reply.sender_email IS NOT NULL OR
         v_reply.body IS DISTINCT FROM v_expected_reply OR
         v_ticket.status IS DISTINCT FROM 'waiting_user' OR

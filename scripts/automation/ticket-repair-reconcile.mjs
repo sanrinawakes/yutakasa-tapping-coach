@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
 import { completeVerifiedTicketRepair } from "./ticket-completion.mjs";
 import { drainCompletionNotices } from "./ticket-completion-notice.mjs";
+import { drainClarificationNotices } from "./ticket-clarification-notice.mjs";
 import { RepairDispatchError } from "./dispatch-repair.mjs";
 import { inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 
@@ -30,7 +31,8 @@ async function rpc(env, fetchImpl, name, body={}) {
 
 export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
   draftImpl=draftVerifiedTicketReply,completionImpl=completeVerifiedTicketRepair,
-  noticeImpl=drainCompletionNotices}={}) {
+  noticeImpl=drainCompletionNotices,
+  clarificationNoticeImpl=drainClarificationNotices}={}) {
   const scheduled=env.GITHUB_EVENT_NAME==="schedule" && !env.TICKET_RECONCILE_MODE;
   const manual=env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
     env.TICKET_RECONCILE_MODE==="reconcile";
@@ -43,8 +45,11 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   // Drain replies from earlier runs before unrelated repair reconciliation can
   // fail. A second pass below handles completions created in this run.
   let priorNotices={examined:0,accepted:0,needsReview:0};
+  let clarificationNotices={examined:0,accepted:0,needsReview:0};
   let noticeFailure=false;
   try { priorNotices=await noticeImpl({env,fetchImpl}); }
+  catch { noticeFailure=true; }
+  try { clarificationNotices=await clarificationNoticeImpl({env,fetchImpl}); }
   catch { noticeFailure=true; }
   const recovery=await rpc(env,fetchImpl,"recover_yutakasa_ticket_repair_jobs");
   if (!Array.isArray(recovery) || recovery.length!==1 ||
@@ -100,6 +105,9 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     noticesExamined:priorNotices.examined+newNotices.examined,
     noticesAccepted:priorNotices.accepted+newNotices.accepted,
     noticesNeedsReview:priorNotices.needsReview+newNotices.needsReview,
+    clarificationNoticesExamined:clarificationNotices.examined,
+    clarificationNoticesAccepted:clarificationNotices.accepted,
+    clarificationNoticesNeedsReview:clarificationNotices.needsReview,
     recoveredClaims:recovery[0].recovered};
 }
 

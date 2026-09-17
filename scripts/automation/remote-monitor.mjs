@@ -565,7 +565,8 @@ export async function runRemoteMonitorWithTickets(options = {}) {
         automationToken,
         fetchImpl: options.supportFetchImpl ?? globalThis.fetch,
         repairBridgeEnabled: secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true",
-        clarificationEnabled: secrets.TICKET_CLARIFICATION_ENABLED === "true",
+        clarificationEnabled: secrets.TICKET_CLARIFICATION_ENABLED === "true" &&
+          secrets.TICKET_CLARIFICATION_NOTICE_ENABLED === "true",
         beforeMutation: options.leaseGuard ?? (async () => {}),
       });
     }
@@ -634,7 +635,8 @@ export async function runLeasedMonitor({
   let observationError;
   let reconcileInspection;
   try {
-    if (secrets.TICKET_COMPLETION_NOTICE_ENABLED==="true" &&
+    if ((secrets.TICKET_COMPLETION_NOTICE_ENABLED==="true" ||
+        secrets.TICKET_CLARIFICATION_NOTICE_ENABLED==="true") &&
         secrets.TICKET_RECONCILE_FALLBACK_ENABLED!=="true") {
       fail("ticket_reconcile_fallback_required");
     }
@@ -674,7 +676,7 @@ export async function runLeasedMonitor({
           reconcileInspection.dueReviews<0 || reconcileInspection.dueReviews>100 ||
           ![0,1].includes(reconcileInspection.expiredClaims) ||
           !Number.isSafeInteger(reconcileInspection.dueNotices) ||
-          reconcileInspection.dueNotices<0 || reconcileInspection.dueNotices>21 ||
+          reconcileInspection.dueNotices<0 || reconcileInspection.dueNotices>42 ||
           reconcileInspection.due !== (reconcileInspection.dueReviews>0 ||
             reconcileInspection.expiredClaims>0 ||
             reconcileInspection.dueNotices>0)) fail("ticket_reconcile_inspection_invalid");

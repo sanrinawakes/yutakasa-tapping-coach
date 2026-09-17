@@ -107,7 +107,9 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
   }});
   assert.deepEqual(result,{examined:1,manualReviews:1,drafted:1,draftFailures:0,
     completed:0,completionFailures:0,noticesExamined:0,noticesAccepted:0,
-    noticesNeedsReview:0,recoveredClaims:0});
+    noticesNeedsReview:0,clarificationNoticesExamined:0,
+    clarificationNoticesAccepted:0,clarificationNoticesNeedsReview:0,
+    recoveredClaims:0});
   assert.equal(drafts,1);
   assert.equal(called.some((item)=>item.url.includes("append_verified")),false);
   assert.deepEqual(called[2].body,{p_work_id:workId});
@@ -124,6 +126,18 @@ test("earlier completion notices drain even when repair recovery fails",async()=
     fetchImpl:async()=>{order.push("recovery");throw new Error("database offline");}}),
   TicketReconcileError);
   assert.deepEqual(order,["notice","recovery"]);
+});
+
+test("clarification notices drain before repair recovery",async()=>{
+  const order=[];
+  await assert.rejects(()=>reconcileTicketRepairs({env:{...env,
+    GITHUB_EVENT_NAME:"schedule",TICKET_RECONCILE_ENABLED:"true",
+    TICKET_CLARIFICATION_NOTICE_ENABLED:"true"},
+    clarificationNoticeImpl:async()=>{order.push("clarification_notice");
+      return {examined:1,accepted:1,needsReview:0};},
+    fetchImpl:async()=>{order.push("recovery");throw new Error("database offline");}}),
+  TicketReconcileError);
+  assert.deepEqual(order,["clarification_notice","recovery"]);
 });
 
 test("reconcile drains notice outbox before and after new work",async()=>{
@@ -194,7 +208,9 @@ test("manual reconcile requires explicit mode and uses the same no-send review p
     }});
   assert.deepEqual(result,{mode:"reconcile",examined:0,manualReviews:0,drafted:0,
     draftFailures:0,completed:0,completionFailures:0,noticesExamined:0,
-    noticesAccepted:0,noticesNeedsReview:0,recoveredClaims:0});
+    noticesAccepted:0,noticesNeedsReview:0,clarificationNoticesExamined:0,
+    clarificationNoticesAccepted:0,clarificationNoticesNeedsReview:0,
+    recoveredClaims:0});
   assert.equal(calls.length,2);
 });
 

@@ -246,19 +246,30 @@ describe("support automation leases", () => {
     }
   });
 
-  it("asks a fixed in-app clarification through the guarded RPC without email",async()=>{
+  it("asks a fixed in-app clarification only after verifying durable notice reservation",async()=>{
     const latestId="a61fb99e-874b-4111-a95a-4f4cb268e48c";
-    const rpc=vi.fn().mockResolvedValue({data:[{message_id:latestId,created:true}],error:null});
+    const rpc=vi.fn().mockResolvedValueOnce({data:true,error:null})
+      .mockResolvedValueOnce({data:[{message_id:latestId,created:true}],error:null});
     const from=vi.fn();
     getSupabaseMock.mockReturnValue({rpc,from} as never);
     await expect(appendAutomationClarification({ticketId,lockToken,
       latestUserMessageId:latestId,ticketVersion:ticket().updated_at}))
       .resolves.toEqual({message_id:latestId,created:true});
+    expect(rpc).toHaveBeenNthCalledWith(1,"yutakasa_clarification_notice_ready");
     expect(rpc).toHaveBeenCalledWith("append_yutakasa_ticket_clarification",{
       p_ticket_id:ticketId,p_lock_token:lockToken,
       p_latest_user_message_id:latestId,p_ticket_version:ticket().updated_at,
     });
     expect(from).not.toHaveBeenCalled();
+  });
+
+  it("does not append a clarification when the notice trigger cannot be confirmed",async()=>{
+    const rpc=vi.fn().mockResolvedValue({data:false,error:null});
+    getSupabaseMock.mockReturnValue({rpc} as never);
+    await expect(appendAutomationClarification({ticketId,lockToken,
+      latestUserMessageId:lockToken,ticketVersion:ticket().updated_at}))
+      .rejects.toThrow("返信通知の予約を確認できません");
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });
 
