@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { runClarificationSmoke, runCleanupOnly } from "./ticket-clarification-smoke.mjs";
 
@@ -180,6 +183,39 @@ test("cleanup guard failure never reports a passing smoke", async () => {
   assert.equal(rescued.syntheticRowsRemaining, 0);
   assert.equal(f.state.account, false);
   assert.equal(f.state.saved, null);
+});
+
+test("interrupted workflow rescues from a mode-0600 synthetic-only state file", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "yutakasa-clarification-"));
+  const file = path.join(directory, "yutakasa-clarification-smoke-state.json");
+  const env = { ...ENV, RUNNER_TEMP: directory,
+    YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: file };
+  const f = fixture({ cleanupFails: true });
+  try {
+    await assert.rejects(runClarificationSmoke({ env, fetchImpl: f.fetchImpl,
+      uuidImpl: f.uuidImpl, deploymentImpl: deployment }),
+    { code: "clarification_smoke_cleanup_incomplete" });
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")),
+      { runId: RUN, requestId: REQUEST });
+    f.state.cleanupFails = false;
+    const rescued = await runCleanupOnly({ env, fetchImpl: f.fetchImpl });
+    assert.equal(rescued.syntheticRowsRemaining, 0);
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(f.state.account, false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("unsafe rescue state path stops before database access", async () => {
+  const f = fixture();
+  await assert.rejects(runClarificationSmoke({ env: { ...ENV, RUNNER_TEMP: "/tmp",
+    YUTAKASA_CLARIFICATION_SMOKE_STATE_PATH: "/tmp/other-file.json" },
+  fetchImpl: f.fetchImpl, uuidImpl: f.uuidImpl, deploymentImpl: deployment }),
+  { code: "clarification_smoke_state_path_invalid" });
+  assert.equal(f.state.dbWrites.length, 0);
+  assert.equal(f.state.appCalls.length, 0);
 });
 
 test("untrusted branch and deployment fail before production writes", async () => {
