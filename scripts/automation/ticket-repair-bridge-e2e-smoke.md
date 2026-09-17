@@ -23,6 +23,12 @@ source-and-regression-test patch in `chat-thread.ts` and its test, and invokes
 the existing publisher to create an opaque draft PR. There is no fallback
 patch, Issue creation, production merge, or customer send.
 
+For this fixed synthetic context only, the bridge adds an exact two-file
+instruction to the Terra request after checking the claimed ticket contents.
+The real capped-project probe keeps its original request and runs before this
+scoped diagnosis request. The regular ticket investigator's prompt and allowed
+files are unchanged.
+
 The real link RPC must bind the PR number/head SHA to that exact ticket and
 also create one pending release-ledger row and one ticket link. The smoke reads
 those rows back and waits for successful exact-head source-repair CI,

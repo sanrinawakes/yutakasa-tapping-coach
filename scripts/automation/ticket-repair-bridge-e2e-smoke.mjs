@@ -12,6 +12,7 @@ import { BRIDGE_SUPPORT_BODY, TEST_SUPPORT_ACK, TEST_SUPPORT_SUBJECT } from
 import { cleanupTicketRepairSmoke, runTicketRepairHandoffSmoke } from
   "./ticket-repair-handoff-smoke.mjs";
 import { runTicketRepairInvestigation } from "./ticket-repair-investigate.mjs";
+import { verifyOpenAiProjectKey } from "./openai-project-gate.mjs";
 import { parseProposal, runAiRepairPublish, validatePatch } from "./ai-repair-publish.mjs";
 import { verifyMainProtection } from "./ai-repair-promote.mjs";
 
@@ -23,6 +24,7 @@ const SHA = /^[a-f0-9]{40}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const RUN_ID = /^[1-9][0-9]{0,17}$/u;
 const CI = ["source-repair-ci.yml", "ai-repair-independent-review.yml"];
+const SYNTHETIC_SCOPE_GUIDANCE = `For this isolated synthetic smoke, the unified diff must change exactly two existing files: ${SOURCE} and ${TEST}. Change both files and no others. Diagnose the supplied report from the source. If a defensible fix needs any other file, return an empty patch. Write the regression test using static character escapes rather than copying words from the support report.`;
 
 export class BridgeE2eSmokeError extends Error {
   constructor(code) { super(code); this.name = "BridgeE2eSmokeError"; this.code = code; }
@@ -191,6 +193,51 @@ function validateClaimedContext(context, identity) {
       context.messages.filter((message) => message?.sender_type === "system" &&
         message.body === TEST_SUPPORT_ACK).length !== 1) fail("bridge_claimed_context_changed");
 }
+export function createSyntheticInvestigatorFetch(fetchImpl, env, identity) {
+  let claimedContextConfirmed = false;
+  return async (url, init) => {
+    if (String(url) === `${env.SUPABASE_URL}/rest/v1/rpc/claim_yutakasa_ticket_repair_context`) {
+      const response = await fetchImpl(url, init);
+      if (response.status === 200) {
+        const raw = await response.clone().text().catch(() =>
+          fail("bridge_claimed_context_invalid"));
+        if (Buffer.byteLength(raw) > 512 * 1024) fail("bridge_claimed_context_invalid");
+        let context;
+        try { context = JSON.parse(raw); } catch { fail("bridge_claimed_context_invalid"); }
+        validateClaimedContext(context, identity);
+        claimedContextConfirmed = true;
+      }
+      return response;
+    }
+    if (String(url) === "https://api.openai.com/v1/responses") {
+      if (!claimedContextConfirmed || init?.method !== "POST" ||
+          typeof init.body !== "string") fail("bridge_terra_request_invalid");
+      let request;
+      try { request = JSON.parse(init.body); } catch { fail("bridge_terra_request_invalid"); }
+      if (request?.model !== "gpt-5.6-terra" || request.store !== false ||
+          !Array.isArray(request.tools) || request.tools.length !== 0 ||
+          !Array.isArray(request.input) || request.input.length !== 2 ||
+          request.input[0]?.role !== "developer" ||
+          typeof request.input[0]?.content !== "string" ||
+          request.input[1]?.role !== "user" ||
+          typeof request.input[1]?.content !== "string" ||
+          request.text?.format?.type !== "json_schema") {
+        fail("bridge_terra_request_invalid");
+      }
+      const scoped = { ...request, input: [
+        { ...request.input[0], content: `${request.input[0].content}\n\n${SYNTHETIC_SCOPE_GUIDANCE}` },
+        request.input[1],
+      ] };
+      return fetchImpl(url, { ...init, body: JSON.stringify(scoped) });
+    }
+    return fetchImpl(url, init);
+  };
+}
+export function createSyntheticProjectGate(fetchImpl) {
+  // The capped-project probe intentionally sends a different Responses input.
+  // Keep the real gate intact and reserve the scoped wrapper for the diagnosis.
+  return ({ env }) => verifyOpenAiProjectKey({ env, fetchImpl });
+}
 export function inspectChecks({ runs, status, branch, sha }) {
   if (!SHA.test(sha ?? "") || !/^codex\/yutakasa-support-ai-[a-f0-9]{16}$/u.test(branch ?? "") ||
       !Array.isArray(runs) || runs.length !== CI.length) fail("bridge_check_evidence_invalid");
@@ -319,21 +366,10 @@ export async function runBridgeE2eSmoke({ env = process.env, fetchImpl = globalT
       const expected = branchFor(identity.workId);
       if (await api(env, fetchImpl, `/git/ref/heads/${expected.branch}`, { allow404: true }) ||
           await findPr(env, fetchImpl, expected)) fail("bridge_remote_preexisting");
-      const investigatorFetch = async (url, init) => {
-        const response = await fetchImpl(url, init);
-        if (String(url) === `${env.SUPABASE_URL}/rest/v1/rpc/claim_yutakasa_ticket_repair_context` &&
-            response.status === 200) {
-          const raw = await response.clone().text().catch(() =>
-            fail("bridge_claimed_context_invalid"));
-          if (Buffer.byteLength(raw) > 512 * 1024) fail("bridge_claimed_context_invalid");
-          let context;
-          try { context = JSON.parse(raw); } catch { fail("bridge_claimed_context_invalid"); }
-          validateClaimedContext(context, identity);
-        }
-        return response;
-      };
+      const investigatorFetch = createSyntheticInvestigatorFetch(fetchImpl, env, identity);
       const investigation = await investigator({ env: { ...env, WORK_ID: identity.workId,
         TICKET_REPAIR_ENABLED: "true" }, fetchImpl: investigatorFetch,
+      projectGate: createSyntheticProjectGate(fetchImpl),
       publisher: (publisherEnv) => {
         const proposal = parseProposal(publisherEnv.AI_REPAIR_PROPOSAL);
         if (!proposal.patch.trim()) fail("bridge_terra_patch_missing");

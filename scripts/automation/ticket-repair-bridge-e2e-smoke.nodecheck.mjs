@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { BridgeE2eSmokeError, checkGate, cleanupRemote, inspectChecks,
+import { BridgeE2eSmokeError, checkGate, cleanupRemote,
+  createSyntheticInvestigatorFetch, createSyntheticProjectGate, inspectChecks,
   rescueBridgeE2eSmoke } from "./ticket-repair-bridge-e2e-smoke.mjs";
+import { BRIDGE_SUPPORT_BODY, TEST_SUPPORT_ACK, TEST_SUPPORT_SUBJECT } from
+  "./ai-repair-functional-smoke.mjs";
 
 const repo = "sanrinawakes/yutakasa-tapping-coach";
 const sha = "a".repeat(40);
@@ -55,6 +58,81 @@ test("manual main gate requires both real repair flags off", () => {
   }
   assert.throws(() => checkGate(env, sha, "feature", true), BridgeE2eSmokeError);
   assert.throws(() => checkGate(env, headSha, "main", true), BridgeE2eSmokeError);
+});
+
+test("only a confirmed synthetic context adds exact two-file guidance to Terra", async () => {
+  const ticketId = crypto.randomUUID();
+  const latestUserMessageId = crypto.randomUUID();
+  const identity = { workId, ticketId, latestUserMessageId };
+  const context = { work_id: workId, ticket_id: ticketId,
+    latest_user_message_id: latestUserMessageId, category: "technical",
+    subject: TEST_SUPPORT_SUBJECT, messages: [
+      { id: crypto.randomUUID(), sender_type: "system", body: TEST_SUPPORT_ACK },
+      { id: latestUserMessageId, sender_type: "user", body: BRIDGE_SUPPORT_BODY },
+    ] };
+  const request = { model: "gpt-5.6-terra", store: false, tools: [],
+    input: [{ role: "developer", content: "Original private investigation rule." },
+      { role: "user", content: "Synthetic repository context." }],
+    text: { format: { type: "json_schema" } } };
+  let modelRequest = null;
+  const calls = [];
+  const project = "proj_abcdefgh";
+  const key = `sk-${"k".repeat(40)}`;
+  const gateEnv = { YUTAKASA_OPENAI_PROJECT_ID: project,
+    YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: project,
+    YUTAKASA_OPENAI_CAP_CONFIRMED_USD: "20",
+    YUTAKASA_OPENAI_API_KEY: key,
+    YUTAKASA_OPENAI_KEY_SHA256: crypto.createHash("sha256").update(key).digest("hex") };
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith("/claim_yutakasa_ticket_repair_context")) {
+      calls.push("claim");
+      return new Response(JSON.stringify(context), { status: 200 });
+    }
+    if (String(url) === "https://api.openai.com/v1/responses") {
+      const body = JSON.parse(init.body);
+      if (body.input === "Return OK.") {
+        calls.push("capped_project_probe");
+        assert.equal(init.headers["OpenAI-Project"], project);
+        assert.equal(body.model, "gpt-5.6-terra");
+        return new Response(JSON.stringify({ id: "resp_abcdefgh", status: "completed" }),
+          { status: 200 });
+      }
+      calls.push("scoped_proposal");
+      modelRequest = body;
+      return new Response("{}", { status: 200 });
+    }
+    assert.fail("unexpected request");
+  };
+  const scopedFetch = createSyntheticInvestigatorFetch(fetchImpl, env, identity);
+  const modelUrl = "https://api.openai.com/v1/responses";
+  await assert.rejects(() => scopedFetch(modelUrl, { method: "POST",
+    body: JSON.stringify(request) }),
+  (error) => error instanceof BridgeE2eSmokeError &&
+    error.code === "bridge_terra_request_invalid");
+  assert.equal(modelRequest, null);
+  await scopedFetch(`${env.SUPABASE_URL}/rest/v1/rpc/claim_yutakasa_ticket_repair_context`,
+    { method: "POST" });
+  await createSyntheticProjectGate(fetchImpl)({ env: gateEnv, fetchImpl: scopedFetch });
+  await scopedFetch(modelUrl, { method: "POST", body: JSON.stringify(request) });
+  assert.deepEqual(calls, ["claim", "capped_project_probe", "scoped_proposal"]);
+  assert.equal(modelRequest.model, "gpt-5.6-terra");
+  assert.equal(modelRequest.store, false);
+  assert.deepEqual(modelRequest.tools, []);
+  assert.equal(modelRequest.input[1].content, request.input[1].content);
+  assert.ok(modelRequest.input[0].content.startsWith(request.input[0].content));
+  assert.match(modelRequest.input[0].content,
+    /exactly two existing files: src\/lib\/chat-thread\.ts and src\/lib\/chat-thread\.test\.ts/u);
+  assert.match(modelRequest.input[0].content, /Change both files and no others/u);
+  assert.equal(request.input[0].content, "Original private investigation rule.");
+
+  const wrongContextFetch = createSyntheticInvestigatorFetch(async () =>
+    new Response(JSON.stringify({ ...context, subject: "unexpected" }), { status: 200 }),
+  env, identity);
+  await assert.rejects(() => wrongContextFetch(
+    `${env.SUPABASE_URL}/rest/v1/rpc/claim_yutakasa_ticket_repair_context`,
+    { method: "POST" }),
+  (error) => error instanceof BridgeE2eSmokeError &&
+    error.code === "bridge_claimed_context_changed");
 });
 
 test("required PR checks are tied to the exact branch and SHA", () => {
