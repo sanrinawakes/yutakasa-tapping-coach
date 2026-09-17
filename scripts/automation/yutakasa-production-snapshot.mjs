@@ -453,12 +453,16 @@ async function readAllRows(
   table,
   select,
   timing,
+  filters = {},
 ) {
   const rows = [];
   for (let page = 0; page < MAX_PAGES_PER_TABLE; page += 1) {
     const offset = page * PAGE_SIZE;
     const url = tableUrl(supabaseUrl, table);
     url.searchParams.set("select", select);
+    for (const [column, value] of Object.entries(filters)) {
+      url.searchParams.set(column, value);
+    }
     url.searchParams.set("order", "id.asc");
     url.searchParams.set("limit", String(PAGE_SIZE));
     url.searchParams.set("offset", String(offset));
@@ -947,6 +951,7 @@ export async function collectProductionSnapshot({
       "support_tickets",
       "id,status,automation_status,decision_required,automation_locked_at",
       timing,
+      { user_email: "not.ilike.yutakasa-auto-smoke+%@example.invalid" },
     ),
     readExactCount(fetchImpl, supabaseUrl, serviceRoleKey, "support_messages", {}, timing),
     readExactCount(

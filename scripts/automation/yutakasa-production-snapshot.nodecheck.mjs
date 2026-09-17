@@ -119,7 +119,13 @@ function mockFetch({
         ? threads
         : table === "chat_messages"
           ? messages
-          : supportTickets;
+          : supportTickets.filter((row) => {
+              const filter = url.searchParams.get("user_email");
+              if (filter === "not.ilike.yutakasa-auto-smoke+%@example.invalid") {
+                return !/^yutakasa-auto-smoke\+.*@example\.invalid$/iu.test(row.user_email);
+              }
+              return true;
+            });
     const offset = Number(url.searchParams.get("offset"));
     const limit = Number(url.searchParams.get("limit"));
     return jsonResponse(rows.slice(offset, offset + limit));
@@ -179,6 +185,7 @@ test("normal snapshot reports exact all-time and last-24h metrics separately", a
   const supportTickets = [
     {
       id: "ticket-1",
+      user_email: "member-1@example.com",
       status: "open",
       automation_status: "queued",
       decision_required: false,
@@ -186,6 +193,7 @@ test("normal snapshot reports exact all-time and last-24h metrics separately", a
     },
     {
       id: "ticket-2",
+      user_email: "member-2@example.com",
       status: "resolved",
       automation_status: "completed",
       decision_required: false,
@@ -193,6 +201,7 @@ test("normal snapshot reports exact all-time and last-24h metrics separately", a
     },
     {
       id: "ticket-3",
+      user_email: "member-3@example.com",
       status: "open",
       automation_status: "blocked_decision",
       decision_required: true,
@@ -200,6 +209,7 @@ test("normal snapshot reports exact all-time and last-24h metrics separately", a
     },
     {
       id: "ticket-4",
+      user_email: "member-4@example.com",
       status: "in_progress",
       automation_status: "investigating",
       decision_required: false,
@@ -390,6 +400,7 @@ test("database failure prevents the side-effecting support GET", async () => {
 test("support queue recovery exactly matches the route's strict 30-minute boundary", () => {
   const row = (id, status, automationStatus, decisionRequired, lockedAt) => ({
     id,
+    user_email: `${id}@example.com`,
     status,
     automation_status: automationStatus,
     decision_required: decisionRequired,
@@ -417,6 +428,7 @@ test("support queue recovery exactly matches the route's strict 30-minute bounda
 test("support tickets page past 1000 and exact pending count is not truncated at 25", async () => {
   const supportTickets = Array.from({ length: 1_001 }, (_, index) => ({
     id: `ticket-${index}`,
+    user_email: `member-${index}@example.com`,
     status: "open",
     automation_status: "queued",
     decision_required: false,
@@ -442,6 +454,34 @@ test("support tickets page past 1000 and exact pending count is not truncated at
   assert.equal(snapshot.supportApi.pendingTicketBatchCount, 25);
   assert.equal(snapshot.supportApi.expectedPendingTicketBatchCount, 25);
   assert.equal(snapshot.supportApi.pendingTicketBatchCountMismatch, false);
+});
+
+test("snapshot excludes synthetic tickets on the server without selecting email addresses", async () => {
+  const supportTickets = [
+    { id: "real-ticket", user_email: "member@example.com", status: "open", automation_status: "queued", decision_required: false, automation_locked_at: null },
+    { id: "synthetic-ticket", user_email: "yutakasa-auto-smoke+74e6508f-c0ff-4689-ab68-dac8fe324ac9@example.invalid", status: "open", automation_status: "queued", decision_required: false, automation_locked_at: null },
+  ];
+  let sawFilteredQuery = false;
+  const snapshot = await collectProductionSnapshot({
+    environment: ENVIRONMENT,
+    fetchImpl: mockFetch({
+      supportTickets,
+      pendingTickets: [{ id: "real-ticket" }],
+      inspect(url, init) {
+        if (url.pathname === "/rest/v1/support_tickets" && init.method === "GET") {
+          assert.equal(url.searchParams.get("user_email"), "not.ilike.yutakasa-auto-smoke+%@example.invalid");
+          assert.equal(url.searchParams.get("select")?.includes("user_email"), false);
+          sawFilteredQuery = true;
+        }
+      },
+    }),
+    nowMs: NOW_MS,
+  });
+  assert.equal(sawFilteredQuery, true);
+  assert.equal(snapshot.database.support.tickets, 1);
+  assert.equal(snapshot.database.support.pendingTicketsExactAfterRecovery, 1);
+  assert.equal(snapshot.supportApi.pendingTicketBatchCountMismatch, false);
+  assert.equal(JSON.stringify(snapshot).includes("member@example.com"), false);
 });
 
 test("HTTP failures expose only a fixed status code and never response PII", async () => {

@@ -26,6 +26,10 @@ const SUPPORT_APP_URL =
   "https://yutakasa-tapping-coach.vercel.app";
 const SUPPORT_AUTOMATION_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 const SUPPORT_EMAIL_TIMEOUT_MS = 5_000;
+// Reserve this entire non-deliverable namespace so a malformed smoke address
+// cannot enter the real support queue. Email suppression remains UUID-exact.
+const SYNTHETIC_SUPPORT_EMAIL_LIKE = "yutakasa-auto-smoke+%@example.invalid";
+const SYNTHETIC_SUPPORT_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})@example\.invalid$/iu;
 
 function supportNotificationEmail(): string {
   return process.env.SUPPORT_NOTIFICATION_EMAIL?.trim() || "";
@@ -79,7 +83,8 @@ type StoredAttachmentRow = UploadedAttachment & {
 };
 
 function isTestAddress(email: string): boolean {
-  return /^codex[-+.].*@silversense\.cc$/iu.test(email);
+  return /^codex[-+.].*@silversense\.cc$/iu.test(email) ||
+    SYNTHETIC_SUPPORT_EMAIL.test(email);
 }
 
 function shouldSendEmail(email: string): boolean {
@@ -882,6 +887,7 @@ export async function listPendingAutomatedSupportTickets(limit = 10) {
     .eq("decision_required", false)
     .in("automation_status", ["queued", "failed"])
     .in("status", ["open", "in_progress"])
+    .not("user_email", "ilike", SYNTHETIC_SUPPORT_EMAIL_LIKE)
     .order("updated_at", { ascending: true })
     .limit(Math.min(Math.max(Math.floor(limit), 1), 25));
   if (error) throw error;
@@ -910,6 +916,7 @@ export async function recoverStaleSupportAutomationTickets(): Promise<string[]> 
     .eq("decision_required", false)
     .eq("automation_status", "investigating")
     .in("status", ["open", "in_progress"])
+    .not("user_email", "ilike", SYNTHETIC_SUPPORT_EMAIL_LIKE)
     .or(`automation_locked_at.is.null,automation_locked_at.lt.${staleBefore}`)
     .select("id");
   if (error) throw error;
