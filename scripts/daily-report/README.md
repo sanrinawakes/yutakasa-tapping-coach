@@ -41,8 +41,27 @@ Resendの配達失敗に加え、受理から2時間経っても`sent`・`queued
 解決まで固定コード
 `daily_report_delivery_unresolved`と件数を出して非0終了する。
 Railwayの日報サービスには監視側の
-`GITHUB_DISPATCH_TOKEN`を渡していないため、即時の別経路通知は未実装。
-専用トークンと必要最小限の権限を用意した後に、別変更で通知経路を追加する。
+`GITHUB_DISPATCH_TOKEN`を渡していないため、日報プロセスからの即時通知はない。
+独立したGitHub Actionsの `daily-support-report-watchdog.yml` は毎時25分（UTC）に起動し、
+前日の日報2宛先の送信台帳、過去の未解決配達件数、回収カーソルを確認する。
+日報が起動せず台帳が作られなかった場合、Supabaseが読めない場合も、承認済みの
+2宛先へ失敗通知を個別送信する。通知本文は対象日と確認先だけで、顧客情報を含まない。
+同じ対象日・宛先の通知には固定のResend冪等キーと完全に同じ本文を使うため、
+毎時の再実行や結果不明時の再試行で重複しない。Resendの冪等キー保持は24時間なので、
+翌日は別の対象日として必要なら改めて通知する。正常時は通知しない。
+宛先Secretは、承認済み2宛先のハッシュと一致しなければ送信前に失敗する。
+Resendの24時間保持仕様: https://resend.com/docs/dashboard/emails/idempotency-keys
+通知のResend受理は受信箱への到達を証明しない。Resend自体が停止している場合は
+Actionsが失敗し、その通知の配達は保証できない。
+
+GitHub Secretには既存の `YUTAKASA_SUPABASE_URL` と
+`YUTAKASA_SUPABASE_SERVICE_ROLE_KEY` に加え、
+`YUTAKASA_RESEND_API_KEY`、`YUTAKASA_REPORT_RECIPIENT_1`、
+`YUTAKASA_REPORT_RECIPIENT_2` を設定する。宛先はRailwayの日報と同じ2件を登録する。
+Secret登録後に `workflow_dispatch` で正常系を実行し、次の定期実行も確認する。
+ワークフローは初期状態で停止し、GitHub変数
+`YUTAKASA_DAILY_REPORT_WATCHDOG_ENABLED=true` を設定すると起動する。
+GitHub Actionsのスケジュールは遅延する場合があるため、25分ちょうどの検知は保証しない。
 前日分の障害監視は `yutakasa_monitor_runs` の完了記録から集計する。
 監視用SQLの未導入・取得失敗・記録0件・記録のない時間帯は
 「監視結果未確認」と明記する。自動修正PRについては専用の

@@ -5,11 +5,13 @@ on:
     paths:
       - scripts/daily-report/**
       - .github/workflows/daily-support-report-ci.yml
+      - .github/workflows/daily-support-report-watchdog.yml
   push:
     branches: [main]
     paths:
       - scripts/daily-report/**
       - .github/workflows/daily-support-report-ci.yml
+      - .github/workflows/daily-support-report-watchdog.yml
 
 permissions:
   contents: read
