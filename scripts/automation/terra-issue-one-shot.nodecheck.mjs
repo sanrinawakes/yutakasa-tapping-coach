@@ -16,6 +16,7 @@ const body = [
 const baseEnv = {
   GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REPOSITORY: repo,
   GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha, GITHUB_RUN_ID: "123456",
+  GITHUB_RUN_ATTEMPT: "1",
   TICKET_REPAIR_ENABLED: "false", AUTO_MERGE_ENABLED: "false",
   GH_TOKEN: "ghs_" + "x".repeat(35),
 };
@@ -26,9 +27,11 @@ const confirmedTerra = {
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status });
 
 function fixture({ existing = null, mainSha = sha, incomplete = false,
-  createThrows = false, closeThrows = false } = {}) {
+  createThrows = false, closeThrows = false, liveIssueState = null,
+  liveIssueBody = body } = {}) {
   const calls = [];
   let terraCalls = 0;
+  let currentIssueState = liveIssueState ?? existing?.state ?? "open";
   const issue = (state = "open") => ({ number: 987, title, body, state });
   return {
     calls,
@@ -53,15 +56,17 @@ function fixture({ existing = null, mainSha = sha, incomplete = false,
       if (url.pathname === `/repos/${repo}/issues` && init.method === "POST") {
         assert.deepEqual(JSON.parse(init.body), { title, body });
         if (createThrows) throw new Error("PRIVATE RESPONSE");
+        currentIssueState = "open";
         return json(issue(), 201);
       }
       if (url.pathname === `/repos/${repo}/issues/987` && init.method === "PATCH") {
         assert.deepEqual(JSON.parse(init.body), { state: "closed", state_reason: "completed" });
         if (closeThrows) throw new Error("PRIVATE RESPONSE");
+        currentIssueState = "closed";
         return json(issue("closed"));
       }
       if (url.pathname === `/repos/${repo}/issues/987` && init.method === "GET") {
-        return json(issue("closed"));
+        return json({ ...issue(currentIssueState), body: liveIssueBody });
       }
       throw new Error(`unexpected request ${url.pathname}`);
     },
@@ -99,24 +104,56 @@ test("fixed Terra confirmation creates and closes one exact synthetic issue", as
     terraCalled: true, recovered: false });
   assert.equal(f.terraCalls(), 1);
   assert.deepEqual(f.calls.map((x) => x.method),
-    ["GET", "GET", "GET", "POST", "PATCH", "GET"]);
+    ["GET", "GET", "GET", "POST", "GET", "PATCH", "GET"]);
   assert.equal(JSON.stringify(result).includes(baseEnv.GH_TOKEN), false);
 });
 
-test("existing closed issue is idempotent and skips Terra", async () => {
+test("existing closed issue is read back from current GitHub state and skips Terra", async () => {
   const f = fixture({ existing: { number: 987, title, body, state: "closed" } });
-  const result = await runTerraIssueOneShot({ env: baseEnv, ...f });
+  const result = await runTerraIssueOneShot({ env: {
+    ...baseEnv, GITHUB_RUN_ATTEMPT: "2" }, ...f });
   assert.equal(result.recovered, true);
   assert.equal(result.terraCalled, false);
-  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET"]);
+  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET", "GET"]);
   assert.equal(f.terraCalls(), 0);
 });
 
 test("existing open issue is closed without a second Terra call", async () => {
   const f = fixture({ existing: { number: 987, title, body, state: "open" } });
-  const result = await runTerraIssueOneShot({ env: baseEnv, ...f });
+  const result = await runTerraIssueOneShot({ env: {
+    ...baseEnv, GITHUB_RUN_ATTEMPT: "2" }, ...f });
   assert.equal(result.recovered, true);
-  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET", "PATCH", "GET"]);
+  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET", "GET", "PATCH", "GET"]);
+  assert.equal(f.terraCalls(), 0);
+});
+
+test("stale closed search result is verified live and a reopened issue is closed", async () => {
+  const f = fixture({ existing: { number: 987, title, body, state: "closed" },
+    liveIssueState: "open" });
+  const result = await runTerraIssueOneShot({ env: {
+    ...baseEnv, GITHUB_RUN_ATTEMPT: "2" }, ...f });
+  assert.equal(result.issueClosed, true);
+  assert.deepEqual(f.calls.map((x) => x.method),
+    ["GET", "GET", "GET", "PATCH", "GET"]);
+  assert.equal(f.terraCalls(), 0);
+});
+
+test("changed issue body on current GET blocks closure and success", async () => {
+  const f = fixture({ existing: { number: 987, title, body, state: "closed" },
+    liveIssueBody: "changed" });
+  await assert.rejects(runTerraIssueOneShot({ env: {
+    ...baseEnv, GITHUB_RUN_ATTEMPT: "2" }, ...f }),
+  { code: "terra_issue_existing_mismatch" });
+  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET", "GET"]);
+  assert.equal(f.terraCalls(), 0);
+});
+
+test("rerun with Search indexing delay cannot create a duplicate issue", async () => {
+  const f = fixture();
+  await assert.rejects(runTerraIssueOneShot({ env: {
+    ...baseEnv, GITHUB_RUN_ATTEMPT: "2" }, ...f }),
+  { code: "terra_issue_retry_requires_manual_reconciliation" });
+  assert.deepEqual(f.calls.map((x) => x.method), ["GET", "GET"]);
   assert.equal(f.terraCalls(), 0);
 });
 
@@ -145,7 +182,7 @@ test("uncertain issue creation or close is never retried or logged", async () =>
     [{ createThrows: true }, "terra_issue_create_outcome_uncertain",
       ["GET", "GET", "GET", "POST"]],
     [{ closeThrows: true }, "terra_issue_close_outcome_uncertain",
-      ["GET", "GET", "GET", "POST", "PATCH"]],
+      ["GET", "GET", "GET", "POST", "GET", "PATCH"]],
   ]) {
     const f = fixture(options);
     await assert.rejects(runTerraIssueOneShot({ env: baseEnv, ...f }), { code });

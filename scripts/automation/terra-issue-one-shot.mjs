@@ -26,6 +26,8 @@ function validateEnvironment(env) {
       env.GITHUB_REPOSITORY !== REPO || env.GITHUB_REF !== "refs/heads/main" ||
       !SHA.test(env.GITHUB_SHA ?? "") || !RUN_ID.test(env.GITHUB_RUN_ID ?? "") ||
       !Number.isSafeInteger(Number(env.GITHUB_RUN_ID)) ||
+      !RUN_ID.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
+      !Number.isSafeInteger(Number(env.GITHUB_RUN_ATTEMPT)) ||
       env.TICKET_REPAIR_ENABLED !== "false" || env.AUTO_MERGE_ENABLED !== "false" ||
       typeof env.GH_TOKEN !== "string" || env.GH_TOKEN.length < 20 ||
       /[\r\n]/u.test(env.GH_TOKEN)) fail("terra_issue_configuration_invalid");
@@ -99,8 +101,12 @@ async function postIssue(env, fetchImpl, url, body, code) {
 
 async function closeExactIssue(env, fetchImpl, issue, title) {
   if (!exactIssue(issue, title)) fail("terra_issue_existing_mismatch");
-  if (issue.state === "closed") return issue.number;
   const url = `https://api.github.com/repos/${REPO}/issues/${issue.number}`;
+  const current = await getJson(env, fetchImpl, url, "terra_issue_current");
+  if (!exactIssue(current, title) || current.number !== issue.number) {
+    fail("terra_issue_existing_mismatch");
+  }
+  if (current.state === "closed") return issue.number;
   let response;
   try {
     response = await fetchImpl(url, {
@@ -130,6 +136,11 @@ export async function runTerraIssueOneShot({
   if (existing) {
     const issueNumber = await closeExactIssue(env, fetchImpl, existing, title);
     return { ok: true, issueNumber, issueClosed: true, terraCalled: false, recovered: true };
+  }
+  // GitHub Search can lag a successful but unacknowledged POST. A rerun may
+  // recover an indexed issue, but must never create another one for this run.
+  if (env.GITHUB_RUN_ATTEMPT !== "1") {
+    fail("terra_issue_retry_requires_manual_reconciliation");
   }
 
   const terra = await terraImpl({ env, fetchImpl }).catch(() => fail("terra_issue_terra_failed"));
