@@ -29,6 +29,13 @@ const KNOWN_DISABLED_REPLY_PROBE = Object.freeze({
   source: "serverless",
   level: "info",
 });
+const GEMINI_RETRY_PREFIX = "Retrying Gemini generation before response started:";
+const GEMINI_RETRY_EVENT_KEYS = Object.freeze([
+  "branch", "cache", "cacheReason", "deploymentId", "domain", "environment", "id",
+  "level", "logs", "message", "pprState", "projectId", "requestMethod", "requestPath",
+  "responseStatusCode", "source", "timestamp", "traceId",
+].sort());
+const FAILURE_LOG_WORDS = /\b(?:error|timeout|timed out|fail(?:ed|ure)?|exception|abort(?:ed)?|cancel(?:led)?)\b/iu;
 const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
 
 function fail(code) {
@@ -155,6 +162,44 @@ function isKnownDisabledReplyProbe(entry) {
     Object.entries(KNOWN_DISABLED_REPLY_PROBE).every(([key, value]) => entry[key] === value);
 }
 
+function hasOnlyLogFields(log) {
+  return log !== null && typeof log === "object" && !Array.isArray(log) &&
+    Object.keys(log).sort().join(",") === "level,message";
+}
+
+function isBenignGeminiRetry(entry) {
+  if (
+    entry === null || typeof entry !== "object" || Array.isArray(entry) ||
+    Object.keys(entry).sort().join(",") !== GEMINI_RETRY_EVENT_KEYS.join(",") ||
+    typeof entry.id !== "string" || entry.id.length < 1 || entry.id.length > 160 ||
+    !Number.isSafeInteger(entry.timestamp) || entry.timestamp < 1 ||
+    !DEPLOYMENT_ID.test(entry.deploymentId) || entry.projectId !== PROJECT_ID ||
+    entry.level !== "info" || entry.source !== "serverless" ||
+    entry.environment !== "production" || entry.branch !== "main" ||
+    entry.requestMethod !== "POST" || entry.requestPath !== "/api/chat" ||
+    entry.responseStatusCode !== 200 ||
+    typeof entry.message !== "string" || entry.message.length > 2_048 ||
+    FAILURE_LOG_WORDS.test(entry.message) ||
+    !Array.isArray(entry.logs) || entry.logs.length !== 2
+  ) return false;
+
+  const [info, retry] = entry.logs;
+  if (
+    !hasOnlyLogFields(info) || !hasOnlyLogFields(retry) ||
+    info.level !== "info" || typeof info.message !== "string" ||
+    info.message.length > 2_048 ||
+    /gemini/iu.test(info.message) || FAILURE_LOG_WORDS.test(info.message) ||
+    retry.level !== "warn" || typeof retry.message !== "string" ||
+    !retry.message.startsWith(GEMINI_RETRY_PREFIX)
+  ) return false;
+
+  const detail = retry.message.slice(GEMINI_RETRY_PREFIX.length);
+  const match = /^ \{ attempt: ([12]), nextAttempt: ([23]), delayMs: (400|1200) \}$/u.exec(detail);
+  if (!match) return false;
+  return (match[1] === "1" && match[2] === "2" && match[3] === "400") ||
+    (match[1] === "2" && match[2] === "3" && match[3] === "1200");
+}
+
 export function parseBoundedLogQuery(stdout, { filterName } = {}) {
   if (typeof stdout !== "string") fail("log_output_invalid");
   let count = 0;
@@ -174,6 +219,7 @@ export function parseBoundedLogQuery(stdout, { filterName } = {}) {
       excludedKnownProbe = true;
       continue;
     }
+    if (filterName === "gemini" && isBenignGeminiRetry(entry)) continue;
     count += 1;
   }
   if (rawCount > 100) fail("log_limit_exceeded");

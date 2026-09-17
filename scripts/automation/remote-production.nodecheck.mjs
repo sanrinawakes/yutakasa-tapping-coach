@@ -20,6 +20,29 @@ const knownDisabledReplyProbe = Object.freeze({
   source: "serverless",
   level: "info",
 });
+const benignGeminiRetry = Object.freeze({
+  id: "retry-event-123",
+  timestamp: 1789607733203,
+  deploymentId: "dpl_5BUmhZLu9vWgdHsFQMArYEcxWJti",
+  projectId: "prj_YJUFNmsjGF7hHFJ3A0BTNvrGTXBW",
+  level: "info",
+  message: "POST /api/chat",
+  source: "serverless",
+  domain: "yutakasa-tapping-coach.vercel.app",
+  cache: null,
+  cacheReason: null,
+  pprState: null,
+  traceId: "trace-id-123",
+  requestMethod: "POST",
+  requestPath: "/api/chat",
+  responseStatusCode: 200,
+  environment: "production",
+  branch: "main",
+  logs: [
+    { level: "info", message: "Chat request received" },
+    { level: "warn", message: "Retrying Gemini generation before response started: { attempt: 1, nextAttempt: 2, delayMs: 400 }" },
+  ],
+});
 
 function fakeFetch({ loginId = id, readyState = "READY", mainSha = sha } = {}) {
   return async (url) => {
@@ -191,4 +214,67 @@ test("only the known disabled-reply probe is excluded from 5xx counts", async ()
   });
   assert.equal(result.queries.fiveXx.count, 0);
   assert.equal(result.historicalQueries.fiveXx.count, 1);
+});
+
+test("a bounded successful Gemini retry is not treated as a production failure", async () => {
+  const line = `${JSON.stringify(benignGeminiRetry)}\n`;
+  assert.deepEqual(parseBoundedLogQuery(line, { filterName: "gemini" }), {
+    count: 0, truncated: false,
+  });
+  const secondAttempt = {
+    ...benignGeminiRetry,
+    logs: [benignGeminiRetry.logs[0], {
+      level: "warn",
+      message: "Retrying Gemini generation before response started: { attempt: 2, nextAttempt: 3, delayMs: 1200 }",
+    }],
+  };
+  assert.equal(parseBoundedLogQuery(`${JSON.stringify(secondAttempt)}\n`, { filterName: "gemini" }).count, 0);
+  assert.equal(parseBoundedLogQuery(line, { filterName: "levelError" }).count, 1);
+  assert.equal(parseBoundedLogQuery(line, { filterName: "timeout" }).count, 1);
+  const result = await collectRemoteLogs({
+    deploymentId: id,
+    token: "x".repeat(30),
+    runCommand: async (_command, args) => ({
+      stdout: args.includes("--query=gemini") && !args.includes(`--deployment=${id}`)
+        ? line
+        : "",
+    }),
+  });
+  assert.equal(result.queries.gemini.count, 0);
+  assert.equal(result.historicalQueries.gemini.count, 0);
+});
+
+test("Gemini retry exemption fails closed on any changed request or failure signal", () => {
+  const changes = [
+    ["responseStatusCode", 500],
+    ["responseStatusCode", 206],
+    ["responseStatusCode", "200"],
+    ["requestPath", "/api/other"],
+    ["requestMethod", "GET"],
+    ["source", "edge"],
+    ["level", "error"],
+    ["environment", "preview"],
+    ["branch", "other"],
+    ["projectId", "another-project"],
+    ["message", "Gemini streaming error"],
+    ["logs", [{ level: "error", message: "Gemini streaming error" }]],
+    ["logs", [...benignGeminiRetry.logs, { level: "error", message: "Gemini streaming error" }]],
+    ["logs", [{ level: "info", message: "Gemini timeout" }, benignGeminiRetry.logs[1]]],
+    ["logs", [benignGeminiRetry.logs[0], { level: "warn", message: "Gemini streaming error" }]],
+    ["logs", [benignGeminiRetry.logs[0], { level: "warn", message: `${benignGeminiRetry.logs[1].message} Gemini timeout` }]],
+    ["logs", [benignGeminiRetry.logs[0], { level: "warn", message: "Retrying Gemini generation before response started: { attempt: 1, nextAttempt: 2, delayMs: 1200 }" }]],
+    ["logs", [benignGeminiRetry.logs[0], { level: "warn", message: "Retrying Gemini generation before response started: { attempt: 1, nextAttempt: 2, delayMs: 400 }\nGemini streaming error" }]],
+  ];
+  for (const [field, changed] of changes) {
+    const line = `${JSON.stringify({ ...benignGeminiRetry, [field]: changed })}\n`;
+    assert.equal(parseBoundedLogQuery(line, { filterName: "gemini" }).count, 1, field);
+  }
+  assert.equal(parseBoundedLogQuery('{}\n', { filterName: "gemini" }).count, 1);
+  assert.equal(parseBoundedLogQuery(`${JSON.stringify({ ...benignGeminiRetry, unknown: true })}\n`, {
+    filterName: "gemini",
+  }).count, 1);
+  assert.equal(parseBoundedLogQuery(
+    `${JSON.stringify(benignGeminiRetry)}\n`.repeat(100), { filterName: "gemini" },
+  ).truncated, true);
+  assert.throws(() => parseBoundedLogQuery('{invalid\n', { filterName: "gemini" }), /log_json_invalid/u);
 });
