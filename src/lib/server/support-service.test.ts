@@ -439,6 +439,7 @@ describe("support attachment delivery", () => {
     await createSupportTicket({
       ...newTicketInput(),
       userEmail: "member@example.com",
+      category: "billing",
       files: [],
     });
 
@@ -451,9 +452,10 @@ describe("support attachment delivery", () => {
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
       to: ["support@example.com"],
-      reply_to: "member@example.com",
     });
-    expect(payload.text).toContain("アプリ内履歴には追加されません");
+    expect(payload.reply_to).toBeUndefined();
+    expect(payload.text).toContain(`案件ID: ${ticketId}`);
+    expect(payload.text).not.toContain("member@example.com");
   });
 
   it("does not notify staff for an exact synthetic smoke ticket or follow-up in production", async () => {
@@ -477,7 +479,7 @@ describe("support attachment delivery", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
-  it("does not suppress staff notifications for a non-UUID address in the reserved namespace", async () => {
+  it("does not suppress owner decisions for a non-UUID address in the reserved namespace", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
@@ -488,11 +490,11 @@ describe("support attachment delivery", () => {
       rpc: vi.fn().mockResolvedValue({ data: [{ ticket_id: ticketId, message_id: ticketId, created: true }], error: null }),
     } as never);
 
-    await createSupportTicket({ ...newTicketInput(), userEmail: "yutakasa-auto-smoke+not-a-uuid@example.invalid", files: [] });
+    await createSupportTicket({ ...newTicketInput(), category: "billing", userEmail: "yutakasa-auto-smoke+not-a-uuid@example.invalid", files: [] });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("sets the user as reply-to on follow-up notifications to the admin", async () => {
+  it("sends only owner-decision follow-ups without customer text or reply-to", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
@@ -503,7 +505,7 @@ describe("support attachment delivery", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
-        data: { subject: "追加確認" },
+        data: { decision_required: true },
         error: null,
       }),
     };
@@ -518,7 +520,7 @@ describe("support attachment delivery", () => {
     await appendUserSupportMessage({
       userEmail: "member@example.com",
       ticketId,
-      body: "追加情報です。",
+      body: "返金の追加情報です。",
       clientRequestId: "74e6508f-c0ff-4689-ab68-dac8fe324ac9",
       files: [],
     });
@@ -527,44 +529,37 @@ describe("support attachment delivery", () => {
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
       to: ["support@example.com"],
-      reply_to: "member@example.com",
     });
-    expect(payload.text).toContain("アプリ内履歴には追加されません");
+    expect(payload.reply_to).toBeUndefined();
+    expect(payload.text).toContain(`案件ID: ${ticketId}`);
+    expect(payload.text).not.toContain("返金の追加情報です");
+    expect(payload.text).not.toContain("member@example.com");
   });
 
-  it.each([
-    "invalid\n@example.com",
-    "member@example.com,copy@example.com",
-    "member@example.com;copy@example.com",
-    "Name<member@example.com>",
-    '"Member" <member@example.com>',
-    "member\u0000@example.com",
-  ])("records invalid reply-to %j without calling Resend", async (userEmail) => {
+  it("does not send owner alerts for ordinary technical or nontechnical inquiries", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
     vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "support@example.com");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const workLogInsert = vi.fn().mockResolvedValue({ error: null });
+    const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { decision_required: false }, error: null }) };
     getSupabaseMock.mockReturnValue({
       rpc: vi.fn().mockResolvedValue({
         data: [{ ticket_id: ticketId, message_id: ticketId, created: true }],
         error: null,
       }),
-      from: vi.fn().mockReturnValue({ insert: workLogInsert }),
+      from: vi.fn().mockReturnValue(query),
     } as never);
 
-    await createSupportTicket({
-      ...newTicketInput(),
-      userEmail,
-      files: [],
-    });
+    await createSupportTicket({ ...newTicketInput(), userEmail: "member@example.com", files: [] });
+    await createSupportTicket({ ...newTicketInput(), userEmail: "member@example.com",
+      category: "how_to", files: [] });
+    await appendUserSupportMessage({ userEmail: "member@example.com", ticketId,
+      body: "操作方法を教えてください。", clientRequestId: ticketId, files: [] });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(workLogInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: "notification_failed" })
-    );
   });
 
   it("fails closed and preserves the ticket when the notification recipient is missing", async () => {
@@ -587,6 +582,7 @@ describe("support attachment delivery", () => {
       createSupportTicket({
         ...newTicketInput(),
         userEmail: "member@example.com",
+        category: "billing",
         files: [],
       })
     ).resolves.toMatchObject({ ticket_id: ticketId, created: true });

@@ -58,6 +58,8 @@ export const MAX_SUPPORT_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 const OWNER_DECISION_PATTERN =
   /返金|払い戻し|請求|決済|料金|価格|値上げ|値下げ|課金|契約|解約|退会|キャンセル|補償|賠償|弁護士|訴訟|法的|個人情報.{0,8}(削除|開示)|個人データ.{0,8}(削除|開示)|損害賠償|消費者センター/u;
+const ENGLISH_OWNER_DECISION_PATTERN =
+  /\b(?:refund|reimbursement|chargeback|billing|payment|charge|price|subscription|cancel(?:lation)?|contract|compensation|damages|lawyer|lawsuit|legal|privacy|personal\s+(?:data|information)|delete\s+(?:my\s+)?(?:account|data))\b/iu;
 
 export function isSupportCategory(value: unknown): value is SupportCategory {
   return (
@@ -100,7 +102,9 @@ export function requiresOwnerDecision(
   subject: string,
   body: string
 ): boolean {
-  return category === "billing" || OWNER_DECISION_PATTERN.test(`${subject}\n${body}`);
+  const text = `${subject}\n${body}`;
+  return category === "billing" || OWNER_DECISION_PATTERN.test(text) ||
+    ENGLISH_OWNER_DECISION_PATTERN.test(text);
 }
 
 export function parseClientRequestId(value: unknown): string | null {
