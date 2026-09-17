@@ -35,6 +35,9 @@ DECLARE v_second TIMESTAMPTZ:=to_timestamp((v_slot-1)*600);
 DECLARE v_last TIMESTAMPTZ:=to_timestamp(v_slot*600);
 DECLARE v_receipt RECORD;
 DECLARE v_count INTEGER;
+DECLARE v_claim UUID:=gen_random_uuid();
+DECLARE v_notice JSONB;
+DECLARE v_provider UUID:=gen_random_uuid();
 BEGIN
   INSERT INTO public.subscribers(email) VALUES('completion-test@example.invalid');
   INSERT INTO public.support_tickets(user_email,category,subject,status,
@@ -124,6 +127,52 @@ BEGIN
   SELECT count(*) INTO v_count FROM public.support_work_logs l
     WHERE l.ticket_id=v_ticket AND l.event_type='repair_ticket_specific_completed';
   IF v_count<>1 THEN RAISE EXCEPTION 'completion log count %',v_count; END IF;
+  SELECT count(*) INTO v_count FROM public.yutakasa_ticket_completion_notices n
+    WHERE n.work_id=v_work AND n.ticket_id=v_ticket AND n.message_id=v_receipt.message_id
+      AND n.status='pending';
+  IF v_count<>1 THEN RAISE EXCEPTION 'atomic notification reservation missing'; END IF;
+  -- A recipient change between the reply and email claim must stop delivery.
+  -- Roll back this isolated check so the same fixture can test normal delivery.
+  BEGIN
+    INSERT INTO public.subscribers(email) VALUES('completion-drift@example.invalid');
+    UPDATE public.support_tickets SET user_email='completion-drift@example.invalid'
+      WHERE id=v_ticket;
+    v_notice:=public.claim_yutakasa_completion_notice(v_work,gen_random_uuid());
+    IF v_notice->>'status'<>'needs_review' OR NOT EXISTS(
+      SELECT 1 FROM public.yutakasa_ticket_completion_notices n
+      WHERE n.work_id=v_work AND n.status='needs_review'
+        AND n.last_error_code='recipient_changed') THEN
+      RAISE EXCEPTION 'recipient drift did not stop notification';
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM public.list_due_yutakasa_completion_notices() d
+      WHERE d.work_id=v_work) THEN
+      RAISE EXCEPTION 'notification review stopped alerting';
+    END IF;
+    RAISE EXCEPTION 'recipient drift rollback' USING ERRCODE='ZX001';
+  EXCEPTION WHEN SQLSTATE 'ZX001' THEN NULL;
+  END;
+  v_notice:=public.claim_yutakasa_completion_notice(v_work,v_claim);
+  IF v_notice->>'status'<>'sending' OR v_notice->>'claim_token'<>v_claim::TEXT
+    OR v_notice->>'idempotency_key'<>'yutakasa-ticket-completion/'||v_work::TEXT THEN
+    RAISE EXCEPTION 'notification claim invalid';
+  END IF;
+  IF (public.claim_yutakasa_completion_notice(v_work,gen_random_uuid())->>'status')<>'busy' THEN
+    RAISE EXCEPTION 'parallel notification claim accepted';
+  END IF;
+  PERFORM * FROM public.mark_yutakasa_completion_notice_uncertain(
+    v_work,v_claim,'provider_request_uncertain');
+  v_claim:=gen_random_uuid();
+  v_notice:=public.claim_yutakasa_completion_notice(v_work,v_claim);
+  IF v_notice->>'status'<>'sending' OR
+    v_notice->>'idempotency_key'<>'yutakasa-ticket-completion/'||v_work::TEXT THEN
+    RAISE EXCEPTION 'uncertain notification retry changed key';
+  END IF;
+  PERFORM * FROM public.finish_yutakasa_completion_notice(v_work,v_claim,v_provider);
+  IF (public.claim_yutakasa_completion_notice(v_work,gen_random_uuid())->>'status')<>'accepted'
+    OR NOT EXISTS(SELECT 1 FROM public.yutakasa_ticket_completion_notices n
+      WHERE n.work_id=v_work AND n.provider_email_id=v_provider AND n.status='accepted') THEN
+    RAISE EXCEPTION 'provider acceptance not durable';
+  END IF;
 
   -- A newly added user message makes an otherwise valid proof stale.
   v_work:=gen_random_uuid();

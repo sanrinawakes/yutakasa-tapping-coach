@@ -9,10 +9,11 @@ const workId="123e4567-e89b-42d3-a456-426614174000";
 const sha="a".repeat(40);
 const deploymentId="dpl_Abcdefghijklmnop";
 const context={work_id:workId,pr_number:78,merge_sha:sha,
-  deployment_id:deploymentId,scenario_key:"chat_send_reload_persistence"};
+  deployment_id:deploymentId,scenario_key:"chat_send_reload_persistence",notice_ready:true};
 const env={GITHUB_REPOSITORY:"sanrinawakes/yutakasa-tapping-coach",
   GITHUB_REF:"refs/heads/main",GITHUB_EVENT_NAME:"schedule",
   TICKET_COMPLETION_ENABLED:"true",TICKET_RECONCILE_ENABLED:"true",
+  TICKET_COMPLETION_NOTICE_ENABLED:"true",YUTAKASA_RESEND_API_KEY:"r".repeat(32),
   SUPABASE_URL:"https://example.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"s".repeat(32),
   VERCEL_TOKEN:"v".repeat(32)};
 
@@ -104,6 +105,8 @@ test("reconcile sends only proven work; unproven work enters manual review",asyn
       if(String(url).endsWith("review_yutakasa_ticket_repair_release")){
         reviewed+=1;return new Response(JSON.stringify([{status:"manual_review"}]));
       }
+      if(String(url).endsWith("list_due_yutakasa_completion_notices"))
+        return new Response("[]");
       assert.fail("unexpected request");
     }});
   assert.equal(result.completed,1);

@@ -59,18 +59,37 @@ and the release observation ledger cannot create a truthful proof row on their
 own. No per-ticket owner approval is needed once that exact evidence is
 available, but there is currently no production-eligible proof producer.
 
-With `YUTAKASA_TICKET_COMPLETION_ENABLED=true`, the reconciliation workflow
+Apply `ticket-completion-notice.sql` immediately after `ticket-completion.sql`.
+It installs an enabled trigger that reserves exactly one private notification
+outbox row in the same transaction as the in-app completion reply. Without
+that trigger the completion context reports `notice_ready=false` and the caller
+stops before writing a reply. The migration refuses to run over an existing
+completed proof because those messages need an explicit notification audit.
+
+With both `YUTAKASA_TICKET_COMPLETION_ENABLED=true` and
+`YUTAKASA_TICKET_COMPLETION_NOTICE_ENABLED=true`, the reconciliation workflow
 tries the proof route before the existing manual review transition. The
 database rechecks the ticket and latest customer message, technical category,
 absence of attachments and owner-decision terms, exact PR/release/production
 identity, and three consecutive healthy observations on the same deployment
 spanning at least twenty minutes. One transaction inserts a fixed,
 scenario-specific in-app reply, resolves the ticket, marks the job replied,
-and writes an audit log; a retry returns the original message. No email is
-sent by this path. A missing or stale proof remains manual review. Keep the
-flag absent or `false` until the trusted runner, proof provenance check,
-production synthetic test, and live readback have been verified. The old
-support `reply` API still returns HTTP 409.
+and reserves the fixed "サポート画面へ返信しました" notification; a retry returns
+the original message. The scheduled outbox worker uses the existing
+`YUTAKASA_RESEND_API_KEY` GitHub Secret and a stable `Idempotency-Key` for
+one provider POST. Resend retains keys for 24 hours, so the worker stops
+automatic retries after 23 hours and records `needs_review` if the outcome is
+still uncertain. An `accepted` row means Resend returned an email ID; it does
+not prove inbox delivery. The fixed notification contains no ticket message
+body. Synthetic support addresses are suppressed at reservation. A
+`needs_review` notice remains in each scheduled due scan, keeping the workflow
+failed and visible until someone reconciles the provider outcome. Other repair
+jobs still enter manual review, while new automatic completions pause.
+
+A missing or stale ticket proof remains manual review. Keep both flags absent
+or `false` until the trusted runner, proof provenance check, production
+synthetic reply and outbox rehearsal, provider readback, and scheduled-run
+checks have been verified. The old support `reply` API still returns HTTP 409.
 
 The reconcile workflow runs at minutes 7, 17, 27, 37, 47, and 57 UTC, avoiding GitHub's busiest top-of-hour schedule boundary while retaining ten-minute spacing. GitHub can still delay or omit a scheduled event, so this timing is not a delivery guarantee. It also has an explicit manual `workflow_dispatch` entry point. Its default `probe` mode only reads the number of due release reviews and expired final investigation claims; it never calls the recovery or review RPC, the AI model, or a customer send. `reconcile` mode runs the same guarded review path as the schedule and must be selected explicitly. Both modes require the main branch, the exact repository, and `YUTAKASA_TICKET_RECONCILE_ENABLED=true`. A successful probe proves the workflow can start and read its database; it does not prove the GitHub schedule fires or that a real repair completed.
 
