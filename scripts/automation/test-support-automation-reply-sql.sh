@@ -18,6 +18,8 @@ for file in scripts/support-migration-harness.sql supabase-migration-support.sql
   supabase-migration-support-automation-claim.sql \
   scripts/automation/repair-release-ledger.sql \
   scripts/automation/repair-release-ledger.sqlcheck.sql \
+  scripts/automation/drive-release-binding.sql \
+  scripts/automation/drive-release-binding.sqlcheck.sql \
   scripts/automation/ticket-table-grants.test-defaults.sql \
   scripts/automation/support-automation-reply.sql \
   scripts/automation/support-automation-reply-old-schema.sqlcheck.sql \

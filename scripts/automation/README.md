@@ -77,14 +77,27 @@ revision, renews that claim while it verifies the source bytes, binds the
 source SHA-256 to a stable event ID and an independently verified release
 record, then invokes the existing PDF publication ledger before marking the
 source processed. An error or uncertain upload becomes `needs_review`;
-another run cannot repeat the upload. The caller has no CLI, cron wiring, or
-production release-evidence loader. The old automation did not diagnose Drive
-files automatically, and this module does not invent such a diagnosis. Do not
-enable the flags until the release-evidence loader and verifier are implemented
-and exercised with a synthetic file. Drive metadata now carries its revision
+another run cannot repeat the upload. The caller has no CLI or cron wiring.
+The old automation did not diagnose Drive files automatically, and this module
+does not invent such a diagnosis. Drive metadata now carries its revision
 version when Google supplies it. The processing caller requires that version
 and stops before a claim if Google omits it, so an edited file cannot be
 silently treated as an already processed revision.
+
+`drive-release-binding.sql` adds a dormant, owner-recorded binding for one
+exact file revision and content SHA-256 to one structured report and release
+PR. The service role can only read the table; it has no report issuance or
+approval permission. `drive-release-binding.mjs` supplies the caller's
+`loadVerifiedResult` and `verifyReleaseEvidence` callbacks. It re-reads the
+binding and release ledger, three consecutive healthy observations, current
+GitHub main/Vercel production parity, and exact PR-head CI before publication.
+`drive-release-evidence.mjs` checks the report digest, source revision, and
+release evidence without reading customer content. These modules have no
+scheduled entry point or production migration. Apply the SQL only after the
+owner approves this specific binding path; the SQL fixture is local only.
+There is still no trusted diagnosis/report issuer, owner approval interface,
+OAuth credential, or synthetic end-to-end Drive proof. Keep processing and
+publication flags off until those are implemented and verified.
 
 Content reads also require the exact `YUTAKASA_DRIVE_PROCESSING_ENABLED=true`
 flag in their credential source. PDF publication additionally requires
@@ -110,9 +123,8 @@ before issuing a long-lived token. An External/Testing consent screen yields
 a refresh token that expires after seven days. Do not alter folder sharing
 or place OAuth credentials in the API-key variable.
 
-Before enabling this path, bind `assertEvidence` to verified release records
-and `assertLease` to the current monitor owner; verify the publication ledger
-and connect the existing durable per-file intake claim to the caller so a
+Before enabling this path, bind `assertLease` to the current monitor owner;
+verify the publication ledger and connect the existing durable per-file intake claim to the caller so a
 Drive file is not processed twice. Run a
 non-customer synthetic file through the real OAuth account, confirm Drive
 readback and three monitor observations, and then enable the verified report

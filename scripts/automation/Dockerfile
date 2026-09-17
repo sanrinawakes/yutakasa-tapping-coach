@@ -15,6 +15,7 @@ RUN npm ci --omit=dev --no-audit --no-fund \
 
 COPY --chown=node:node scripts/automation/remote-monitor.mjs scripts/automation/remote-production.mjs scripts/automation/yutakasa-production-snapshot.mjs scripts/automation/dispatch-repair.mjs scripts/automation/ticket-repair-dispatch.mjs scripts/automation/ticket-reconcile-dispatch.mjs scripts/automation/drive-intake.mjs scripts/automation/support-worker.mjs scripts/automation/monitor-ledger.mjs ./
 COPY --chown=node:node scripts/automation/drive-intake-content.mjs scripts/automation/drive-intake-ledger.mjs scripts/automation/drive-intake-runtime.mjs scripts/automation/drive-result.mjs scripts/automation/drive-result-ledger.mjs scripts/automation/render-drive-result.py ./
+COPY --chown=node:node scripts/automation/drive-release-evidence.mjs scripts/automation/drive-release-binding.mjs ./
 
 USER node
 CMD ["node", "/app/remote-monitor.mjs", "run"]
