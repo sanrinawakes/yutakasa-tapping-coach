@@ -32,6 +32,11 @@ test("promotion requires approved source CI and separate review on exact PR head
     vercelStatus: VERCEL, expectedSha: SHA, mainSha: "b".repeat(40) }), {
     prNumber: 42, headSha: SHA,
   });
+  assert.deepEqual(checkCandidate({ pr: { ...PR, mergeable_state: "clean" },
+    files: FILES, runsByWorkflow: RUNS,
+    vercelStatus: VERCEL, expectedSha: SHA, mainSha: "b".repeat(40) }), {
+    prNumber: 42, headSha: SHA,
+  });
   for (const invalid of [
     { pr: { ...PR, head: { ...PR.head, sha: "b".repeat(40) } }, files: FILES, runsByWorkflow: RUNS },
     { pr: { ...PR, base: { ref: "other" } }, files: FILES, runsByWorkflow: RUNS },
@@ -214,6 +219,25 @@ test("release ledger stores the exact regression run and digest before merge", a
   assert.equal(calls[1].method,"POST");
   assert.equal(JSON.parse(calls[1].body).ticket_before_after_run_id,12345);
   assert.equal(JSON.parse(calls[1].body).ticket_regression_artifact_sha256,"f".repeat(64));
+  const linkCalls=[];
+  await prepareReleaseLedger(env,async(url,options={})=>{
+    linkCalls.push({url:String(url),method:options.method??"GET",body:options.body});
+    return Response.json((options.method??"GET")==="GET"
+      ? [{pr_number:42,head_sha:head,merge_sha:null,status:"pending_merge",
+        ticket_before_after_run_id:null,ticket_regression_artifact_sha256:null}]
+      : [{pr_number:42,head_sha:head,merge_sha:null,status:"pending_merge",
+        ticket_before_after_run_id:12345,ticket_regression_artifact_sha256:"f".repeat(64)}]);
+  },42,head,proof);
+  assert.equal(linkCalls.length,2);
+  assert.equal(linkCalls[1].method,"PATCH");
+  assert.ok(linkCalls[1].url.includes("ticket_before_after_run_id=is.null"));
+  assert.ok(linkCalls[1].url.includes("ticket_regression_artifact_sha256=is.null"));
+  await assert.rejects(()=>prepareReleaseLedger(env,async(_url,options={})=>
+    Response.json((options.method??"GET")==="GET"
+      ? [{pr_number:42,head_sha:head,merge_sha:null,status:"pending_merge",
+        ticket_before_after_run_id:null,ticket_regression_artifact_sha256:null}]
+      : []),42,head,proof),
+  (error)=>error instanceof AiRepairPromoteError&&error.code==="release_ledger_provenance_unconfirmed");
   await assert.rejects(()=>prepareReleaseLedger(env,async()=>Response.json([{
     pr_number:42,head_sha:head,merge_sha:null,status:"pending_merge",
     ticket_before_after_run_id:12345,ticket_regression_artifact_sha256:"e".repeat(64),

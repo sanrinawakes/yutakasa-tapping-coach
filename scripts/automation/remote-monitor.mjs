@@ -418,6 +418,10 @@ export async function preflightRemoteMonitor({
       });
     } catch (error) {
       if (error instanceof MonitorLedgerError) throw error;
+      if (typeof error?.message === "string" &&
+          /^log_(?:fiveXx|levelError|timeout|gemini)_(?:project|current)_(?:query_failed|query_timeout)$/u.test(error.message)) {
+        fail(error.message);
+      }
       fail("vercel_log_snapshot_failed");
     }
     const logCounts = checkedProductionEvidence(deployment, logs);
