@@ -1,0 +1,33 @@
+name: Daily support report watchdog
+
+on:
+  schedule:
+    # Railway runs at :00. Give it 25 minutes before checking each hour.
+    - cron: '25 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-support-report-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: vars.YUTAKASA_DAILY_REPORT_WATCHDOG_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check report delivery and alert approved recipients on failure
+        env:
+          YUTAKASA_SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
+          YUTAKASA_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
+          YUTAKASA_RESEND_API_KEY: ${{ secrets.YUTAKASA_RESEND_API_KEY }}
+          YUTAKASA_REPORT_RECIPIENT_1: ${{ secrets.YUTAKASA_REPORT_RECIPIENT_1 }}
+          YUTAKASA_REPORT_RECIPIENT_2: ${{ secrets.YUTAKASA_REPORT_RECIPIENT_2 }}
+        run: node scripts/daily-report/daily-support-report-watchdog.mjs
