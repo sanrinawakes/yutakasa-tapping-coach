@@ -62,6 +62,9 @@ Secret登録後に `workflow_dispatch` で正常系を実行し、次の定期�
 ワークフローは初期状態で停止し、GitHub変数
 `YUTAKASA_DAILY_REPORT_WATCHDOG_ENABLED=true` を設定すると起動する。
 GitHub Actionsのスケジュールは遅延する場合があるため、25分ちょうどの検知は保証しない。
+公開リポジトリの定期ワークフローは、リポジトリに60日間活動がないとGitHubが
+自動停止する。GitHub側の定期実行履歴も運用上確認する。
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
 前日分の障害監視は `yutakasa_monitor_runs` の完了記録から集計する。
 監視用SQLの未導入・取得失敗・記録0件・記録のない時間帯は
 「監視結果未確認」と明記する。自動修正PRについては専用の
