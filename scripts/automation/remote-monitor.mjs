@@ -16,6 +16,7 @@ import { collectRemoteDeployment, collectRemoteLogs } from "./remote-production.
 import { RepairDispatchError, dispatchAlert, dispatchRepair } from "./dispatch-repair.mjs";
 import { dispatchQueuedTicketRepairs, inspectTicketRepairBacklog } from "./ticket-repair-dispatch.mjs";
 import { dispatchDueTicketReconciliation, inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
+import { dispatchDueRepairObservation, inspectDueRepairObservations } from "./repair-observe-dispatch.mjs";
 import { DRIVE_INTAKE_FOLDER_ID, DriveIntakeError, collectDriveIntakeMetadata } from "./drive-intake.mjs";
 import { processScheduledDriveIntake } from "./drive-processing-scheduler.mjs";
 import { SupportWorkerError, processSupportTicketContextFile } from "./support-worker.mjs";
@@ -627,6 +628,8 @@ export async function runLeasedMonitor({
   ticketBacklogImpl = inspectTicketRepairBacklog,
   reconcileInspectImpl = inspectDueTicketReconciliations,
   reconcileDispatchImpl = dispatchDueTicketReconciliation,
+  repairObserveInspectImpl = inspectDueRepairObservations,
+  repairObserveDispatchImpl = dispatchDueRepairObservation,
   driveScheduleImpl = processScheduledDriveIntake,
   ...options
 } = {}) {
@@ -634,6 +637,7 @@ export async function runLeasedMonitor({
   let result;
   let observationError;
   let reconcileInspection;
+  let repairObserveInspection;
   try {
     if ((secrets.TICKET_COMPLETION_NOTICE_ENABLED==="true" ||
         secrets.TICKET_CLARIFICATION_NOTICE_ENABLED==="true") &&
@@ -685,6 +689,21 @@ export async function runLeasedMonitor({
         result.actionRequired=true;
       }
     }
+    if (secrets.YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED === "true") {
+      repairObserveInspection = await repairObserveInspectImpl({ secrets });
+      if (!Number.isSafeInteger(repairObserveInspection?.slot) ||
+          repairObserveInspection.slot < 0 ||
+          !Number.isSafeInteger(repairObserveInspection?.dueReleases) ||
+          repairObserveInspection.dueReleases < 0 ||
+          repairObserveInspection.dueReleases > 5 ||
+          repairObserveInspection.due !== (repairObserveInspection.dueReleases > 0)) {
+        fail("repair_observer_inspection_invalid");
+      }
+      if (repairObserveInspection.due) {
+        result.reasonCodes = [...new Set([...result.reasonCodes, "repair_observation_due"])].sort();
+        result.actionRequired = true;
+      }
+    }
     await lease.finish({
       ...result,
       status: result.actionRequired ? "action_required" : "healthy",
@@ -731,6 +750,9 @@ export async function runLeasedMonitor({
   let reconcileDispatches = 0;
   let reconcileAlreadyRunning = false;
   let reconcileFailure;
+  let repairObserverDispatches = 0;
+  let repairObserverAlreadyRunning = false;
+  let repairObserverFailure;
   if (reconcileInspection?.due) {
     try {
       const dispatched=await reconcileDispatchImpl({secrets,inspection:reconcileInspection});
@@ -746,18 +768,36 @@ export async function runLeasedMonitor({
       reconcileFailure=error;
     }
   }
+  if (repairObserveInspection?.due) {
+    try {
+      const dispatched = await repairObserveDispatchImpl({
+        secrets, inspection: repairObserveInspection,
+      });
+      if (![0, 1].includes(dispatched?.dispatched) ||
+          typeof dispatched.alreadyRunning !== "boolean" ||
+          (dispatched.dispatched === 1 && dispatched.alreadyRunning) ||
+          (dispatched.dispatched === 0 && !dispatched.alreadyRunning)) {
+        fail("repair_observer_dispatch_receipt_invalid");
+      }
+      repairObserverDispatches = dispatched.dispatched;
+      repairObserverAlreadyRunning = dispatched.alreadyRunning;
+    } catch (error) {
+      repairObserverFailure = error;
+    }
+  }
   if (result.actionRequired) {
     const { alertReasons, repairReasons } = planMonitorDispatches(result.reasonCodes);
     try {
       await alertImpl({
         token: secrets.GITHUB_DISPATCH_TOKEN,
-        reasonCodes: reconcileFailure
-          ? [...new Set([...alertReasons,"ticket_reconcile_dispatch_failed"])].sort()
-          : alertReasons,
+        reasonCodes: [...new Set([...alertReasons,
+          ...(reconcileFailure ? ["ticket_reconcile_dispatch_failed"] : []),
+          ...(repairObserverFailure ? ["repair_observer_dispatch_failed"] : []),
+        ])].sort(),
         deploymentId: result.deploymentId,
       });
     } catch (error) {
-      throw reconcileFailure ?? error;
+      throw reconcileFailure ?? repairObserverFailure ?? error;
     }
     alertDispatched = true;
     await lease.recordDispatch({ alertDispatched });
@@ -772,12 +812,16 @@ export async function runLeasedMonitor({
     }
   }
   if (reconcileFailure) throw reconcileFailure;
+  if (repairObserverFailure) throw repairObserverFailure;
   const ticketRepairs = secrets.TICKET_REPAIR_BRIDGE_ENABLED === "true"
     ? await ticketDispatchImpl({ secrets }) : { dispatched: 0 };
   return { ...result, alertDispatched, repairDispatched,
     ticketRepairDispatches: ticketRepairs.dispatched,
     ticketReconcileDispatches: reconcileDispatches,
-    ticketReconcileAlreadyRunning: reconcileAlreadyRunning };
+    ticketReconcileAlreadyRunning: reconcileAlreadyRunning,
+    repairObservationDueReleases: repairObserveInspection?.dueReleases ?? 0,
+    repairObservationDispatches: repairObserverDispatches,
+    repairObservationAlreadyRunning: repairObserverAlreadyRunning };
 }
 
 export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {

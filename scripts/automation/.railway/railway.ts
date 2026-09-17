@@ -66,6 +66,7 @@ const monitor = service("yutakasa-support-monitor", {
     VERCEL_TOKEN: preserve(),
     GITHUB_DISPATCH_TOKEN: preserve(),
     TICKET_REPAIR_BRIDGE_ENABLED: preserve(),
+    YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: preserve(),
     TICKET_RECONCILE_FALLBACK_ENABLED: preserve(),
     TICKET_COMPLETION_NOTICE_ENABLED: preserve(),
     TICKET_CLARIFICATION_ENABLED: preserve(),
