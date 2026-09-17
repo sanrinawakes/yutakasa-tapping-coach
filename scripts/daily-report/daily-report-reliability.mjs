@@ -20,6 +20,8 @@ const WORK_EVENT_LABELS = Object.freeze({
   owner_decision_required: "運営判断が必要と記録",
   notification_failed: "通知メールの送信に失敗",
   remote_support_escalated: "技術案件を運営確認へ引き渡し",
+  technical_escalation_notice_provider_accepted: "技術案件の管理者通知を送信サービスが受付",
+  technical_escalation_notice_needs_review: "技術案件の管理者通知結果を要確認",
   automation_heartbeat: "自動処理のロックを更新",
 });
 

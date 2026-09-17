@@ -6,6 +6,7 @@ import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
 import { completeVerifiedTicketRepair } from "./ticket-completion.mjs";
 import { drainCompletionNotices } from "./ticket-completion-notice.mjs";
 import { drainClarificationNotices } from "./ticket-clarification-notice.mjs";
+import { drainTechnicalEscalationNotices } from "./ticket-technical-escalation-notice.mjs";
 import { RepairDispatchError } from "./dispatch-repair.mjs";
 import { inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 
@@ -32,7 +33,8 @@ async function rpc(env, fetchImpl, name, body={}) {
 export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
   draftImpl=draftVerifiedTicketReply,completionImpl=completeVerifiedTicketRepair,
   noticeImpl=drainCompletionNotices,
-  clarificationNoticeImpl=drainClarificationNotices}={}) {
+  clarificationNoticeImpl=drainClarificationNotices,
+  technicalEscalationNoticeImpl=drainTechnicalEscalationNotices}={}) {
   const scheduled=env.GITHUB_EVENT_NAME==="schedule" && !env.TICKET_RECONCILE_MODE;
   const manual=env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
     env.TICKET_RECONCILE_MODE==="reconcile";
@@ -46,10 +48,13 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
   // fail. A second pass below handles completions created in this run.
   let priorNotices={examined:0,accepted:0,needsReview:0};
   let clarificationNotices={examined:0,accepted:0,needsReview:0};
+  let priorTechnicalNotices={examined:0,accepted:0,uncertain:0,needsReview:0};
   let noticeFailure=false;
   try { priorNotices=await noticeImpl({env,fetchImpl}); }
   catch { noticeFailure=true; }
   try { clarificationNotices=await clarificationNoticeImpl({env,fetchImpl}); }
+  catch { noticeFailure=true; }
+  try { priorTechnicalNotices=await technicalEscalationNoticeImpl({env,fetchImpl}); }
   catch { noticeFailure=true; }
   const recovery=await rpc(env,fetchImpl,"recover_yutakasa_ticket_repair_jobs");
   if (!Array.isArray(recovery) || recovery.length!==1 ||
@@ -93,14 +98,19 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     if (receipt[0].status==="manual_review") manualReviews+=1;
   }
   let newNotices={examined:0,accepted:0,needsReview:0};
+  let newTechnicalNotices={examined:0,accepted:0,uncertain:0,needsReview:0};
   if (!noticeFailure) {
     try { newNotices=await noticeImpl({env,fetchImpl}); }
     catch { noticeFailure=true; }
   }
+  try { newTechnicalNotices=await technicalEscalationNoticeImpl({env,fetchImpl}); }
+  catch { noticeFailure=true; }
   // A full page is not a healthy state. The next schedule can continue, and
   // this run remains visibly failed until the backlog falls below the bound.
   if (jobs.length===100 || recovery[0].recovered===100) fail("ticket_reconcile_backlog_remaining");
-  if (noticeFailure) fail("ticket_reconcile_notification_unconfirmed");
+  if (noticeFailure || priorTechnicalNotices.uncertain>0 || newTechnicalNotices.uncertain>0 ||
+      priorTechnicalNotices.needsReview>0 || newTechnicalNotices.needsReview>0)
+    fail("ticket_reconcile_notification_unconfirmed");
   return {examined:jobs.length,manualReviews,drafted,draftFailures,completed,completionFailures,
     noticesExamined:priorNotices.examined+newNotices.examined,
     noticesAccepted:priorNotices.accepted+newNotices.accepted,
@@ -108,6 +118,8 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     clarificationNoticesExamined:clarificationNotices.examined,
     clarificationNoticesAccepted:clarificationNotices.accepted,
     clarificationNoticesNeedsReview:clarificationNotices.needsReview,
+    technicalNoticesExamined:priorTechnicalNotices.examined+newTechnicalNotices.examined,
+    technicalNoticesAccepted:priorTechnicalNotices.accepted+newTechnicalNotices.accepted,
     recoveredClaims:recovery[0].recovered};
 }
 

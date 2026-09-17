@@ -62,6 +62,8 @@ jobs:
         run: node --test scripts/automation/*.nodecheck.mjs
       - name: Atomic support repair bridge database tests
         run: bash scripts/automation/test-support-automation-reply-sql.sh
+      - name: Technical escalation notice database tests
+        run: bash scripts/automation/test-ticket-technical-escalation-notice-sql.sh
       - name: Synthetic clarification cleanup database tests
         run: bash scripts/automation/test-ticket-clarification-smoke-sql.sh
       - name: Synthetic linked PR cleanup database tests

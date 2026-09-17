@@ -121,6 +121,7 @@ test("scheduled recovery sends no customer reply and moves verified or expired w
     completed:0,completionFailures:0,noticesExamined:0,noticesAccepted:0,
     noticesNeedsReview:0,clarificationNoticesExamined:0,
     clarificationNoticesAccepted:0,clarificationNoticesNeedsReview:0,
+    technicalNoticesExamined:0,technicalNoticesAccepted:0,
     recoveredClaims:0});
   assert.equal(drafts,1);
   assert.equal(called.some((item)=>item.url.includes("append_verified")),false);
@@ -163,6 +164,33 @@ test("reconcile drains notice outbox before and after new work",async()=>{
   assert.equal(drains,2);
   assert.equal(result.noticesExamined,3);
   assert.equal(result.noticesAccepted,3);
+});
+
+test("technical escalation runs before recovery and after a new manual review",async()=>{
+  const calls=[];
+  const result=await reconcileTicketRepairs({env:{...env,
+    GITHUB_REF:"refs/heads/main",GITHUB_EVENT_NAME:"schedule",
+    TICKET_RECONCILE_ENABLED:"true"},
+    technicalEscalationNoticeImpl:async()=>{
+      calls.push("technical_notice");
+      return {examined:1,accepted:1,uncertain:0,needsReview:0};
+    },
+    draftImpl:async()=>({status:"unavailable"}),
+    fetchImpl:async(url)=>{
+      const name=String(url).split("/").at(-1);calls.push(name);
+      if(name==="recover_yutakasa_ticket_repair_jobs")
+        return new Response(JSON.stringify([{recovered:0}]));
+      if(name==="list_due_yutakasa_ticket_repair_reviews")
+        return new Response(JSON.stringify([{work_id:workId}]));
+      if(name==="review_yutakasa_ticket_repair_release")
+        return new Response(JSON.stringify([{status:"manual_review"}]));
+      assert.fail(`unexpected RPC: ${name}`);
+    }});
+  assert.deepEqual(calls,["technical_notice","recover_yutakasa_ticket_repair_jobs",
+    "list_due_yutakasa_ticket_repair_reviews","review_yutakasa_ticket_repair_release",
+    "technical_notice"]);
+  assert.equal(result.technicalNoticesAccepted,2);
+  assert.equal(result.technicalNoticesExamined,2);
 });
 
 test("notification uncertainty blocks new completion but still reviews repair work",async()=>{
@@ -222,6 +250,7 @@ test("manual reconcile requires explicit mode and uses the same no-send review p
     draftFailures:0,completed:0,completionFailures:0,noticesExamined:0,
     noticesAccepted:0,noticesNeedsReview:0,clarificationNoticesExamined:0,
     clarificationNoticesAccepted:0,clarificationNoticesNeedsReview:0,
+    technicalNoticesExamined:0,technicalNoticesAccepted:0,
     recoveredClaims:0});
   assert.equal(calls.length,2);
 });

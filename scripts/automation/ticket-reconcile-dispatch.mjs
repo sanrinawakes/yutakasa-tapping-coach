@@ -105,6 +105,25 @@ export async function inspectDueTicketReconciliations({secrets=process.env,
     }
     dueNotices+=notices.length;
   }
+  if (secrets.TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED==="true") {
+    const noticesResponse=await fetchImpl(
+      `${base}/rest/v1/rpc/list_due_yutakasa_technical_escalation_notices`,{
+        method:"POST",headers:{...headers,"content-type":"application/json"},body:"{}",
+        redirect:"error",signal:AbortSignal.timeout(10_000),
+      }).catch(()=>fail("ticket_reconcile_technical_notice_probe_unavailable"));
+    if (noticesResponse.status!==200)
+      fail("ticket_reconcile_technical_notice_probe_unavailable");
+    const notices=await readJson(noticesResponse,4096,
+      "ticket_reconcile_technical_notice_probe_invalid");
+    if (!Array.isArray(notices) || notices.length>21 || notices.some((row)=>
+        !UUID.test(row?.ticket_id??"") ||
+        !UUID.test(row?.latest_user_message_id??"") ||
+        Object.keys(row).sort().join(",")!=="latest_user_message_id,ticket_id") ||
+        new Set(notices.map((row)=>`${row.ticket_id}/${row.latest_user_message_id}`)).size!==notices.length) {
+      fail("ticket_reconcile_technical_notice_probe_invalid");
+    }
+    dueNotices+=notices.length;
+  }
   return {dueReviews:reviews.length,expiredClaims,dueNotices,
     due:reviews.length>0 || expiredClaims>0 || dueNotices>0};
 }
@@ -117,7 +136,7 @@ export async function dispatchDueTicketReconciliation({secrets=process.env,
       inspection.dueReviews<0 || inspection.dueReviews>100 ||
       ![0,1].includes(inspection.expiredClaims) ||
       !Number.isSafeInteger(inspection.dueNotices) ||
-      inspection.dueNotices<0 || inspection.dueNotices>42 ||
+      inspection.dueNotices<0 || inspection.dueNotices>63 ||
       inspection.due!==(inspection.dueReviews>0 || inspection.expiredClaims>0 ||
         inspection.dueNotices>0)) {
     fail("ticket_reconcile_inspection_invalid");

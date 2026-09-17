@@ -1,5 +1,23 @@
 # Railway monitor migration (work in progress)
 
+## Technical case escalation email
+
+`ticket-technical-escalation-notice.sql` creates a service-role-only outbox for
+technical tickets in `manual_review`. The scheduled `ticket-repair-reconcile.yml`
+checks it every ten minutes, sends one private notification per latest user
+message to `YUTAKASA_TECHNICAL_ESCALATION_EMAIL`, and records Resend acceptance.
+The message contains only the ticket ID and admin support link. It never claims
+that a repair or customer reply is complete. Apply the SQL and verify its RPCs
+before setting `YUTAKASA_TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED=true`.
+The workflow needs `YUTAKASA_TECHNICAL_ESCALATION_EMAIL` and the existing
+`YUTAKASA_RESEND_API_KEY` secrets. An uncertain provider response reuses the
+same idempotency key within 23 hours; after that it requires manual provider
+reconciliation rather than risking a duplicate message.
+Set `TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED=true` on Railway only after
+the production SQL and main workflow are ready. Its 10-minute monitor then
+probes the due outbox without reading customer content and dispatches the same
+reconciliation workflow if GitHub's scheduled run has not handled the case.
+
 This directory contains PC-independent monitoring, conservative ticket triage, and isolated AI investigation of technical anomalies. It is **not** a replacement for the full automation yet. A queued ticket or a production anomaly causes the cron process to exit with code 2. The scheduled worker atomically claims a ticket together with its claim log, then releases it as `failed` or `decision_required`; the old `reply` action returns HTTP 409 before any database write or customer send. A separate GitHub Actions job may create a draft PR or issue; automatic merge has separate CI, ruleset, preview, and private ticket gates.
 
 ## Runtime
