@@ -126,6 +126,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_TOKEN: ${{ github.token }}
+          YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID: ${{ vars.YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID }}
+          YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
           JWT_SECRET: ${{ secrets.YUTAKASA_JWT_SECRET }}
