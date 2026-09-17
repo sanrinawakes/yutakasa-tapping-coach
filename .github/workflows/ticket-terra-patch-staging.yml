@@ -1,0 +1,92 @@
+name: One-shot isolated Terra ticket patch staging proof
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-terra-patch-staging
+  cancel-in-progress: false
+
+jobs:
+  proposal:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_TERRA_PATCH_STAGING_ENABLED == 'true' &&
+      vars.YUTAKASA_TICKET_REPAIR_ENABLED == 'false' &&
+      vars.YUTAKASA_AUTO_MERGE_ENABLED == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Check isolated staging runner contracts
+        run: node --test scripts/automation/ticket-terra-patch-staging.nodecheck.mjs
+      - name: Ask capped Terra for a synthetic patch without executing it
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          YUTAKASA_TERRA_PATCH_STAGING_ENABLED: ${{ vars.YUTAKASA_TERRA_PATCH_STAGING_ENABLED }}
+          YUTAKASA_TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+          PATCH_ARTIFACT_DIRECTORY: ${{ runner.temp }}/terra-proposal
+        run: node scripts/automation/ticket-terra-patch-staging.mjs propose
+      - name: Pass only the synthetic patch and digest to the unprivileged job
+        uses: actions/upload-artifact@v4
+        with:
+          name: terra-synthetic-staging-proposal
+          path: ${{ runner.temp }}/terra-proposal/
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: proposal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: terra-synthetic-staging-proposal
+          path: ${{ runner.temp }}/terra-proposal
+      - name: Apply the patch and test before and after with no API keys
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          YUTAKASA_TERRA_PATCH_STAGING_ENABLED: ${{ vars.YUTAKASA_TERRA_PATCH_STAGING_ENABLED }}
+          YUTAKASA_TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          YUTAKASA_AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          PATCH_ARTIFACT_DIRECTORY: ${{ runner.temp }}/terra-proposal
+        run: node scripts/automation/ticket-terra-patch-staging.mjs verify
