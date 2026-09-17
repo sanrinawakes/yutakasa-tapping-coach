@@ -75,10 +75,19 @@ test("changed production or ambiguous DB receipt fails closed",async()=>{
   assert.equal(count,1);
   await assert.rejects(()=>completeVerifiedTicketRepair({workId,env,
     fetchImpl:async(url)=>new Response(String(url).endsWith("completion_context")?
-      JSON.stringify(context):JSON.stringify([{message_id:"923e4567-e89b-42d3-a456-426614174000",created:false}])),
+      JSON.stringify(context):JSON.stringify([{message_id:"bad",created:false}])),
     deploymentImpl:async()=>({ready:true,mainSha:sha,deploymentId})}),
   (error)=>error instanceof TicketCompletionError &&
     error.code==="ticket_completion_receipt_invalid");
+});
+
+test("an uncertain HTTP result can return the existing atomic send",async()=>{
+  const result=await completeVerifiedTicketRepair({workId,env,
+    fetchImpl:async(url)=>new Response(String(url).endsWith("completion_context")?
+      JSON.stringify(context):JSON.stringify([{
+        message_id:"923e4567-e89b-42d3-a456-426614174000",created:false}])),
+    deploymentImpl:async()=>({ready:true,mainSha:sha,deploymentId})});
+  assert.deepEqual(result,{status:"existing"});
 });
 
 test("reconcile sends only proven work; unproven work enters manual review",async()=>{

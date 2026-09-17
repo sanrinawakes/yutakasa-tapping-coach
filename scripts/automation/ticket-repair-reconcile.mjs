@@ -56,7 +56,7 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     if (env.TICKET_COMPLETION_ENABLED==="true") {
       try {
         const completion=await completionImpl({workId:job.work_id,env,fetchImpl});
-        if (completion?.status==="completed") { completed+=1; continue; }
+        if (["completed","existing"].includes(completion?.status)) { completed+=1; continue; }
         if (completion?.status!=="unavailable") completionFailures+=1;
       } catch { completionFailures+=1; }
     }
