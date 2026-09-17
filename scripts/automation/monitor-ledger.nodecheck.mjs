@@ -210,3 +210,69 @@ test("enabled ticket bridge alerts on queued work even when GitHub skips dispatc
   assert.deepEqual(alerts,[["ticket_repair_work_pending"]]);
   assert.equal(result.ticketRepairDispatches,1);
 });
+
+test("reconcile fallback is disabled by default and makes no database or GitHub call",async()=>{
+  const result=await runLeasedMonitor({secrets,
+    leaseImpl:async()=>({assertActive:async()=>{},finish:async()=>{},stop:async()=>{},
+      recordDispatch:async()=>{}}),
+    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    reconcileInspectImpl:async()=>assert.fail("fallback must remain off"),
+    reconcileDispatchImpl:async()=>assert.fail("fallback must remain off"),
+    alertImpl:async()=>assert.fail("no alert")});
+  assert.equal(result.ticketReconcileDispatches,0);
+});
+
+test("due review is actionable, dispatches once after lease release, then alerts",async()=>{
+  const events=[];
+  let saved;
+  const result=await runLeasedMonitor({secrets:{...secrets,
+    TICKET_RECONCILE_FALLBACK_ENABLED:"true"},
+    leaseImpl:async()=>({assertActive:async()=>{},
+      finish:async(value)=>{events.push("finish");saved=value;},
+      stop:async()=>{events.push("stop");},recordDispatch:async()=>{events.push("record");}}),
+    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    reconcileInspectImpl:async()=>{events.push("inspect");
+      return {dueReviews:1,expiredClaims:0,due:true};},
+    reconcileDispatchImpl:async()=>{events.push("dispatch");
+      return {dispatched:1,alreadyRunning:false};},
+    alertImpl:async({reasonCodes})=>{events.push("alert");
+      assert.deepEqual(reasonCodes,["ticket_reconcile_work_due"]);},
+  });
+  assert.deepEqual(events,["inspect","finish","stop","dispatch","alert","record"]);
+  assert.equal(saved.status,"action_required");
+  assert.deepEqual(saved.reasonCodes,["ticket_reconcile_work_due"]);
+  assert.equal(result.ticketReconcileDispatches,1);
+});
+
+test("active GitHub run prevents duplicate dispatch while due work remains actionable",async()=>{
+  let saved;
+  const result=await runLeasedMonitor({secrets:{...secrets,
+    TICKET_RECONCILE_FALLBACK_ENABLED:"true"},
+    leaseImpl:async()=>({assertActive:async()=>{},finish:async(value)=>{saved=value;},
+      stop:async()=>{},recordDispatch:async()=>{}}),
+    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    reconcileInspectImpl:async()=>({dueReviews:0,expiredClaims:1,due:true}),
+    reconcileDispatchImpl:async()=>({dispatched:0,alreadyRunning:true}),
+    alertImpl:async()=>{},
+  });
+  assert.equal(saved.status,"action_required");
+  assert.equal(result.ticketReconcileAlreadyRunning,true);
+  assert.equal(result.ticketReconcileDispatches,0);
+});
+
+test("reconcile dispatch failure alerts with fixed reason and exits nonzero",async()=>{
+  let saved;
+  const alertReasons=[];
+  await assert.rejects(()=>runLeasedMonitor({secrets:{...secrets,
+    TICKET_RECONCILE_FALLBACK_ENABLED:"true"},
+    leaseImpl:async()=>({assertActive:async()=>{},finish:async(value)=>{saved=value;},
+      stop:async()=>{},recordDispatch:async()=>{}}),
+    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    reconcileInspectImpl:async()=>({dueReviews:1,expiredClaims:0,due:true}),
+    reconcileDispatchImpl:async()=>{throw new Error("private provider details");},
+    alertImpl:async({reasonCodes})=>{alertReasons.push(reasonCodes);},
+  }),/private provider details/u);
+  assert.equal(saved.status,"action_required");
+  assert.deepEqual(alertReasons,[["ticket_reconcile_dispatch_failed","ticket_reconcile_work_due"]]);
+  assert.equal(JSON.stringify(saved).includes("private provider details"),false);
+});

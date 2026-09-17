@@ -3,8 +3,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { draftVerifiedTicketReply } from "./ticket-reply-draft.mjs";
+import { RepairDispatchError } from "./dispatch-repair.mjs";
+import { inspectDueTicketReconciliations } from "./ticket-reconcile-dispatch.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+const REPO = "sanrinawakes/yutakasa-tapping-coach";
 
 export class TicketReconcileError extends Error {
   constructor(code) { super(code); this.name = "TicketReconcileError"; this.code = code; }
@@ -25,7 +28,11 @@ async function rpc(env, fetchImpl, name, body={}) {
 
 export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
   draftImpl=draftVerifiedTicketReply}={}) {
-  if (env.GITHUB_EVENT_NAME!=="schedule" || env.TICKET_RECONCILE_ENABLED!=="true" ||
+  const scheduled=env.GITHUB_EVENT_NAME==="schedule" && !env.TICKET_RECONCILE_MODE;
+  const manual=env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
+    env.TICKET_RECONCILE_MODE==="reconcile";
+  if ((!scheduled && !manual) || env.GITHUB_REPOSITORY!==REPO ||
+      env.TICKET_RECONCILE_ENABLED!=="true" ||
       typeof env.SUPABASE_URL!=="string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
       typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string" || env.SUPABASE_SERVICE_ROLE_KEY.length<20) {
     fail("ticket_reconcile_configuration_invalid");
@@ -68,12 +75,30 @@ export async function reconcileTicketRepairs({env=process.env,fetchImpl=globalTh
     recoveredClaims:recovery[0].recovered};
 }
 
+export async function probeTicketRepairs({env=process.env,fetchImpl=globalThis.fetch,
+  now=Date.now}={}) {
+  if (env.GITHUB_EVENT_NAME!=="workflow_dispatch" ||
+      env.TICKET_RECONCILE_MODE!=="probe" || env.GITHUB_REPOSITORY!==REPO ||
+      env.TICKET_RECONCILE_ENABLED!=="true") fail("ticket_reconcile_configuration_invalid");
+  return inspectDueTicketReconciliations({secrets:env,fetchImpl,now});
+}
+
+export async function runTicketRepairReconcile(options={}) {
+  const env=options.env??process.env;
+  if (env.GITHUB_EVENT_NAME==="workflow_dispatch" &&
+      env.TICKET_RECONCILE_MODE==="probe") {
+    return {mode:"probe",...await probeTicketRepairs({...options,env})};
+  }
+  return {mode:"reconcile",...await reconcileTicketRepairs({...options,env})};
+}
+
 const isMain=process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url;
 if (isMain) {
-  reconcileTicketRepairs().then(
+  runTicketRepairReconcile().then(
     (result)=>process.stdout.write(`${JSON.stringify({ok:true,...result})}\n`),
     (error)=>{process.stdout.write(`${JSON.stringify({ok:false,
-      code:error instanceof TicketReconcileError?error.code:"ticket_reconcile_failed"})}\n`);
+      code:error instanceof TicketReconcileError || error instanceof RepairDispatchError
+        ? error.code : "ticket_reconcile_failed"})}\n`);
       process.exitCode=1;},
   );
 }

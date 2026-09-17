@@ -2,7 +2,17 @@ name: Review support repair release evidence
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'probe reads due counts only; reconcile processes due work'
+        required: true
+        default: probe
+        type: choice
+        options:
+          - probe
+          - reconcile
 
 permissions:
   contents: read
@@ -15,6 +25,7 @@ jobs:
   review:
     if: >-
       github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
       vars.YUTAKASA_TICKET_RECONCILE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -29,6 +40,7 @@ jobs:
       - name: Move exhausted or unproven repairs to manual review
         env:
           TICKET_RECONCILE_ENABLED: ${{ vars.YUTAKASA_TICKET_RECONCILE_ENABLED }}
+          TICKET_RECONCILE_MODE: ${{ inputs.mode }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}

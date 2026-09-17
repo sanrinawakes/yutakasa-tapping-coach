@@ -98,7 +98,10 @@ async function modelDraft(env, fetchImpl, context) {
 
 export async function draftVerifiedTicketReply({workId,env=process.env,fetchImpl=globalThis.fetch,
   projectGate=verifyOpenAiProjectKey}={}) {
-  if (!UUID.test(workId ?? "") || env.GITHUB_EVENT_NAME !== "schedule" ||
+  const allowedEvent=(env.GITHUB_EVENT_NAME === "schedule" && !env.TICKET_RECONCILE_MODE) ||
+    (env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+      env.TICKET_RECONCILE_MODE === "reconcile");
+  if (!UUID.test(workId ?? "") || !allowedEvent ||
       env.GITHUB_REPOSITORY !== REPO || env.TICKET_RECONCILE_ENABLED !== "true" ||
       typeof env.SUPABASE_URL !== "string" || !/^https:\/\/[^/]+$/u.test(env.SUPABASE_URL) ||
       typeof env.SUPABASE_SERVICE_ROLE_KEY !== "string" || env.SUPABASE_SERVICE_ROLE_KEY.length < 20) {
