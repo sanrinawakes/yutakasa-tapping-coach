@@ -6,7 +6,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
 const REPOSITORY = "sanrinawakes/yutakasa-tapping-coach";
-const SCENARIOS = new Set(["chat_send_reload_persistence", "chat_stream_completion"]);
+const SCENARIOS = new Set(["chat_title_zero_width"]);
 
 export class TicketCompletionError extends Error {
   constructor(code) { super(code); this.name = "TicketCompletionError"; this.code = code; }

@@ -52,10 +52,10 @@ BEGIN
   INSERT INTO public.subscribers(email) VALUES('completion-test@example.invalid');
   INSERT INTO public.support_tickets(user_email,category,subject,status,
     automation_status,client_request_id)
-    VALUES('completion-test@example.invalid','technical','会話が消える',
+    VALUES('completion-test@example.invalid','technical','チャットの見出しが空白になる',
       'in_progress','awaiting_repair',gen_random_uuid()) RETURNING id INTO v_ticket;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
-    VALUES(v_ticket,'user','会話を送って再読み込みすると消えます。',gen_random_uuid())
+    VALUES(v_ticket,'user','チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。',gen_random_uuid())
     RETURNING id INTO v_user;
   INSERT INTO public.yutakasa_ticket_repair_jobs(work_id,ticket_id,latest_user_message_id,
     status,pr_number,head_sha)
@@ -70,20 +70,27 @@ BEGIN
     RAISE EXCEPTION 'missing proof sent a customer message';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
   END;
+  BEGIN
+    PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
+      v_work,v_user,9701,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),101,102);
+    RAISE EXCEPTION 'generic symptom proof accepted';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+  END;
   SELECT * INTO v_receipt FROM public.record_yutakasa_ticket_completion_proof(
-    v_work,v_user,9701,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+    v_work,v_user,9701,v_head,v_main,v_deployment,'chat_title_zero_width',
     repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),101,102);
   IF v_receipt.created IS DISTINCT FROM TRUE THEN RAISE EXCEPTION 'proof not recorded'; END IF;
   IF (public.get_yutakasa_ticket_completion_context(v_work)->>'notice_ready')<>'true' THEN
     RAISE EXCEPTION 'completion context lacks enabled notification trigger';
   END IF;
   SELECT * INTO v_receipt FROM public.record_yutakasa_ticket_completion_proof(
-    v_work,v_user,9701,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+    v_work,v_user,9701,v_head,v_main,v_deployment,'chat_title_zero_width',
     repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),101,102);
   IF v_receipt.created IS DISTINCT FROM FALSE THEN RAISE EXCEPTION 'proof retry not idempotent'; END IF;
   BEGIN
     PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-      v_work,v_user,9701,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      v_work,v_user,9701,v_head,v_main,v_deployment,'chat_title_zero_width',
       repeat('c',64),repeat('d',64),repeat('e',64),repeat('0',64),101,102);
     RAISE EXCEPTION 'conflicting proof accepted';
   EXCEPTION WHEN SQLSTATE '23505' THEN NULL;
@@ -217,10 +224,10 @@ BEGIN
   v_deployment:='dpl_ABCDEF1234567890';
   INSERT INTO public.support_tickets(user_email,category,subject,status,
     automation_status,client_request_id)
-    VALUES('completion-test@example.invalid','technical','会話が消える',
+    VALUES('completion-test@example.invalid','technical','チャットの見出しが空白になる',
       'in_progress','awaiting_repair',gen_random_uuid()) RETURNING id INTO v_ticket;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
-    VALUES(v_ticket,'user','会話を再読み込みすると消えます。',gen_random_uuid()) RETURNING id INTO v_user;
+    VALUES(v_ticket,'user','チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。',gen_random_uuid()) RETURNING id INTO v_user;
   INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,
     merge_recorded_at,first_healthy_at,last_healthy_at,healthy_count,verified_at,deployment_id)
     VALUES(9702,v_head,v_main,'verified',clock_timestamp()-INTERVAL '30 minutes',
@@ -235,7 +242,7 @@ BEGIN
   INSERT INTO public.yutakasa_repair_ticket_links(pr_number,ticket_id,latest_user_message_id)
     VALUES(9702,v_ticket,v_user);
   PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-    v_work,v_user,9702,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+    v_work,v_user,9702,v_head,v_main,v_deployment,'chat_title_zero_width',
     repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),301,302);
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
     VALUES(v_ticket,'user','まだ消えます。',gen_random_uuid());
@@ -260,7 +267,7 @@ BEGIN
     VALUES('completion-test@example.invalid','technical','返金と会話',
       'in_progress','awaiting_repair',gen_random_uuid()) RETURNING id INTO v_ticket;
   INSERT INTO public.support_messages(ticket_id,sender_type,body,client_request_id)
-    VALUES(v_ticket,'user','会話を再読み込みすると消えます。',gen_random_uuid()) RETURNING id INTO v_user;
+    VALUES(v_ticket,'user','チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。',gen_random_uuid()) RETURNING id INTO v_user;
   INSERT INTO public.yutakasa_repair_releases(pr_number,head_sha,merge_sha,status,merge_recorded_at)
     VALUES(9703,v_head,v_main,'observing',clock_timestamp()-INTERVAL '30 minutes');
   INSERT INTO public.yutakasa_ticket_repair_jobs(work_id,ticket_id,latest_user_message_id,
@@ -269,26 +276,26 @@ BEGIN
     VALUES(9703,v_ticket,v_user);
   BEGIN
     PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_title_zero_width',
       repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),401,402);
     RAISE EXCEPTION 'payment subject accepted';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
   END;
-  UPDATE public.support_tickets SET subject='会話が消える' WHERE id=v_ticket;
+  UPDATE public.support_tickets SET subject='チャットの見出しが空白になる' WHERE id=v_ticket;
   UPDATE public.support_messages SET body='会話を再読み込みすると消えます。契約の相談もあります。'
     WHERE id=v_user;
   BEGIN
     PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_title_zero_width',
       repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),401,402);
     RAISE EXCEPTION 'contract message accepted';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
   END;
-  UPDATE public.support_messages SET body='会話を再読み込みすると消えます。' WHERE id=v_user;
+  UPDATE public.support_messages SET body='チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。' WHERE id=v_user;
   UPDATE public.support_tickets SET category='billing' WHERE id=v_ticket;
   BEGIN
     PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_title_zero_width',
       repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),401,402);
     RAISE EXCEPTION 'billing category accepted';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
@@ -298,7 +305,7 @@ BEGIN
     content_type,size_bytes) VALUES(v_ticket,v_user,'completion-test/path','image.png','image/png',1);
   BEGIN
     PERFORM * FROM public.record_yutakasa_ticket_completion_proof(
-      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_send_reload_persistence',
+      v_work,v_user,9703,v_head,v_main,v_deployment,'chat_title_zero_width',
       repeat('c',64),repeat('d',64),repeat('e',64),repeat('f',64),401,402);
     RAISE EXCEPTION 'attachment accepted';
   EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;

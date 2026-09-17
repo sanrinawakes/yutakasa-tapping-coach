@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_ticket_completion_proofs (
   head_sha TEXT NOT NULL CHECK (head_sha ~ '^[a-f0-9]{40}$'),
   merge_sha TEXT NOT NULL CHECK (merge_sha ~ '^[a-f0-9]{40}$'),
   deployment_id TEXT NOT NULL CHECK (deployment_id ~ '^dpl_[A-Za-z0-9]{8,160}$'),
-  scenario_key TEXT NOT NULL CHECK (scenario_key IN ('chat_send_reload_persistence','chat_stream_completion')),
+  scenario_key TEXT NOT NULL CHECK (scenario_key IN ('chat_send_reload_persistence','chat_stream_completion','chat_title_zero_width')),
   scenario_sha256 TEXT NOT NULL CHECK (scenario_sha256 ~ '^[a-f0-9]{64}$'),
   before_failure_sha256 TEXT NOT NULL CHECK (before_failure_sha256 ~ '^[a-f0-9]{64}$'),
   after_success_sha256 TEXT NOT NULL CHECK (after_success_sha256 ~ '^[a-f0-9]{64}$'),
@@ -23,6 +23,14 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_ticket_completion_proofs (
   used_message_id UUID UNIQUE REFERENCES public.support_messages(id),
   UNIQUE (ticket_id, latest_user_message_id, pr_number)
 );
+-- This migration may already have created the table with the two older
+-- scenarios. Widen the stored enum, while the RPC below accepts only the
+-- exact reproducible condition whose customer claim is independently proved.
+ALTER TABLE public.yutakasa_ticket_completion_proofs
+  DROP CONSTRAINT IF EXISTS yutakasa_ticket_completion_proofs_scenario_key_check;
+ALTER TABLE public.yutakasa_ticket_completion_proofs
+  ADD CONSTRAINT yutakasa_ticket_completion_proofs_scenario_key_check
+  CHECK (scenario_key IN ('chat_send_reload_persistence','chat_stream_completion','chat_title_zero_width'));
 ALTER TABLE public.yutakasa_ticket_completion_proofs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_ticket_completion_proofs FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.yutakasa_ticket_completion_proofs TO service_role;
@@ -48,7 +56,7 @@ BEGIN
     OR p_pr_number<1 OR p_head_sha IS NULL OR p_head_sha !~ '^[a-f0-9]{40}$'
     OR p_merge_sha IS NULL OR p_merge_sha !~ '^[a-f0-9]{40}$'
     OR p_deployment_id IS NULL OR p_deployment_id !~ '^dpl_[A-Za-z0-9]{8,160}$'
-    OR p_scenario_key IS NULL OR p_scenario_key NOT IN ('chat_send_reload_persistence','chat_stream_completion')
+    OR p_scenario_key IS DISTINCT FROM 'chat_title_zero_width'
     OR p_scenario_sha256 IS NULL OR p_scenario_sha256 !~ '^[a-f0-9]{64}$'
     OR p_before_failure_sha256 IS NULL OR p_before_failure_sha256 !~ '^[a-f0-9]{64}$'
     OR p_after_success_sha256 IS NULL OR p_after_success_sha256 !~ '^[a-f0-9]{64}$'
@@ -72,6 +80,7 @@ BEGIN
     OR v_job.latest_user_message_id IS DISTINCT FROM p_latest_user_message_id
     OR v_ticket.status<>'in_progress' OR v_ticket.automation_status<>'awaiting_repair'
     OR v_ticket.category<>'technical' OR v_ticket.decision_required
+    OR v_ticket.subject IS DISTINCT FROM 'チャットの見出しが空白になる'
     OR EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=v_job.ticket_id)
     OR v_ticket.subject ~* v_owner_terms
     OR EXISTS(SELECT 1 FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
@@ -98,12 +107,8 @@ BEGIN
   IF v_message_sha IS NULL THEN
     RAISE EXCEPTION 'ticket completion source missing' USING ERRCODE='P0001';
   END IF;
-  IF (p_scenario_key='chat_send_reload_persistence' AND NOT
-      (v_message_body ~ '(再読み込み|リロード|更新)' AND
-       v_message_body ~ '(会話|メッセージ|返信|回答)' AND
-       v_message_body ~ '(消え|保存され|残ら|表示され)'))
-    OR (p_scenario_key='chat_stream_completion' AND NOT
-      (v_message_body ~ '(回答|返信)' AND v_message_body ~ '(途中|止ま|切れ|完了しな)')) THEN
+  IF v_message_body IS DISTINCT FROM
+    'チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。' THEN
     RAISE EXCEPTION 'ticket symptom does not match scenario' USING ERRCODE='P0001';
   END IF;
   SELECT * INTO v_existing FROM public.yutakasa_ticket_completion_proofs p
@@ -200,6 +205,7 @@ BEGIN
   IF v_job.status<>'pr_open' OR v_ticket.status<>'in_progress'
     OR v_ticket.automation_status<>'awaiting_repair'
     OR v_ticket.category<>'technical' OR v_ticket.decision_required
+    OR v_ticket.subject IS DISTINCT FROM 'チャットの見出しが空白になる'
     OR EXISTS(SELECT 1 FROM public.support_attachments a WHERE a.ticket_id=v_job.ticket_id)
     OR v_ticket.subject ~* v_owner_terms
     OR EXISTS(SELECT 1 FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
@@ -212,6 +218,7 @@ BEGIN
     OR v_proof.latest_user_message_id IS DISTINCT FROM v_job.latest_user_message_id
     OR v_proof.pr_number IS DISTINCT FROM v_job.pr_number
     OR v_proof.head_sha IS DISTINCT FROM v_job.head_sha
+    OR v_proof.scenario_key IS DISTINCT FROM 'chat_title_zero_width'
     OR v_proof.merge_sha IS DISTINCT FROM v_release.merge_sha
     OR v_proof.deployment_id IS DISTINCT FROM v_release.deployment_id
     OR v_release.status<>'verified' OR v_release.verified_at IS NULL
@@ -231,6 +238,10 @@ BEGIN
       SELECT encode(sha256(convert_to(m.body,'UTF8')),'hex')
       FROM public.support_messages m WHERE m.id=v_job.latest_user_message_id
         AND m.ticket_id=v_job.ticket_id AND m.sender_type='user')
+    OR (SELECT m.body FROM public.support_messages m
+      WHERE m.id=v_job.latest_user_message_id AND m.ticket_id=v_job.ticket_id
+        AND m.sender_type='user') IS DISTINCT FROM
+      'チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。'
     OR EXISTS(SELECT 1 FROM public.support_messages m WHERE m.ticket_id=v_job.ticket_id
       AND m.sender_type='admin' AND m.created_at>v_proof.proven_at)
     OR NOT EXISTS(SELECT 1 FROM public.yutakasa_repair_ticket_links l
@@ -248,10 +259,8 @@ BEGIN
     RAISE EXCEPTION 'three matching scheduled observations missing' USING ERRCODE='P0001';
   END IF;
   v_body:=CASE v_proof.scenario_key
-    WHEN 'chat_send_reload_persistence' THEN
-      'お問い合わせの会話が再読み込み後に消える症状について、同じ条件で修正前に再現し、現在の本番環境では送信内容の保存と再読み込み後の表示を確認しました。再度お試しください。まだ消える場合は、この問い合わせに発生時刻と操作した画面をお知らせください。'
-    WHEN 'chat_stream_completion' THEN
-      'お問い合わせの回答が途中で止まる症状について、同じ条件で修正前に再現し、現在の本番環境では回答が最後まで表示されることを確認しました。再度お試しください。続く場合は、この問い合わせに発生時刻と操作した画面をお知らせください。'
+    WHEN 'chat_title_zero_width' THEN
+      'ゼロ幅スペース（U+200B）だけのメッセージで会話一覧の見出しが空白になる症状について、同じ手順で修正前に再現し、本番環境で見出しの表示と保存を確認しました。再度お試しください。まだ見出しが空白になる場合は、この問い合わせに発生時刻をお知らせください。'
     ELSE NULL END;
   IF v_body IS NULL THEN RAISE EXCEPTION 'unsupported completion scenario' USING ERRCODE='P0001'; END IF;
   INSERT INTO public.support_messages(ticket_id,sender_type,sender_email,body,client_request_id)
