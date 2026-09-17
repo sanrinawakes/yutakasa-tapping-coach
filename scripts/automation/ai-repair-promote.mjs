@@ -3,6 +3,7 @@
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import crypto from "node:crypto";
+import { findTicketRegressionProof, readRegressionTriggerHead } from "./ticket-regression-proof-check.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
@@ -183,22 +184,34 @@ async function releaseLedgerRequest(env, fetchImpl, method, query, body) {
   try { return JSON.parse(text); } catch { fail("release_ledger_response_invalid"); }
 }
 
-async function prepareReleaseLedger(env, fetchImpl, number, sha) {
-  const rows = await releaseLedgerRequest(env, fetchImpl, "GET", `?pr_number=eq.${number}&select=pr_number,head_sha,merge_sha,status`, null);
+export async function prepareReleaseLedger(env, fetchImpl, number, sha, proof) {
+  if (!Number.isSafeInteger(proof?.beforeAfterRunId) || proof.beforeAfterRunId < 1 ||
+      !/^[a-f0-9]{64}$/u.test(proof?.artifactSha256 ?? "")) {
+    fail("release_ledger_provenance_invalid");
+  }
+  const rows = await releaseLedgerRequest(env, fetchImpl, "GET", `?pr_number=eq.${number}&select=pr_number,head_sha,merge_sha,status,ticket_before_after_run_id,ticket_regression_artifact_sha256`, null);
   if (!Array.isArray(rows) || rows.length > 1) fail("release_ledger_rows_invalid");
   if (rows.length === 1) {
     if (rows[0].pr_number !== number || rows[0].head_sha !== sha ||
-        rows[0].merge_sha !== null || rows[0].status !== "pending_merge") {
+        rows[0].merge_sha !== null || rows[0].status !== "pending_merge" ||
+        rows[0].ticket_before_after_run_id !== proof.beforeAfterRunId ||
+        rows[0].ticket_regression_artifact_sha256 !== proof.artifactSha256) {
       fail("release_ledger_conflict");
     }
     return;
   }
   const inserted = await releaseLedgerRequest(env, fetchImpl, "POST", "", {
     pr_number: number, head_sha: sha, status: "pending_merge",
+    ticket_before_after_run_id: proof.beforeAfterRunId,
+    ticket_regression_artifact_sha256: proof.artifactSha256,
   });
   if (!Array.isArray(inserted) || inserted.length !== 1 ||
       inserted[0].pr_number !== number || inserted[0].head_sha !== sha ||
-      inserted[0].status !== "pending_merge") fail("release_ledger_prepare_unconfirmed");
+      inserted[0].status !== "pending_merge" ||
+      inserted[0].ticket_before_after_run_id !== proof.beforeAfterRunId ||
+      inserted[0].ticket_regression_artifact_sha256 !== proof.artifactSha256) {
+    fail("release_ledger_prepare_unconfirmed");
+  }
 }
 
 export async function verifyTicketPromotionLink(pr, env, fetchImpl) {
@@ -257,7 +270,64 @@ export async function verifyTicketPromotionLink(pr, env, fetchImpl) {
       crypto.createHash("sha256").update(rows[0].work_id).digest("hex").slice(0,16)!==id) {
     fail("ticket_pr_private_check_invalid");
   }
-  return {ticketMode:true};
+  return {ticketMode:true,workId:linkedRows[0].work_id};
+}
+
+async function verifyExactTicketCondition(workId, env, fetchImpl) {
+  const key=env.SUPABASE_SERVICE_ROLE_KEY;
+  const read=async(table,params)=>{
+    const url=new URL(`/rest/v1/${table}`,env.SUPABASE_URL);
+    for(const [name,value] of Object.entries(params))url.searchParams.set(name,value);
+    const response=await fetchImpl(url,{headers:{apikey:key,Authorization:`Bearer ${key}`,
+      Accept:"application/json"},redirect:"error",signal:AbortSignal.timeout(15_000)})
+      .catch(()=>fail("ticket_pr_condition_unavailable"));
+    if(response.status!==200)fail("ticket_pr_condition_unavailable");
+    const raw=await response.text();
+    if(Buffer.byteLength(raw)>16*1024)fail("ticket_pr_condition_invalid");
+    let rows;
+    try{rows=JSON.parse(raw);}catch{fail("ticket_pr_condition_invalid");}
+    if(!Array.isArray(rows)||rows.length>2)fail("ticket_pr_condition_invalid");
+    return rows;
+  };
+  const jobs=await read("yutakasa_ticket_repair_jobs",{work_id:`eq.${workId}`,
+    select:"work_id,ticket_id,latest_user_message_id,status,pr_number,head_sha",limit:"2"});
+  if(jobs.length!==1||!UUID.test(jobs[0]?.ticket_id??"")||
+      !UUID.test(jobs[0]?.latest_user_message_id??"")||jobs[0].status!=="pr_open"){
+    fail("ticket_pr_condition_changed");
+  }
+  const job=jobs[0];
+  const [tickets,messages,admin,attachments]=await Promise.all([
+    read("support_tickets",{id:`eq.${job.ticket_id}`,
+      select:"id,user_email,subject,category,status,automation_status,decision_required",limit:"2"}),
+    read("support_messages",{ticket_id:`eq.${job.ticket_id}`,sender_type:"eq.user",
+      select:"id,body,created_at",order:"created_at.desc,id.desc",limit:"2"}),
+    read("support_messages",{ticket_id:`eq.${job.ticket_id}`,sender_type:"eq.admin",
+      select:"id,created_at",order:"created_at.desc,id.desc",limit:"1"}),
+    read("support_attachments",{ticket_id:`eq.${job.ticket_id}`,select:"id",limit:"1"}),
+  ]);
+  const ticket=tickets[0],latest=messages[0];
+  if(tickets.length!==1||messages.length!==1||admin.length!==0||
+      attachments.length!==0||ticket?.id!==job.ticket_id||
+      ticket?.subject!=="チャットの見出しが空白になる"||
+      ticket?.category!=="technical"||ticket?.status!=="in_progress"||
+      ticket?.automation_status!=="awaiting_repair"||ticket?.decision_required!==false||
+      latest?.id!==job.latest_user_message_id||
+      latest?.body!=="チャットでゼロ幅スペース（U+200B）だけのメッセージを送ると、会話一覧の見出しが空白になります。"||
+      !Number.isFinite(Date.parse(latest?.created_at??""))){
+    fail("ticket_pr_condition_changed");
+  }
+  return {ticket,job};
+}
+
+async function requireNoCompetingRelease(env,fetchImpl,number){
+  const rows=await releaseLedgerRequest(env,fetchImpl,"GET",
+    "?status=in.(pending_merge,observing)&select=pr_number,status&limit=3",null);
+  if(!Array.isArray(rows)||rows.length>3||rows.some((row)=>
+    !Number.isSafeInteger(row?.pr_number)||
+    !["pending_merge","observing"].includes(row?.status))){
+    fail("repair_active_release_ledger_invalid");
+  }
+  return rows.some((row)=>row.pr_number!==number);
 }
 
 async function recordMergedRelease(env, fetchImpl, number, sha, mergeSha) {
@@ -275,12 +345,28 @@ async function recordMergedRelease(env, fetchImpl, number, sha, mergeSha) {
 export async function promoteAiRepair({
   env = process.env,
   fetchImpl = globalThis.fetch,
+  proofImpl = findTicketRegressionProof,
+  triggerImpl = readRegressionTriggerHead,
 } = {}) {
-  if (env.YUTAKASA_AUTO_MERGE_ENABLED !== "true") fail("auto_merge_not_enabled");
+  const configured=env.YUTAKASA_AUTO_MERGE_ENABLED==="true" ||
+    UUID.test(env.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID??"") &&
+    SHA.test(env.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA??"");
+  if(!configured)fail("auto_merge_not_enabled");
   if (env.GITHUB_REPOSITORY !== REPO ||
       typeof env.GH_TOKEN !== "string" || env.GH_TOKEN.length < 20 ||
       !SHA.test(env.REPAIR_TRIGGER_SHA ?? "")) fail("promote_configuration_invalid");
-  const sha = env.REPAIR_TRIGGER_SHA;
+  if(env.REPAIR_REGRESSION_RUN_ID &&
+      !/^[1-9][0-9]{0,17}$/u.test(env.REPAIR_REGRESSION_RUN_ID)){
+    fail("regression_proof_run_id_invalid");
+  }
+  const runId=env.REPAIR_REGRESSION_RUN_ID
+    ? Number(env.REPAIR_REGRESSION_RUN_ID):null;
+  const trigger=runId===null?null:await triggerImpl({runId,token:env.GH_TOKEN,fetchImpl});
+  if(trigger&&trigger.baseSha!==env.REPAIR_TRIGGER_SHA)fail("regression_trigger_main_changed");
+  const sha=trigger?.headSha??env.REPAIR_TRIGGER_SHA;
+  const rehearsal=env.YUTAKASA_AUTO_MERGE_ENABLED!=="true"&&
+    env.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA===sha;
+  if(env.YUTAKASA_AUTO_MERGE_ENABLED!=="true"&&!rehearsal)fail("auto_merge_not_enabled");
   verifyMainProtection(await githubJson("/rules/branches/main", env.GH_TOKEN, fetchImpl));
   const linked = await githubJson(`/commits/${sha}/pulls`, env.GH_TOKEN, fetchImpl);
   if (!Array.isArray(linked) || linked.length !== 1 || !Number.isSafeInteger(linked[0]?.number)) {
@@ -309,8 +395,30 @@ export async function promoteAiRepair({
     }
     throw error;
   }
-  await prepareReleaseLedger(env, fetchImpl, number, sha);
-  await verifyTicketPromotionLink(pr, env, fetchImpl);
+  if (!TICKET_BRANCH.test(pr.head.ref)) fail("repair_pr_type_not_enabled");
+  const privateLink=await verifyTicketPromotionLink(pr,env,fetchImpl);
+  if (!privateLink.ticketMode ||
+      rehearsal && privateLink.workId!==env.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID) {
+    fail("repair_pr_not_in_allowlist");
+  }
+  const exact=await verifyExactTicketCondition(privateLink.workId,env,fetchImpl);
+  if(exact.job.pr_number!==number||exact.job.head_sha!==sha||
+      rehearsal && !/^yutakasa-auto-smoke\+[^@]+@example\.invalid$/iu.test(exact.ticket.user_email??"")){
+    fail("ticket_pr_condition_changed");
+  }
+  const proof=await proofImpl({workId:privateLink.workId,prNumber:number,headSha:sha,
+    baseSha:main.sha,token:env.GH_TOKEN,fetchImpl,runId});
+  if(!proof)return {status:"pending_evidence",prNumber:number,headSha:sha};
+  if(proof.workId!==privateLink.workId||proof.prNumber!==number||
+      proof.headSha!==sha||proof.baseSha!==main.sha||
+      proof.scenarioKey!=="chat_title_zero_width")fail("regression_proof_untrusted");
+  if(trigger && (trigger.workId!==privateLink.workId || trigger.prNumber!==number)){
+    fail("regression_trigger_pr_mismatch");
+  }
+  if(await requireNoCompetingRelease(env,fetchImpl,number)){
+    return {status:"pending_observation",prNumber:number,headSha:sha};
+  }
+  await prepareReleaseLedger(env, fetchImpl, number, sha, proof);
   if (pr.draft) await markReady(pr.node_id, env.GH_TOKEN, fetchImpl);
   // GitHub may compute mergeability asynchronously after leaving draft. A
   // different head or base appearing at this boundary must never be merged.
@@ -327,7 +435,12 @@ export async function promoteAiRepair({
     ready.base.sha !== main?.sha || currentMain?.sha !== main?.sha ||
     ready?.mergeable !== true || ready?.mergeable_state !== "clean"
   ) fail("repair_pr_ready_confirmation_invalid");
-  await verifyTicketPromotionLink(ready, env, fetchImpl);
+  const readyLink=await verifyTicketPromotionLink(ready, env, fetchImpl);
+  if(readyLink.workId!==privateLink.workId ||
+      (await verifyExactTicketCondition(privateLink.workId,env,fetchImpl)).job.head_sha!==sha ||
+      await requireNoCompetingRelease(env,fetchImpl,number)){
+    fail("repair_pr_ready_confirmation_invalid");
+  }
   const merged = await githubJson(`/pulls/${number}/merge`, env.GH_TOKEN, fetchImpl, "PUT", {
     sha,
     merge_method: "squash",

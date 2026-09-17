@@ -6,7 +6,8 @@ import { AiRepairPromoteError, promoteAiRepair } from "./ai-repair-promote.mjs";
 
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const SHA = /^[a-f0-9]{40}$/u;
-const BRANCH = /^codex\/yutakasa-(?:ai-repair|support-ai)-[a-f0-9]{16}$/u;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+const BRANCH = /^codex\/yutakasa-support-ai-[a-f0-9]{16}$/u;
 
 export class PromoteSweepError extends Error {
   constructor(code) { super(code); this.name="PromoteSweepError"; this.code=code; }
@@ -17,7 +18,10 @@ export async function retryPendingPromotions({
   env=process.env,fetchImpl=globalThis.fetch,promoteImpl=promoteAiRepair,
   now=Date.now,
 }={}) {
-  if (env.GITHUB_EVENT_NAME!=="schedule" || env.YUTAKASA_AUTO_MERGE_ENABLED!=="true" ||
+  const enabled=env.YUTAKASA_AUTO_MERGE_ENABLED==="true" ||
+    UUID.test(env.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID??"") &&
+    SHA.test(env.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA??"");
+  if (env.GITHUB_EVENT_NAME!=="schedule" || !enabled ||
       env.GITHUB_REPOSITORY!==REPO || typeof env.GH_TOKEN!=="string" ||
       env.GH_TOKEN.length<20) fail("promote_sweep_configuration_invalid");
   const response=await fetchImpl(`https://api.github.com/repos/${REPO}/pulls?state=open&per_page=100`,{
@@ -31,6 +35,8 @@ export async function retryPendingPromotions({
   try {rows=JSON.parse(raw);} catch {fail("promote_sweep_response_invalid");}
   if (!Array.isArray(rows) || rows.length>100) fail("promote_sweep_response_invalid");
   const candidates=rows.filter((pr)=>BRANCH.test(pr?.head?.ref??"") &&
+    (env.YUTAKASA_AUTO_MERGE_ENABLED==="true" ||
+      pr?.head?.sha===env.YUTAKASA_AUTO_MERGE_REHEARSAL_HEAD_SHA) &&
     pr?.head?.repo?.full_name===REPO && SHA.test(pr?.head?.sha??"") &&
     pr?.base?.ref==="main" && Number.isFinite(Date.parse(pr?.created_at??"")) &&
     now()-Date.parse(pr.created_at)>=0 &&
@@ -43,7 +49,9 @@ export async function retryPendingPromotions({
     try {
       const result=await promoteImpl({env:{...env,REPAIR_TRIGGER_SHA:pr.head.sha},fetchImpl});
       if (result?.mergeSha) return {examined:pending+rejected+1,merged:1,pending,rejected};
-      if (result?.status==="pending_ci") {pending+=1;continue;}
+      if (["pending_ci","pending_evidence","pending_observation"].includes(result?.status)) {
+        pending+=1;continue;
+      }
       fail("promote_sweep_result_invalid");
     } catch (error) {
       if (error instanceof AiRepairPromoteError &&

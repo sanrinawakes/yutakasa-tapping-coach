@@ -20,6 +20,45 @@ CREATE TABLE IF NOT EXISTS public.yutakasa_repair_releases (
   CHECK ((healthy_count > 0) = (first_healthy_at IS NOT NULL AND last_healthy_at IS NOT NULL))
 );
 
+-- A ticket release records the completed before/after run selected at the
+-- merge gate, so the production proof runner cannot choose a different run.
+ALTER TABLE public.yutakasa_repair_releases
+  ADD COLUMN IF NOT EXISTS ticket_before_after_run_id BIGINT UNIQUE
+    CHECK (ticket_before_after_run_id IS NULL OR ticket_before_after_run_id > 0);
+ALTER TABLE public.yutakasa_repair_releases
+  ADD COLUMN IF NOT EXISTS ticket_regression_artifact_sha256 TEXT
+    CHECK (ticket_regression_artifact_sha256 IS NULL OR
+      ticket_regression_artifact_sha256 ~ '^[a-f0-9]{64}$');
+ALTER TABLE public.yutakasa_repair_releases
+  DROP CONSTRAINT IF EXISTS yutakasa_repair_releases_ticket_provenance_pair_check;
+ALTER TABLE public.yutakasa_repair_releases
+  ADD CONSTRAINT yutakasa_repair_releases_ticket_provenance_pair_check
+  CHECK ((ticket_before_after_run_id IS NULL) =
+    (ticket_regression_artifact_sha256 IS NULL));
+
+CREATE OR REPLACE FUNCTION public.lock_yutakasa_ticket_regression_provenance()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+BEGIN
+  IF OLD.ticket_before_after_run_id IS NOT NULL AND
+    (NEW.ticket_before_after_run_id IS DISTINCT FROM OLD.ticket_before_after_run_id OR
+     NEW.ticket_regression_artifact_sha256 IS DISTINCT FROM OLD.ticket_regression_artifact_sha256)
+    THEN RAISE EXCEPTION 'ticket regression provenance is immutable' USING ERRCODE='P0001';
+  END IF;
+  IF OLD.status<>'pending_merge' AND
+    (NEW.ticket_before_after_run_id IS DISTINCT FROM OLD.ticket_before_after_run_id OR
+     NEW.ticket_regression_artifact_sha256 IS DISTINCT FROM OLD.ticket_regression_artifact_sha256)
+    THEN RAISE EXCEPTION 'ticket regression provenance added after merge' USING ERRCODE='P0001';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS lock_yutakasa_ticket_regression_provenance
+  ON public.yutakasa_repair_releases;
+CREATE TRIGGER lock_yutakasa_ticket_regression_provenance
+  BEFORE UPDATE OF ticket_before_after_run_id,ticket_regression_artifact_sha256
+  ON public.yutakasa_repair_releases
+  FOR EACH ROW EXECUTE FUNCTION public.lock_yutakasa_ticket_regression_provenance();
+
 CREATE TABLE IF NOT EXISTS public.yutakasa_repair_observations (
   pr_number INTEGER NOT NULL REFERENCES public.yutakasa_repair_releases(pr_number) ON DELETE CASCADE,
   workflow_run_id BIGINT NOT NULL CHECK (workflow_run_id > 0),
@@ -110,6 +149,8 @@ END;
 $$;
 
 REVOKE ALL ON public.yutakasa_repair_releases FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lock_yutakasa_ticket_regression_provenance()
+  FROM PUBLIC, anon, authenticated;
 ALTER TABLE public.yutakasa_repair_releases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.yutakasa_repair_observations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.yutakasa_repair_observations FROM PUBLIC, anon, authenticated;
