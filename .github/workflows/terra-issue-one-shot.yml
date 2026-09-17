@@ -1,0 +1,50 @@
+name: One-shot capped Terra to GitHub issue proof
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: yutakasa-terra-issue-one-shot
+  cancel-in-progress: false
+
+jobs:
+  synthetic-issue:
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_TICKET_REPAIR_ENABLED == 'false' &&
+      vars.YUTAKASA_AUTO_MERGE_ENABLED == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify fixed synthetic probe locally
+        run: node --test scripts/automation/openai-terra-probe.nodecheck.mjs scripts/automation/terra-issue-one-shot.nodecheck.mjs
+      - name: Call capped Terra and create then close one fixed test issue
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+          TICKET_REPAIR_ENABLED: ${{ vars.YUTAKASA_TICKET_REPAIR_ENABLED }}
+          AUTO_MERGE_ENABLED: ${{ vars.YUTAKASA_AUTO_MERGE_ENABLED }}
+          YUTAKASA_OPENAI_API_KEY: ${{ secrets.YUTAKASA_OPENAI_API_KEY }}
+          YUTAKASA_OPENAI_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID }}
+          YUTAKASA_OPENAI_CAP_CONFIRMED_USD: ${{ vars.YUTAKASA_OPENAI_CAP_CONFIRMED_USD }}
+          YUTAKASA_OPENAI_KEY_SHA256: ${{ vars.YUTAKASA_OPENAI_KEY_SHA256 }}
+        run: node scripts/automation/terra-issue-one-shot.mjs

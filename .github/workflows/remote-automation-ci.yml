@@ -12,6 +12,7 @@ on:
       - .github/workflows/ticket-repair.yml
       - .github/workflows/ticket-repair-reconcile.yml
       - .github/workflows/ticket-clarification-smoke.yml
+      - .github/workflows/terra-issue-one-shot.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
   push:
@@ -26,6 +27,7 @@ on:
       - .github/workflows/ticket-repair.yml
       - .github/workflows/ticket-repair-reconcile.yml
       - .github/workflows/ticket-clarification-smoke.yml
+      - .github/workflows/terra-issue-one-shot.yml
       - .github/workflows/source-repair-ci.yml
       - .github/workflows/monitor-alert.yml
 

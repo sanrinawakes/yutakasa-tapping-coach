@@ -1,0 +1,9 @@
+# One-shot Terra to GitHub proof
+
+This manually dispatched, main-only workflow makes one low-token `gpt-5.6-terra` request with the fixed input `OK`. It checks the pinned OpenAI project, the documented USD 20 monthly cap attestation, and the key fingerprint. It then creates one issue containing only fixed synthetic text and closes it in the same run. The model output, any customer ticket, production database, Railway repair bridge, mail provider, payment provider, draft PR, and release workflow are outside this probe.
+
+The dedicated issue title is `Yutakasa synthetic Terra issue probe <16-hex marker>`. The marker is derived from repository and GitHub run ID. The workflow never receives Supabase credentials or a support work ID. The job and script require the repair and auto-merge GitHub variables to be the literal `false`. Confirm the Railway `TICKET_REPAIR_BRIDGE_ENABLED` flag is also `false` before dispatch. Do not run this from a PR branch. Dispatch only after the merged SHA is active on main and the required checks pass.
+
+On success, verify the issue exists, has the exact fixed body, and is closed. The workflow records only the issue number and fixed booleans. A rerun first looks up the exact marker, fetches the current issue, and closes it if open without another Terra call. If Search has not indexed an issue after an uncertain creation, a rerun refuses to create another one. Inspect the marker on GitHub and close that exact synthetic issue manually if necessary; do not close unrelated issues. An ambiguous or changed issue fails closed. No automatic retry is configured.
+
+This proves only the capped Terra API call and a GitHub issue write, not investigation of a real ticket or safe code generation. Those activation gates require their own evidence. No live dispatch is part of this PR.
