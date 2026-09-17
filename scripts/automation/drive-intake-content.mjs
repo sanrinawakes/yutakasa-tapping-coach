@@ -115,6 +115,7 @@ export async function fetchDriveIntakeContent({
     metadata.name !== file.name ||
     metadata.mimeType !== file.mimeType ||
     metadata.modifiedTime !== file.modifiedTime ||
+    (file.version !== undefined && metadata.version !== file.version) ||
     metadata.trashed !== false ||
     !Array.isArray(metadata.parents) ||
     !metadata.parents.includes(DRIVE_INTAKE_FOLDER_ID) ||
