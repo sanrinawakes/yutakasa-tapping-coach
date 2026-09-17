@@ -403,3 +403,71 @@ test("reconcile dispatch failure alerts with fixed reason and exits nonzero",asy
   assert.deepEqual(alertReasons,[["ticket_reconcile_dispatch_failed","ticket_reconcile_work_due"]]);
   assert.equal(JSON.stringify(saved).includes("private provider details"),false);
 });
+
+test("repair observer fallback stays off without its exact Railway flag", async () => {
+  const result = await runLeasedMonitor({ secrets,
+    leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
+      stop: async () => {}, recordDispatch: async () => {} }),
+    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+      deploymentId: "dpl_123" }),
+    repairObserveInspectImpl: async () => assert.fail("observer fallback must stay off"),
+    repairObserveDispatchImpl: async () => assert.fail("observer fallback must stay off"),
+    alertImpl: async () => assert.fail("healthy monitor must not alert"),
+  });
+  assert.equal(result.repairObservationDispatches, 0);
+  assert.equal(result.repairObservationDueReleases, 0);
+});
+
+test("due release dispatches after lease release and remains actionable", async () => {
+  const events = [];
+  let saved;
+  const result = await runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: "true" },
+    leaseImpl: async () => ({ assertActive: async () => {},
+      finish: async (value) => { events.push("finish"); saved = value; },
+      stop: async () => { events.push("stop"); },
+      recordDispatch: async () => { events.push("record"); } }),
+    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+      deploymentId: "dpl_123" }),
+    repairObserveInspectImpl: async () => { events.push("inspect");
+      return { slot: 123, dueReleases: 1, due: true }; },
+    repairObserveDispatchImpl: async () => { events.push("dispatch");
+      return { dispatched: 1, alreadyRunning: false }; },
+    alertImpl: async ({ reasonCodes }) => { events.push("alert");
+      assert.deepEqual(reasonCodes, ["repair_observation_due"]); },
+  });
+  assert.deepEqual(events, ["inspect", "finish", "stop", "dispatch", "alert", "record"]);
+  assert.equal(saved.status, "action_required");
+  assert.equal(result.repairObservationDispatches, 1);
+  assert.equal(result.repairObservationDueReleases, 1);
+});
+
+test("active observer run skips duplicate while release remains due", async () => {
+  const result = await runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: "true" },
+    leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
+      stop: async () => {}, recordDispatch: async () => {} }),
+    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+      deploymentId: "dpl_123" }),
+    repairObserveInspectImpl: async () => ({ slot: 123, dueReleases: 1, due: true }),
+    repairObserveDispatchImpl: async () => ({ dispatched: 0, alreadyRunning: true }),
+    alertImpl: async () => {},
+  });
+  assert.equal(result.repairObservationAlreadyRunning, true);
+  assert.equal(result.repairObservationDispatches, 0);
+});
+
+test("observer dispatch failure exits nonzero and sends fixed alert reason", async () => {
+  const alerts = [];
+  await assert.rejects(runLeasedMonitor({
+    secrets: { ...secrets, YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: "true" },
+    leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
+      stop: async () => {}, recordDispatch: async () => {} }),
+    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+      deploymentId: "dpl_123" }),
+    repairObserveInspectImpl: async () => ({ slot: 123, dueReleases: 1, due: true }),
+    repairObserveDispatchImpl: async () => { throw new Error("private provider details"); },
+    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); },
+  }), /private provider details/u);
+  assert.deepEqual(alerts, [["repair_observation_due", "repair_observer_dispatch_failed"]]);
+});
