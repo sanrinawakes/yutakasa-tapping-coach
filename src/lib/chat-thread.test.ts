@@ -22,6 +22,11 @@ describe("chat thread helpers", () => {
     expect(createChatTitle(" \n\t ")).toBe(DEFAULT_CHAT_TITLE);
   });
 
+  it("repair-regression:b0f5510a3974b343:chat_title_zero_width", () => {
+    expect(createChatTitle("\u200B")).toBe(DEFAULT_CHAT_TITLE);
+    expect(sanitizeChatTitle("\u200B")).toBe(DEFAULT_CHAT_TITLE);
+  });
+
   it("normalizes and limits manually entered titles", () => {
     expect(sanitizeChatTitle("  家族との関係\nについて  ")).toBe(
       "家族との関係 について"
