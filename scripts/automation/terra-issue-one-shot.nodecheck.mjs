@@ -13,6 +13,13 @@ const body = [
   "A capped Terra request containing only the fixed text OK completed before this issue was created.",
   "This issue is closed by the same workflow and must never enter a repair or release queue.",
 ].join("\n");
+const ticketTitle = `Yutakasa synthetic ticket Terra issue probe ${marker}`;
+const ticketBody = [
+  "One-shot synthetic support repair integration check. No real customer ticket was read.",
+  "The fixed capped Terra request contained only OK, and no model output is included here.",
+  "The workflow moves the private synthetic repair job to manual review and then removes it.",
+  "No PR, production code change, or customer message is created by this check.",
+].join("\n");
 const baseEnv = {
   GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REPOSITORY: repo,
   GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha, GITHUB_RUN_ID: "123456",
@@ -28,11 +35,14 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 
 function fixture({ existing = null, mainSha = sha, incomplete = false,
   createThrows = false, closeThrows = false, liveIssueState = null,
-  liveIssueBody = body } = {}) {
+  liveIssueBody = null, mode = "standalone" } = {}) {
   const calls = [];
   let terraCalls = 0;
   let currentIssueState = liveIssueState ?? existing?.state ?? "open";
-  const issue = (state = "open") => ({ number: 987, title, body, state });
+  const expectedTitle = mode === "synthetic_ticket" ? ticketTitle : title;
+  const expectedBody = mode === "synthetic_ticket" ? ticketBody : body;
+  const issue = (state = "open") => ({ number: 987,
+    title: expectedTitle, body: expectedBody, state });
   return {
     calls,
     terraCalls: () => terraCalls,
@@ -54,7 +64,8 @@ function fixture({ existing = null, mainSha = sha, incomplete = false,
           items: existing ? [existing] : [] });
       }
       if (url.pathname === `/repos/${repo}/issues` && init.method === "POST") {
-        assert.deepEqual(JSON.parse(init.body), { title, body });
+        assert.deepEqual(JSON.parse(init.body), {
+          title: expectedTitle, body: expectedBody });
         if (createThrows) throw new Error("PRIVATE RESPONSE");
         currentIssueState = "open";
         return json(issue(), 201);
@@ -66,7 +77,7 @@ function fixture({ existing = null, mainSha = sha, incomplete = false,
         return json(issue("closed"));
       }
       if (url.pathname === `/repos/${repo}/issues/987` && init.method === "GET") {
-        return json({ ...issue(currentIssueState), body: liveIssueBody });
+        return json({ ...issue(currentIssueState), body: liveIssueBody ?? expectedBody });
       }
       throw new Error(`unexpected request ${url.pathname}`);
     },
@@ -106,6 +117,17 @@ test("fixed Terra confirmation creates and closes one exact synthetic issue", as
   assert.deepEqual(f.calls.map((x) => x.method),
     ["GET", "GET", "GET", "POST", "GET", "PATCH", "GET"]);
   assert.equal(JSON.stringify(result).includes(baseEnv.GH_TOKEN), false);
+});
+
+test("synthetic ticket mode uses only fixed metadata and the scoped token", async () => {
+  const f = fixture({ mode: "synthetic_ticket" });
+  const result = await runTerraIssueOneShot({ env: baseEnv, ...f,
+    issueMode: "synthetic_ticket" });
+  assert.equal(result.issueClosed, true);
+  const creation = f.calls.find((call) => call.method === "POST");
+  assert.deepEqual(JSON.parse(creation.body), {
+    title: ticketTitle, body: ticketBody });
+  assert.equal(JSON.stringify(f.calls).includes("support route check"), false);
 });
 
 test("existing closed issue is read back from current GitHub state and skips Terra", async () => {
