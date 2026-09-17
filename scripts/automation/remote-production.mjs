@@ -1,7 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
+const VERCEL_CLI = fileURLToPath(new URL("./node_modules/.bin/vercel", import.meta.url));
 const REPO = "sanrinawakes/yutakasa-tapping-coach";
 const ALIAS_HOST = "yutakasa-tapping-coach.vercel.app";
 const PROJECT_ID = "prj_YJUFNmsjGF7hHFJ3A0BTNvrGTXBW";
@@ -14,6 +16,18 @@ const LOG_FILTERS = Object.freeze({
   levelError: "--level=error",
   timeout: "--query=timeout",
   gemini: "--query=gemini",
+});
+// One authenticated production probe hit the intentionally disabled reply action.
+// Match its immutable Vercel event identity and request metadata, never all 501s.
+const KNOWN_DISABLED_REPLY_PROBE = Object.freeze({
+  id: "khkhd-1789602181091-f3e1581be96c",
+  timestamp: 1789602181091,
+  deploymentId: "dpl_6Q4vydEuX5y4iyApkDV8gWyuXF4b",
+  requestMethod: "PATCH",
+  requestPath: "/api/internal/support-automation",
+  responseStatusCode: 501,
+  source: "serverless",
+  level: "info",
 });
 const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
 
@@ -136,20 +150,34 @@ export async function collectRemoteDeployment({
   });
 }
 
-export function parseBoundedLogQuery(stdout) {
+function isKnownDisabledReplyProbe(entry) {
+  return entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
+    Object.entries(KNOWN_DISABLED_REPLY_PROBE).every(([key, value]) => entry[key] === value);
+}
+
+export function parseBoundedLogQuery(stdout, { filterName } = {}) {
   if (typeof stdout !== "string") fail("log_output_invalid");
   let count = 0;
+  let rawCount = 0;
+  let excludedKnownProbe = false;
   for (const line of stdout.split(/\r?\n/u)) {
     if (!line.trim()) continue;
+    let entry;
     try {
-      JSON.parse(line);
+      entry = JSON.parse(line);
     } catch {
       fail("log_json_invalid");
     }
+    rawCount += 1;
+    if (filterName === "fiveXx" && isKnownDisabledReplyProbe(entry)) {
+      if (excludedKnownProbe) fail("known_reply_probe_duplicate");
+      excludedKnownProbe = true;
+      continue;
+    }
     count += 1;
   }
-  if (count > 100) fail("log_limit_exceeded");
-  return { count, truncated: count === 100 };
+  if (rawCount > 100) fail("log_limit_exceeded");
+  return { count, truncated: rawCount === 100 };
 }
 
 export async function collectRemoteLogs({
@@ -180,7 +208,7 @@ export async function collectRemoteLogs({
     for (const scope of deploymentOnly ? ["current"] : ["project", "current"]) {
       let stdout;
       try {
-        ({ stdout } = await runCommand("vercel", [
+        ({ stdout } = await runCommand(VERCEL_CLI, [
           "logs",
           ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
           `--since=${windowStart}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
@@ -196,7 +224,7 @@ export async function collectRemoteLogs({
       } catch {
         fail(`log_${name}_${scope}_query_failed`);
       }
-      const parsed = parseBoundedLogQuery(stdout);
+      const parsed = parseBoundedLogQuery(stdout, { filterName: name });
       if (parsed.truncated) fail(`log_${name}_${scope}_truncated`);
       counts.push(parsed.count);
     }
