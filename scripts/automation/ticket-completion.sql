@@ -155,7 +155,10 @@ BEGIN
   IF p_work_id IS NULL THEN RAISE EXCEPTION 'invalid repair work' USING ERRCODE='22023'; END IF;
   RETURN (SELECT jsonb_build_object('work_id',p.work_id,'pr_number',p.pr_number,
     'merge_sha',p.merge_sha,'deployment_id',p.deployment_id,
-    'scenario_key',p.scenario_key)
+    'scenario_key',p.scenario_key,'notice_ready',
+      EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=
+        'public.yutakasa_ticket_completion_proofs'::regclass
+        AND t.tgname='reserve_yutakasa_ticket_completion_notice' AND t.tgenabled='O'))
     FROM public.yutakasa_ticket_completion_proofs p
     JOIN public.yutakasa_ticket_repair_jobs j ON j.work_id=p.work_id
     WHERE p.work_id=p_work_id AND p.used_message_id IS NULL AND j.status='pr_open');
