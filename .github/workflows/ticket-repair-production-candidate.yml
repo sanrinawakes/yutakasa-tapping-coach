@@ -18,6 +18,7 @@ on:
         options:
           - chat_send_reload_persistence
           - chat_stream_completion
+          - chat_title_zero_width
       before_after_run_id:
         description: Completed ticket regression evidence Actions run
         required: true

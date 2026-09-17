@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { ZERO_WIDTH_CONDITION } from "./ticket-customer-condition-proof.mjs";
 
 const PRODUCTION_URL = "https://yutakasa-tapping-coach.vercel.app";
 const TEST_ACCOUNT_MARKER = "yutakasa-ai-repair-smoke-v1";
@@ -19,6 +20,7 @@ const SYNTHETIC_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const PREFLIGHT_LIMIT_MS = 2 * 60 * 1_000;
 const BROWSER_PHASE_LIMIT_MS = 4 * 60 * 1_000;
+const TITLE_BROWSER_PHASE_LIMIT_MS = 8 * 60 * 1_000;
 const SUPPORT_UNEXPECTED_DEPENDENTS = [
   "support_attachments", "support_work_logs", "yutakasa_repair_ticket_links",
   "yutakasa_ticket_repair_jobs", "yutakasa_ticket_reply_drafts",
@@ -263,6 +265,89 @@ async function assertReload(page, prompt, expectedRendered, expectedAssistantCou
   if ((await assistant.innerText()).trim() !== expectedRendered) fail("smoke_chat_reload_mismatch");
 }
 
+async function assertDefaultTitleInSidebar(page) {
+  const titles = page.locator("div.group.relative p.text-base.font-medium");
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll("div.group.relative p.text-base.font-medium")]
+      .filter((item) => item.textContent?.trim() === expected).length === 1,
+  ZERO_WIDTH_CONDITION.expectedTitle, { timeout: 30_000 });
+  const matching = titles.filter({ hasText: ZERO_WIDTH_CONDITION.expectedTitle });
+  if (await matching.count() !== 1 ||
+      (await matching.first().textContent())?.trim() !== ZERO_WIDTH_CONDITION.expectedTitle) {
+    fail("smoke_title_ui_mismatch");
+  }
+}
+
+async function runZeroWidthTitleScenario(browser, env, fetchImpl, email, token, errors) {
+  const priorThreads = await listThreads(env, fetchImpl, email);
+  if (priorThreads.length !== 1) fail("smoke_title_prior_thread_ambiguous");
+  const desktop = await openPage(browser, { viewport: { width: 1440, height: 900 } }, token, errors);
+  let titleThreadId;
+  try {
+    await desktop.page.getByRole("button", { name: "新しいチャット", exact: true }).click();
+    let created = [];
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const threads = await listThreads(env, fetchImpl, email);
+      created = threads.filter((thread) => thread.id !== priorThreads[0].id);
+      if (created.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (created.length !== 1 || created[0].title !== ZERO_WIDTH_CONDITION.expectedTitle) {
+      fail("smoke_title_thread_not_created");
+    }
+    titleThreadId = created[0].id;
+    await desktop.page.locator('textarea[placeholder="メッセージを入力..."]')
+      .fill(ZERO_WIDTH_CONDITION.input);
+    const pending = desktop.page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/chat" && response.request().method() === "POST",
+    { timeout: 60_000 });
+    await desktop.page.getByRole("button", { name: "送信" }).click();
+    const response = await pending;
+    if (response.status() !== 200 ||
+        await within(response.finished(), 90_000, "smoke_title_stream_timeout")) {
+      fail("smoke_title_chat_send_failed");
+    }
+    const answer = await within(response.text(), 10_000, "smoke_title_stream_body_timeout");
+    if (!answer.trim() || answer.includes(PARTIAL_RESPONSE)) fail("smoke_title_stream_incomplete");
+    const after = await listThreads(env, fetchImpl, email);
+    const titleThread = after.find((thread) => thread.id === titleThreadId);
+    if (after.length !== 2 || titleThread?.title !== ZERO_WIDTH_CONDITION.expectedTitle) {
+      fail("smoke_title_database_mismatch");
+    }
+    const messages = await listMessages(env, fetchImpl, titleThreadId);
+    if (messages.length !== 2 || messages[0]?.role !== "user" ||
+        messages[0]?.content !== ZERO_WIDTH_CONDITION.input ||
+        messages[1]?.role !== "assistant" || !messages[1]?.content?.trim()) {
+      fail("smoke_title_messages_not_saved");
+    }
+    await assertDefaultTitleInSidebar(desktop.page);
+    const reload = await desktop.page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (reload?.status() !== 200) fail("smoke_title_reload_failed");
+    await assertDefaultTitleInSidebar(desktop.page);
+  } finally {
+    await within(desktop.context.close(), 30_000, "smoke_title_desktop_close_timeout");
+  }
+  const { devices } = await import("playwright");
+  const mobile = await openPage(browser, devices["Pixel 7"], token, errors);
+  try {
+    const threads = await listThreads(env, fetchImpl, email);
+    if (threads.length !== 2 ||
+        threads.find((thread) => thread.id === titleThreadId)?.title !== ZERO_WIDTH_CONDITION.expectedTitle) {
+      fail("smoke_title_mobile_database_mismatch");
+    }
+    await mobile.page.getByRole("button", { name: "メニューを開く" }).click();
+    await assertDefaultTitleInSidebar(mobile.page);
+  } finally {
+    await within(mobile.context.close(), 30_000, "smoke_title_mobile_close_timeout");
+  }
+  if (errors.length !== 0) fail("smoke_title_client_error");
+  return { scenarioKey: ZERO_WIDTH_CONDITION.scenarioKey,
+    inputSha256: createHash("sha256").update(ZERO_WIDTH_CONDITION.input).digest("hex"),
+    expectedTitle: ZERO_WIDTH_CONDITION.expectedTitle,
+    desktopBrowser: true, mobileBrowser: true, dbTitleVerified: true,
+    uiTitleVerified: true, reloadTitleVerified: true, clientErrors: 0 };
+}
+
 async function postSyntheticSupportTicket(fetchImpl, token, clientRequestId, body) {
   let response;
   try {
@@ -465,12 +550,14 @@ export async function reapStaleSyntheticIdentities(env, fetchImpl, nowMs = Date.
 /** Run only from a trusted main checkout, with no PR code or production secrets in the browser. */
 export async function runProductionFunctionalSmoke({
   release, deployment, env = process.env, fetchImpl = globalThis.fetch,
-  chromiumImpl = null, browserPhaseLimitMs = BROWSER_PHASE_LIMIT_MS,
-  includeSupportTicket = false,
+  chromiumImpl = null, browserPhaseLimitMs = null,
+  includeSupportTicket = false, titleScenario = false,
 } = {}) {
   requiredConfiguration(env, release, deployment);
   if (typeof includeSupportTicket !== "boolean") fail("smoke_support_option_invalid");
-  if (!Number.isSafeInteger(browserPhaseLimitMs) || browserPhaseLimitMs < 1) fail("smoke_browser_limit_invalid");
+  if (typeof titleScenario !== "boolean") fail("smoke_title_option_invalid");
+  const phaseLimit = browserPhaseLimitMs ?? (titleScenario ? TITLE_BROWSER_PHASE_LIMIT_MS : BROWSER_PHASE_LIMIT_MS);
+  if (!Number.isSafeInteger(phaseLimit) || phaseLimit < 1) fail("smoke_browser_limit_invalid");
   const preflightStartedAt = Date.now();
   await reapStaleSyntheticIdentities(env, fetchImpl);
   if (Date.now() - preflightStartedAt > PREFLIGHT_LIMIT_MS) fail("smoke_preflight_timeout");
@@ -495,6 +582,7 @@ export async function runProductionFunctionalSmoke({
   let phaseExpired = false;
   let phaseTimer;
   let supportEvidence = null;
+  let titleEvidence = null;
   try {
     const inserted = await databaseRequest(env, fetchImpl, "subscribers", {
       select: "id,email,status,subscription_status,first_payment_date,myasp_data",
@@ -512,12 +600,12 @@ export async function runProductionFunctionalSmoke({
     });
     if (inserted.length !== 1) fail("smoke_identity_insert_unconfirmed");
     validateAccount(inserted[0], email, runId);
-    // End browser work after four minutes so the finally block can remove
-    // test data well before the scheduled job's twenty-minute deadline.
+    // Bound browser work so the finally block can remove test data before
+    // the workflow deadline. The title replay includes an extra chat turn.
     phaseTimer = setTimeout(() => {
       phaseExpired = true;
       if (browser) void browser.close().catch(() => undefined);
-    }, Math.min(browserPhaseLimitMs, BROWSER_PHASE_LIMIT_MS));
+    }, Math.min(phaseLimit, titleScenario ? TITLE_BROWSER_PHASE_LIMIT_MS : BROWSER_PHASE_LIMIT_MS));
     const assertBrowserTime = () => { if (phaseExpired) fail("smoke_browser_phase_timeout"); };
     const chromium = chromiumImpl ?? (await import("playwright")).chromium;
     // ubuntu-24.04 GitHub hosted runners provide stable Chrome. Avoid downloading
@@ -566,6 +654,10 @@ export async function runProductionFunctionalSmoke({
       supportEvidence = await checkSyntheticSupportTicket(env, fetchImpl, email, token);
       assertBrowserTime();
     }
+    if (titleScenario) {
+      titleEvidence = await runZeroWidthTitleScenario(browser, env, fetchImpl, email, token, errors);
+      assertBrowserTime();
+    }
     completed = true;
   } catch (error) {
     primaryError = error;
@@ -593,6 +685,7 @@ export async function runProductionFunctionalSmoke({
     testDataCleaned: true,
     clientErrors: 0,
     ...(supportEvidence ? { support: supportEvidence } : {}),
+    ...(titleEvidence ? { titleScenario: { ...titleEvidence, testDataCleaned: true } } : {}),
   };
 }
 

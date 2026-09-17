@@ -9,6 +9,7 @@ import {
   checkScenarioSourceBinding, checkReleaseBinding, checkProductionSmoke,
   runProductionCandidate,
 } from "./ticket-repair-production-candidate.mjs";
+import { ZERO_WIDTH_CONDITION, sha256 } from "./ticket-customer-condition-proof.mjs";
 
 const workId = "d56b080a-a505-491a-9569-5ce865e803d7";
 const ticketId = "b3d64c95-199d-4e3e-a6dd-f683f9f1aec5";
@@ -206,6 +207,89 @@ test("full candidate flow is read-only for real tickets and never calls completi
     assert.equal(JSON.parse(await readFile(evidencePath, "utf8")).productionSuccessSha256,
       result.productionSuccessSha256);
     assert.equal(calls.some((call) => call.method !== "GET" || call.path.includes("/rpc/")), false);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("exact zero-width ticket records proof only after trusted production replay and readback", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "yutakasa-title-proof-test-"));
+  const titlePath = "src/lib/chat-thread.test.ts";
+  const titleSource = "it('repair-regression:opaque:chat_title_zero_width', () => expect(title).toBe(DEFAULT_CHAT_TITLE));\n";
+  const titleScenarioSha = sha256(titleSource);
+  const titleArtifact = { ...artifact, scenarioKey: ZERO_WIDTH_CONDITION.scenarioKey,
+    scenarioSha256: titleScenarioSha };
+  const titleFile = { type: "file", encoding: "base64", path: titlePath,
+    size: Buffer.byteLength(titleSource), content: Buffer.from(titleSource).toString("base64") };
+  const titleTicket = { ...ticket, subject: ZERO_WIDTH_CONDITION.subject };
+  const titleMessages = [{ ...latestMessages[0], body: ZERO_WIDTH_CONDITION.body }];
+  const titleSmoke = { ...smoke, titleScenario: {
+    scenarioKey: ZERO_WIDTH_CONDITION.scenarioKey,
+    inputSha256: sha256(ZERO_WIDTH_CONDITION.input),
+    expectedTitle: ZERO_WIDTH_CONDITION.expectedTitle,
+    desktopBrowser: true, mobileBrowser: true, dbTitleVerified: true,
+    uiTitleVerified: true, reloadTitleVerified: true,
+    testDataCleaned: true, clientErrors: 0,
+  } };
+  const productionSuccessSha256 = sha256(JSON.stringify({
+    scenarioKey: ZERO_WIDTH_CONDITION.scenarioKey, evidence: titleSmoke }));
+  const recorded = { work_id: workId, ticket_id: ticketId,
+    latest_user_message_id: messageId, pr_number: 78, head_sha: headSha,
+    merge_sha: mergeSha, deployment_id: deploymentId,
+    scenario_key: ZERO_WIDTH_CONDITION.scenarioKey,
+    scenario_sha256: titleScenarioSha,
+    before_failure_sha256: titleArtifact.beforeFailureSha256,
+    after_success_sha256: titleArtifact.afterSuccessSha256,
+    production_success_sha256: productionSuccessSha256,
+    before_after_run_id: 450, production_run_id: 451 };
+  const candidatePath = path.join(temp, "input.json");
+  const evidencePath = path.join(temp, "output.json");
+  await writeFile(candidatePath, JSON.stringify(titleArtifact));
+  const calls = [];
+  const fetchImpl = async (value, options = {}) => {
+    const url = new URL(value);
+    calls.push({ path: url.pathname, method: options.method ?? "GET" });
+    let output;
+    if (url.pathname.endsWith(`/actions/runs/${input.beforeAfterRunId}`)) output = run;
+    else if (url.pathname.endsWith(`/actions/runs/${input.beforeAfterRunId}/artifacts`)) output = artifactList;
+    else if (url.pathname.endsWith(`/pulls/${input.prNumber}`)) output = pr;
+    else if (url.pathname.endsWith(`/commits/${input.mainSha}`)) output = mergeCommit;
+    else if (url.pathname.endsWith(`/contents/${titlePath}`)) output = titleFile;
+    else if (url.pathname.endsWith("/yutakasa_ticket_repair_jobs")) output = [job];
+    else if (url.pathname.endsWith("/yutakasa_repair_ticket_links")) output = links;
+    else if (url.pathname.endsWith("/yutakasa_repair_releases")) output = [release];
+    else if (url.pathname.endsWith("/support_tickets")) output = [titleTicket];
+    else if (url.pathname.endsWith("/support_attachments")) output = [];
+    else if (url.pathname.endsWith("/support_messages")) output =
+      url.searchParams.get("sender_type") === "eq.user" ? titleMessages : [];
+    else if (url.pathname.endsWith("/rpc/record_yutakasa_ticket_completion_proof")) {
+      assert.equal(options.method, "POST");
+      const body = JSON.parse(options.body);
+      assert.equal(body.p_scenario_key, ZERO_WIDTH_CONDITION.scenarioKey);
+      assert.equal(body.p_production_success_sha256, productionSuccessSha256);
+      output = [{ created: true }];
+    } else if (url.pathname.endsWith("/yutakasa_ticket_completion_proofs")) output = [recorded];
+    else throw Error(`unexpected fetch ${url.pathname}`);
+    return new Response(JSON.stringify(output), { status: 200 });
+  };
+  try {
+    const result = await runProductionCandidate({
+      env: { ...env, SCENARIO_KEY: ZERO_WIDTH_CONDITION.scenarioKey,
+        CANDIDATE_PATH: candidatePath, EVIDENCE_PATH: evidencePath },
+      root: path.resolve("."), fetchImpl,
+      deploymentImpl: async () => deployment,
+      smokeImpl: async ({ titleScenario, includeSupportTicket }) => {
+        assert.equal(titleScenario, true);
+        assert.equal(includeSupportTicket, false);
+        return titleSmoke;
+      },
+    });
+    assert.equal(result.customerConditionMatched, true);
+    assert.equal(result.ticketCompletionProofRecorded, true);
+    assert.equal(result.missingProof, null);
+    assert.equal(calls.filter((call) => call.path.includes("/rpc/")).length, 1);
+    assert.equal(JSON.parse(await readFile(evidencePath, "utf8")).productionSuccessSha256,
+      productionSuccessSha256);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

@@ -27,6 +27,7 @@ import {
   type SupportCategory,
   type SupportStatus,
 } from "@/lib/support";
+import technicalScenarios from "@/lib/support-technical-scenarios.json";
 import styles from "./page.module.css";
 
 type TicketSummary = {
@@ -540,6 +541,18 @@ export default function SupportPage() {
                   ))}
                 </select>
               </label>
+              {category === "technical" && (
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  onClick={() => {
+                    setSubject(technicalScenarios.chat_title_zero_width.subject);
+                    setBody(technicalScenarios.chat_title_zero_width.body);
+                  }}
+                >
+                  ゼロ幅スペースの入力で見出しが空白になる
+                </button>
+              )}
               <label>
                 件名
                 <input
