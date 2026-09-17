@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Trusted, main-only production measurement for the two fixed chat scenarios.
-// A free-text support message has no server-attested replay parameters, so
-// this produces candidate evidence only and never calls the completion RPC.
+// Free-text support symptoms have no server-attested replay parameters. Only
+// the exact zero-width title condition can record a completion proof.
 import { createHash } from "node:crypto";
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -44,7 +44,8 @@ export function checkInputs(env) {
   const beforeAfterRunId = Number(env.BEFORE_AFTER_RUN_ID);
   const productionRunId = Number(env.GITHUB_RUN_ID);
   if (env.GITHUB_REPOSITORY !== REPO || env.GITHUB_REF !== "refs/heads/main" ||
-      env.GITHUB_EVENT_NAME !== "workflow_dispatch" || !SHA.test(env.GITHUB_SHA ?? "") ||
+      !["workflow_dispatch", "workflow_run"].includes(env.GITHUB_EVENT_NAME) ||
+      !SHA.test(env.GITHUB_SHA ?? "") ||
       !UUID.test(env.WORK_ID ?? "") || !SCENARIOS.has(env.SCENARIO_KEY) ||
       !Number.isSafeInteger(prNumber) || prNumber < 1 ||
       !Number.isSafeInteger(beforeAfterRunId) || beforeAfterRunId < 1 ||
@@ -70,7 +71,8 @@ export function checkRegressionArtifact(artifact, input, run, artifactList) {
       artifact.beforeFailureSha256 === artifact.afterSuccessSha256 ||
       !Number.isSafeInteger(artifact.tests) || artifact.tests < 1 || artifact.tests > 200 ||
       artifact.productionVerified !== false || artifact.ticketCompletionProofRecorded !== false ||
-      run?.id !== input.beforeAfterRunId || run?.event !== "workflow_dispatch" ||
+      run?.id !== input.beforeAfterRunId ||
+      !["workflow_dispatch", "workflow_run"].includes(run?.event) ||
       run?.status !== "completed" || run?.conclusion !== "success" ||
       run?.run_attempt !== 1 || run?.head_branch !== "main" ||
       run?.head_sha !== artifact.baseSha ||
@@ -111,7 +113,7 @@ export function checkScenarioSourceBinding(artifact, headFile, mergeFile) {
   return true;
 }
 
-export function checkReleaseBinding({ input, artifact, pr, mergeCommit, job, links,
+export function checkReleaseBinding({ input, artifact, regressionArtifactSha256, pr, mergeCommit, job, links,
   release, ticket, attachments, latestMessages, newerAdminMessages, deployment }) {
   const body = latestMessages?.[0]?.body;
   const latestAt = Date.parse(latestMessages?.[0]?.created_at ?? "");
@@ -162,6 +164,9 @@ export function checkReleaseBinding({ input, artifact, pr, mergeCommit, job, lin
       (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey && (persistence || stream)) ||
       release?.pr_number !== input.prNumber || release?.head_sha !== artifact.headSha ||
       release?.merge_sha !== input.mainSha ||
+      Number(release?.ticket_before_after_run_id) !== input.beforeAfterRunId ||
+      release?.ticket_regression_artifact_sha256 !==
+        (regressionArtifactSha256 ?? digest(JSON.stringify(artifact))) ||
       !["observing", "verified"].includes(release?.status) ||
       !Number.isFinite(Date.parse(release?.merge_recorded_at ?? "")) ||
       (release.deployment_id !== null && release.deployment_id !== deployment?.deploymentId) ||
@@ -287,7 +292,7 @@ async function releaseRows(input, artifact, env, fetchImpl) {
     }),
     rows(env, fetchImpl, "yutakasa_repair_releases", {
       pr_number: `eq.${input.prNumber}`,
-      select: "pr_number,head_sha,merge_sha,status,merge_recorded_at,deployment_id", limit: "2",
+      select: "pr_number,head_sha,merge_sha,status,merge_recorded_at,deployment_id,ticket_before_after_run_id,ticket_regression_artifact_sha256", limit: "2",
     }),
   ]);
   const job = await one(jobs, "production_work_missing_or_ambiguous");
@@ -335,7 +340,7 @@ export async function runProductionCandidate({
   ]);
   checkScenarioSourceBinding(artifact, headFile, mergeFile);
   const beforeRows = await releaseRows(input, artifact, env, fetchImpl);
-  const binding = checkReleaseBinding({ input, artifact, pr, mergeCommit,
+  const binding = checkReleaseBinding({ input, artifact, regressionArtifactSha256, pr, mergeCommit,
     ...beforeRows, deployment });
   if (input.scenarioKey === ZERO_WIDTH_CONDITION.scenarioKey) {
     const ui = JSON.parse(await readFile(path.join(root,
@@ -359,7 +364,7 @@ export async function runProductionCandidate({
     releaseRows(input, artifact, env, fetchImpl),
     githubJson(env, fetchImpl, `pulls/${input.prNumber}`),
   ]);
-  checkReleaseBinding({ input, artifact, pr: afterPr, mergeCommit,
+  checkReleaseBinding({ input, artifact, regressionArtifactSha256, pr: afterPr, mergeCommit,
     ...afterRows, deployment: afterDeployment });
   if (afterDeployment.deploymentId !== binding.deploymentId ||
       afterDeployment.mainSha !== binding.mergeSha ||

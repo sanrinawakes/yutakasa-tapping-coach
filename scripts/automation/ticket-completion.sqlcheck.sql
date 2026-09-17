@@ -66,6 +66,12 @@ BEGIN
       101,repeat('1',64));
   INSERT INTO public.yutakasa_repair_ticket_links(pr_number,ticket_id,latest_user_message_id)
     VALUES(9701,v_ticket,v_user);
+  BEGIN
+    UPDATE public.yutakasa_repair_releases
+      SET ticket_before_after_run_id=999 WHERE pr_number=9701;
+    RAISE EXCEPTION 'trusted regression run was mutable';
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
+  END;
   -- A release link and generic smoke are not ticket-specific proof.
   BEGIN
     PERFORM * FROM public.append_yutakasa_verified_ticket_completion(v_work,v_main,v_deployment);
