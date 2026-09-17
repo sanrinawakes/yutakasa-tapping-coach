@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { BridgeE2eSmokeError, checkGate, cleanupRemote,
-  createSyntheticInvestigatorFetch, inspectChecks,
+  createSyntheticInvestigatorFetch, createSyntheticProjectGate, inspectChecks,
   rescueBridgeE2eSmoke } from "./ticket-repair-bridge-e2e-smoke.mjs";
 import { BRIDGE_SUPPORT_BODY, TEST_SUPPORT_ACK, TEST_SUPPORT_SUBJECT } from
   "./ai-repair-functional-smoke.mjs";
@@ -75,12 +75,30 @@ test("only a confirmed synthetic context adds exact two-file guidance to Terra",
       { role: "user", content: "Synthetic repository context." }],
     text: { format: { type: "json_schema" } } };
   let modelRequest = null;
+  const calls = [];
+  const project = "proj_abcdefgh";
+  const key = `sk-${"k".repeat(40)}`;
+  const gateEnv = { YUTAKASA_OPENAI_PROJECT_ID: project,
+    YUTAKASA_OPENAI_CAP_CONFIRMED_PROJECT_ID: project,
+    YUTAKASA_OPENAI_CAP_CONFIRMED_USD: "20",
+    YUTAKASA_OPENAI_API_KEY: key,
+    YUTAKASA_OPENAI_KEY_SHA256: crypto.createHash("sha256").update(key).digest("hex") };
   const fetchImpl = async (url, init) => {
     if (String(url).endsWith("/claim_yutakasa_ticket_repair_context")) {
+      calls.push("claim");
       return new Response(JSON.stringify(context), { status: 200 });
     }
     if (String(url) === "https://api.openai.com/v1/responses") {
-      modelRequest = JSON.parse(init.body);
+      const body = JSON.parse(init.body);
+      if (body.input === "Return OK.") {
+        calls.push("capped_project_probe");
+        assert.equal(init.headers["OpenAI-Project"], project);
+        assert.equal(body.model, "gpt-5.6-terra");
+        return new Response(JSON.stringify({ id: "resp_abcdefgh", status: "completed" }),
+          { status: 200 });
+      }
+      calls.push("scoped_proposal");
+      modelRequest = body;
       return new Response("{}", { status: 200 });
     }
     assert.fail("unexpected request");
@@ -94,7 +112,9 @@ test("only a confirmed synthetic context adds exact two-file guidance to Terra",
   assert.equal(modelRequest, null);
   await scopedFetch(`${env.SUPABASE_URL}/rest/v1/rpc/claim_yutakasa_ticket_repair_context`,
     { method: "POST" });
+  await createSyntheticProjectGate(fetchImpl)({ env: gateEnv, fetchImpl: scopedFetch });
   await scopedFetch(modelUrl, { method: "POST", body: JSON.stringify(request) });
+  assert.deepEqual(calls, ["claim", "capped_project_probe", "scoped_proposal"]);
   assert.equal(modelRequest.model, "gpt-5.6-terra");
   assert.equal(modelRequest.store, false);
   assert.deepEqual(modelRequest.tools, []);

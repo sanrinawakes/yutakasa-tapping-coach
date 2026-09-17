@@ -12,6 +12,7 @@ import { BRIDGE_SUPPORT_BODY, TEST_SUPPORT_ACK, TEST_SUPPORT_SUBJECT } from
 import { cleanupTicketRepairSmoke, runTicketRepairHandoffSmoke } from
   "./ticket-repair-handoff-smoke.mjs";
 import { runTicketRepairInvestigation } from "./ticket-repair-investigate.mjs";
+import { verifyOpenAiProjectKey } from "./openai-project-gate.mjs";
 import { parseProposal, runAiRepairPublish, validatePatch } from "./ai-repair-publish.mjs";
 import { verifyMainProtection } from "./ai-repair-promote.mjs";
 
@@ -232,6 +233,11 @@ export function createSyntheticInvestigatorFetch(fetchImpl, env, identity) {
     return fetchImpl(url, init);
   };
 }
+export function createSyntheticProjectGate(fetchImpl) {
+  // The capped-project probe intentionally sends a different Responses input.
+  // Keep the real gate intact and reserve the scoped wrapper for the diagnosis.
+  return ({ env }) => verifyOpenAiProjectKey({ env, fetchImpl });
+}
 export function inspectChecks({ runs, status, branch, sha }) {
   if (!SHA.test(sha ?? "") || !/^codex\/yutakasa-support-ai-[a-f0-9]{16}$/u.test(branch ?? "") ||
       !Array.isArray(runs) || runs.length !== CI.length) fail("bridge_check_evidence_invalid");
@@ -363,6 +369,7 @@ export async function runBridgeE2eSmoke({ env = process.env, fetchImpl = globalT
       const investigatorFetch = createSyntheticInvestigatorFetch(fetchImpl, env, identity);
       const investigation = await investigator({ env: { ...env, WORK_ID: identity.workId,
         TICKET_REPAIR_ENABLED: "true" }, fetchImpl: investigatorFetch,
+      projectGate: createSyntheticProjectGate(fetchImpl),
       publisher: (publisherEnv) => {
         const proposal = parseProposal(publisherEnv.AI_REPAIR_PROPOSAL);
         if (!proposal.patch.trim()) fail("bridge_terra_patch_missing");
