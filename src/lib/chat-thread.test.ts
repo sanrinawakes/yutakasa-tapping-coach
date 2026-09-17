@@ -22,6 +22,10 @@ describe("chat thread helpers", () => {
     expect(createChatTitle(" \n\t ")).toBe(DEFAULT_CHAT_TITLE);
   });
 
+  it("uses the default title for an invisible separator", () => {
+    expect(createChatTitle("\u200B")).toBe(DEFAULT_CHAT_TITLE);
+  });
+
   it("normalizes and limits manually entered titles", () => {
     expect(sanitizeChatTitle("  家族との関係\nについて  ")).toBe(
       "家族との関係 について"
