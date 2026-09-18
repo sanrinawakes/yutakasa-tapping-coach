@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   FIRST_REPORT_DATE_JST,
+  OWNER_ONLY_REPORT_DATE_JST,
   PROVIDER_EVENTS,
   reportDatesToRun,
   reportRecipientsForDate,
@@ -17,6 +18,7 @@ const PAGE_SIZE = 500;
 const MAX_PAGES = 100;
 const MAX_LISTED_TICKETS = 10;
 const MAX_LISTED_EVENTS = 10;
+const MAX_QUESTION_EXCERPT = 240;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const PROVIDER_CHECK_BATCH = 4;
@@ -238,6 +240,40 @@ async function listCurrentOpenTickets(config, fetchImpl) {
   fail("open_ticket_page_limit_exceeded");
 }
 
+function actionTicketIds(openTickets) {
+  const byId = (a, b) => a.id.localeCompare(b.id);
+  const decisions = openTickets.filter((row) => row.decision_required ||
+    row.automation_status === "blocked_decision").sort(byId).slice(0, MAX_LISTED_TICKETS);
+  const stalled = openTickets.filter((row) => !row.decision_required &&
+    ["manual_review", "failed"].includes(row.automation_status))
+    .sort(byId).slice(0, MAX_LISTED_TICKETS);
+  return [...new Set([...decisions, ...stalled].map((row) => row.id))];
+}
+
+function questionExcerpt(body) {
+  if (typeof body !== "string" || body.length > 20_000) fail("action_question_invalid");
+  const cleaned = body.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu,
+    "［メールアドレス省略］")
+    .replace(/\b(?:\d[ -]?){10,19}\b/gu, "［長い番号省略］")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, " ")
+    .replace(/\s+/gu, " ").trim();
+  return cleaned.length > MAX_QUESTION_EXCERPT
+    ? `${cleaned.slice(0, MAX_QUESTION_EXCERPT).trim()}…` : cleaned;
+}
+
+async function listActionQuestions(config, openTickets, fetchImpl) {
+  return Promise.all(actionTicketIds(openTickets).map(async (ticketId) => {
+    const query = new URLSearchParams({select: "id,ticket_id,body", ticket_id: `eq.${ticketId}`,
+      sender_type: "eq.user", order: "created_at.desc,id.desc", limit: "1"});
+    const rows = await supabaseRequest(config, `rest/v1/support_messages?${query}`, {fetchImpl});
+    if (!Array.isArray(rows) || rows.length > 1 ||
+        (rows.length === 1 && (!UUID.test(rows[0]?.id) || rows[0].ticket_id !== ticketId)))
+      fail("action_question_invalid");
+    return {ticket_id: ticketId,
+      excerpt: rows.length ? questionExcerpt(rows[0].body) : ""};
+  }));
+}
+
 function assertInWindow(value, window) {
   if (!validTimestamp(value) || Date.parse(value) < Date.parse(window.start) ||
       Date.parse(value) >= Date.parse(window.end)) fail("source_window_mismatch");
@@ -301,10 +337,22 @@ export function validateSource(source, window) {
     }
     openTicketIds.add(row.id);
   }
+  if (source.actionQuestions !== undefined) {
+    if (!Array.isArray(source.actionQuestions) ||
+        source.actionQuestions.length > 2 * MAX_LISTED_TICKETS) fail("action_question_invalid");
+    const seen = new Set();
+    for (const row of source.actionQuestions) {
+      if (!UUID.test(row?.ticket_id) || !openTicketIds.has(row.ticket_id) ||
+          seen.has(row.ticket_id) || typeof row.excerpt !== "string" ||
+          row.excerpt.length > MAX_QUESTION_EXCERPT + 1) fail("action_question_invalid");
+      seen.add(row.ticket_id);
+    }
+  }
   return source;
 }
 
-export async function collectReportSource(config, window, fetchImpl = globalThis.fetch) {
+export async function collectReportSource(config, window, fetchImpl = globalThis.fetch,
+  includeActionQuestions = false) {
   const [createdTickets, updatedTickets, messages, workLogs, openTickets] = await Promise.all([
     listByWindow(config, "support_tickets", "id,created_at,updated_at", "created_at", window, fetchImpl),
     listByWindow(config, "support_tickets", "id,created_at,updated_at", "updated_at", window, fetchImpl),
@@ -325,15 +373,18 @@ export async function collectReportSource(config, window, fetchImpl = globalThis
   const syntheticIds = new Set(tickets.filter((row) =>
     typeof row.user_email === "string" && SYNTHETIC_SUPPORT_EMAIL.test(row.user_email)
   ).map((row) => row.id));
+  const realOpenTickets = openTickets.filter((row) =>
+    typeof row.user_email !== "string" || !SYNTHETIC_SUPPORT_EMAIL.test(row.user_email));
+  const actionQuestions = includeActionQuestions
+    ? await listActionQuestions(config, realOpenTickets, fetchImpl) : [];
   return validateSource({
     createdTickets: createdTickets.filter((row) => !syntheticIds.has(row.id)),
     updatedTickets: updatedTickets.filter((row) => !syntheticIds.has(row.id)),
     messages: messages.filter((row) => !syntheticIds.has(row.ticket_id)),
     workLogs: workLogs.filter((row) => !syntheticIds.has(row.ticket_id)),
     tickets: tickets.filter((row) => !syntheticIds.has(row.id)),
-    openTickets: openTickets.filter((row) =>
-      typeof row.user_email !== "string" || !SYNTHETIC_SUPPORT_EMAIL.test(row.user_email)
-    ),
+    openTickets: realOpenTickets,
+    actionQuestions,
   }, window);
 }
 
@@ -600,12 +651,18 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
   };
   const categoryByTicket = new Map(source.tickets.map((ticket) =>
     [ticket.id,categoryLabels[ticket.category]]));
+  const questionByTicket = date >= OWNER_ONLY_REPORT_DATE_JST
+    ? new Map((source.actionQuestions ?? []).map((row) => [row.ticket_id, row.excerpt]))
+    : new Map();
+  const questionLine = (ticket) => questionByTicket.get(ticket.id)
+    ? `お客様の質問・報告: 「${questionByTicket.get(ticket.id)}」`
+    : "質問本文は管理画面で確認してください。";
   const ownerActionLines = ownerDecisionRequired.slice(0, MAX_LISTED_TICKETS).map((ticket) =>
-    `・${categoryLabels[ticket.category]}の問い合わせ。管理画面で内容を確認し、会員サイト内で返信してください。`);
+    `・${categoryLabels[ticket.category]}の問い合わせ。${questionLine(ticket)} 管理画面で履歴を確認し、会員サイト内で返信してください。`);
   if (ownerDecisionRequired.length > MAX_LISTED_TICKETS)
     ownerActionLines.push(`ほか${ownerDecisionRequired.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
   const stalledLines = stalledAutomation.slice(0, MAX_LISTED_TICKETS).map((ticket) =>
-    `・${categoryLabels[ticket.category]}の報告。自動対応が止まっています。内容を確認し、必要な対応と返信をしてください。`);
+    `・${categoryLabels[ticket.category]}の報告。自動対応が止まっています。${questionLine(ticket)} 内容を確認し、必要な対応と返信をしてください。`);
   if (stalledAutomation.length > MAX_LISTED_TICKETS)
     stalledLines.push(`ほか${stalledAutomation.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
   const lines = [
@@ -653,7 +710,10 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
   }
   if (sorted.length > MAX_LISTED_TICKETS) lines.push(`ほか${sorted.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
   lines.push("", "【システムの監視と自動修正】", ...monitorSummaryLines(monitorSummary),
-    ...repairProgressLines(repairProgress), "", "相談本文、氏名、メールアドレス、添付、内部ログの原文は掲載していません。", "本メールはDB上の記録の要約です。メール受理、配達、本番復旧を示すものではありません。");
+    ...repairProgressLines(repairProgress), "", date >= OWNER_ONLY_REPORT_DATE_JST
+      ? "要対応案件の質問・報告は最大240文字の抜粋です。一般的なメールアドレスと長い数字列は伏せ、添付と内部ログの原文は掲載していません。"
+      : "相談本文、氏名、メールアドレス、添付、内部ログの原文は掲載していません。",
+    "本メールはDB上の記録の要約です。メール受理、配達、本番復旧を示すものではありません。");
   const actionCount=ownerDecisionRequired.length+stalledAutomation.length;
   return { subject: actionCount
     ? `【豊かさBOT】確認・返信が必要な問い合わせ${actionCount}件｜${date}`
@@ -945,7 +1005,8 @@ async function runReportDate(config, date, now, fetchImpl) {
   }
   const window = reportWindow(date);
   const [source, monitorSummary, repairProgress] = await Promise.all([
-    collectReportSource(config, window, fetchImpl),
+    collectReportSource(config, window, fetchImpl,
+      date >= OWNER_ONLY_REPORT_DATE_JST),
     collectMonitorSummary(config, window, fetchImpl),
     collectRepairProgress(config, window, fetchImpl),
   ]);

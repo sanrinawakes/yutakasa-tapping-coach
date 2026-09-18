@@ -64,6 +64,7 @@ function source() {
 
 function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
   repairReleases = [], repairStatus = 200, githubResponse,
+  actionMessageRows = {}, actionMessageStatus = 200,
   resendBehavior = async (_url, init) =>
   json({ id: resendIdFor(JSON.parse(init.body).to[0]) }),
   resendRetrieveBehavior,
@@ -152,6 +153,11 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
       if (url.searchParams.has("id")) return json(records.tickets);
       if (url.searchParams.has("created_at")) return json(records.createdTickets.filter((row) => inWindow(url, row, "created_at")));
       if (url.searchParams.has("updated_at")) return json(records.updatedTickets.filter((row) => inWindow(url, row, "updated_at")));
+    }
+    if (url.pathname === "/rest/v1/support_messages" && url.searchParams.has("ticket_id")) {
+      if (actionMessageStatus !== 200) return json({code:"temporary_failure"}, actionMessageStatus);
+      const ticketId = url.searchParams.get("ticket_id").slice(3);
+      return json(actionMessageRows[ticketId] ?? []);
     }
     if (url.pathname === "/rest/v1/support_messages" || url.pathname === "/rest/v1/support_work_logs") {
       const rows = url.pathname.endsWith("support_messages") ? records.messages : records.workLogs;
@@ -303,6 +309,50 @@ test("reports from 18 September go only to the first approved owner address", as
     [[env.REPORT_RECIPIENT_1]]);
 });
 
+test("owner-only daily report explains an actionable customer question without exposing identifiers", async () => {
+  const ticket = {...source().openTickets[0],decision_required:true};
+  const records = {createdTickets:[],updatedTickets:[],messages:[],workLogs:[],
+    tickets:[],openTickets:[ticket]};
+  const client = testFetch({records,cursorDate:"2026-09-18",actionMessageRows:{
+    [TICKET_ID]:[{id:MESSAGE_ID,ticket_id:TICKET_ID,
+      body:"ログイン後に画面が真っ白です。連絡先は customer@example.com、番号は 1234567890123456 です。"}],
+  }});
+  const result = await runDailySupportReport({env,
+    now:new Date("2026-09-19T00:05:00Z"),fetchImpl:client.fetchImpl});
+  assert.equal(result.ok,true);
+  const sends=client.requests.filter(({url})=>url.host==="api.resend.com"&&
+    url.pathname==="/emails");
+  assert.equal(sends.length,1);
+  const payload=JSON.parse(sends[0].init.body);
+  assert.deepEqual(payload.to,["181wyc@gmail.com"]);
+  assert.match(payload.text,/ログイン後に画面が真っ白です/u);
+  assert.match(payload.text,/管理画面で履歴を確認し、会員サイト内で返信/u);
+  assert.doesNotMatch(payload.text,/customer@example.com/u);
+  assert.doesNotMatch(payload.text,/1234567890123456/u);
+  assert.doesNotMatch(payload.text,new RegExp(TICKET_ID));
+  assert.equal(client.requests.filter(({url})=>url.pathname==="/rest/v1/support_messages"&&
+    url.searchParams.has("ticket_id")).length,1);
+});
+
+test("question lookup failure stops the owner-only report before any email", async () => {
+  const records={createdTickets:[],updatedTickets:[],messages:[],workLogs:[],tickets:[],
+    openTickets:[{...source().openTickets[0],decision_required:true}]};
+  const client=testFetch({records,cursorDate:"2026-09-18",actionMessageStatus:503});
+  const result=await runDailySupportReport({env,
+    now:new Date("2026-09-19T00:05:00Z"),fetchImpl:client.fetchImpl});
+  assert.equal(result.ok,false);
+  assert.equal(client.requests.filter(({url})=>url.host==="api.resend.com"&&
+    url.pathname==="/emails").length,0);
+});
+
+test("historical two-recipient report never contains a customer question excerpt", () => {
+  const records=source();
+  records.openTickets[0].decision_required=true;
+  records.actionQuestions=[{ticket_id:TICKET_ID,excerpt:"個人的な質問本文"}];
+  const report=buildDailyReport("2026-09-16",records,NOW);
+  assert.doesNotMatch(report.text,/個人的な質問本文/u);
+});
+
 test("daily report excludes a synthetic ticket, its messages and work logs", async () => {
   const records = source();
   const syntheticEmail = "yutakasa-auto-smoke+74e6508f-c0ff-4689-ab68-dac8fe324ac9@example.invalid";
@@ -452,7 +502,7 @@ test("an old unresolved ticket is counted even on a day with no new activity", (
   assert.match(report.text, /運営判断要1件/);
   assert.match(report.text, /運営判断待ち1件/);
   assert.match(report.text, /あなたの判断と返信が必要な問い合わせが1件あります/u);
-  assert.match(report.text, /請求・契約の問い合わせ。管理画面で内容を確認し/u);
+  assert.match(report.text, /請求・契約の問い合わせ。質問本文は管理画面で確認してください。/u);
   assert.doesNotMatch(report.text, new RegExp(TICKET_ID));
 });
 
