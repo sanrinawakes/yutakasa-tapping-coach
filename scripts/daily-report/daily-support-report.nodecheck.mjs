@@ -315,7 +315,8 @@ test("owner-only daily report explains an actionable customer question without e
     tickets:[],openTickets:[ticket]};
   const client = testFetch({records,cursorDate:"2026-09-18",actionMessageRows:{
     [TICKET_ID]:[{id:MESSAGE_ID,ticket_id:TICKET_ID,
-      body:"ログイン後に画面が真っ白です。連絡先は customer@example.com、番号は 1234567890123456 です。"}],
+      body:"ログイン後に画面が真っ白です。連絡先は customer@example.com、番号は 1234567890123456 です。"+
+        "あ".repeat(300)}],
   }});
   const result = await runDailySupportReport({env,
     now:new Date("2026-09-19T00:05:00Z"),fetchImpl:client.fetchImpl});
@@ -330,6 +331,10 @@ test("owner-only daily report explains an actionable customer question without e
   assert.doesNotMatch(payload.text,/customer@example.com/u);
   assert.doesNotMatch(payload.text,/1234567890123456/u);
   assert.doesNotMatch(payload.text,new RegExp(TICKET_ID));
+  const excerpt=payload.text.match(/お客様の質問・報告: 「([^」]+)」/u)?.[1];
+  assert.ok(excerpt);
+  assert.ok(excerpt.length<=240);
+  assert.match(excerpt,/…$/u);
   assert.equal(client.requests.filter(({url})=>url.pathname==="/rest/v1/support_messages"&&
     url.searchParams.has("ticket_id")).length,1);
 });
