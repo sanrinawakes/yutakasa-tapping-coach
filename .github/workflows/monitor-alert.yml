@@ -1,6 +1,8 @@
 name: Yutakasa monitor alert
 
 on:
+  schedule:
+    - cron: '4,24,44 * * * *'
   workflow_dispatch:
     inputs:
       reason_codes:
@@ -20,9 +22,9 @@ concurrency:
 
 jobs:
   issue-alert:
-    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main'
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       issues: write
@@ -40,3 +42,36 @@ jobs:
           ALERT_DEPLOYMENT_ID: ${{ inputs.deployment_id }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/automation/monitor-alert.mjs
+      - name: Email the owner about newly detected monitor errors
+        if: vars.YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED == 'true'
+        env:
+          ALERT_REASON_CODES: ${{ inputs.reason_codes }}
+          GITHUB_TOKEN: ${{ github.token }}
+          YUTAKASA_RESEND_API_KEY: ${{ secrets.YUTAKASA_RESEND_API_KEY }}
+          YUTAKASA_TECHNICAL_ESCALATION_EMAIL: ${{ secrets.YUTAKASA_TECHNICAL_ESCALATION_EMAIL }}
+          YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED: ${{ vars.YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED }}
+          YUTAKASA_MONITOR_OWNER_EMAIL_CUTOFF: ${{ vars.YUTAKASA_MONITOR_OWNER_EMAIL_CUTOFF }}
+        run: node scripts/automation/monitor-owner-email.mjs
+  retry-owner-email:
+    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && vars.YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Retry owner email for unconfirmed monitor errors
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          YUTAKASA_RESEND_API_KEY: ${{ secrets.YUTAKASA_RESEND_API_KEY }}
+          YUTAKASA_TECHNICAL_ESCALATION_EMAIL: ${{ secrets.YUTAKASA_TECHNICAL_ESCALATION_EMAIL }}
+          YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED: ${{ vars.YUTAKASA_MONITOR_OWNER_EMAIL_ENABLED }}
+          YUTAKASA_MONITOR_OWNER_EMAIL_CUTOFF: ${{ vars.YUTAKASA_MONITOR_OWNER_EMAIL_CUTOFF }}
+        run: node scripts/automation/monitor-owner-email.mjs
