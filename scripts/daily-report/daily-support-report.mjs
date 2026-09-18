@@ -258,7 +258,7 @@ function questionExcerpt(body) {
     .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, " ")
     .replace(/\s+/gu, " ").trim();
   return cleaned.length > MAX_QUESTION_EXCERPT
-    ? `${cleaned.slice(0, MAX_QUESTION_EXCERPT).trim()}…` : cleaned;
+    ? `${cleaned.slice(0, MAX_QUESTION_EXCERPT - 1).trim()}…` : cleaned;
 }
 
 async function listActionQuestions(config, openTickets, fetchImpl) {
