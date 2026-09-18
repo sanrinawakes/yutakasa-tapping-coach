@@ -25,8 +25,8 @@ const env = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "a-service-role-test-key-with-length",
   RESEND_API_KEY: "re_test-key",
-  REPORT_RECIPIENT_1: "owner-one@example.com",
-  REPORT_RECIPIENT_2: "owner-two@example.com",
+  REPORT_RECIPIENT_1: "181wyc@gmail.com",
+  REPORT_RECIPIENT_2: "awakes2025@gmail.com",
 };
 
 function json(data, status = 200) {
@@ -56,7 +56,7 @@ function source() {
     createdTickets: [{ id: ticket.id, created_at: ticket.created_at, updated_at: ticket.updated_at }],
     updatedTickets: [{ id: ticket.id, created_at: ticket.created_at, updated_at: ticket.updated_at }],
     tickets: [ticket],
-    openTickets: [{ id: TICKET_ID, user_email: ticket.user_email, status: ticket.status, automation_status: ticket.automation_status, decision_required: false, updated_at: ticket.updated_at }],
+    openTickets: [{ id: TICKET_ID, user_email: ticket.user_email, category: ticket.category, status: ticket.status, automation_status: ticket.automation_status, decision_required: false, updated_at: ticket.updated_at }],
     messages: [{ id: MESSAGE_ID, ticket_id: TICKET_ID, sender_type: "user", created_at: "2026-09-16T02:00:00.000Z", body: "PRIVATE MESSAGE" }],
     workLogs: [{ id: LOG_ID, ticket_id: TICKET_ID, created_at: "2026-09-16T03:00:00.000Z", event_type: "PRIVATE EVENT TYPE", summary: "PRIVATE LOG", metadata: { secret: "PRIVATE METADATA" } }],
   };
@@ -242,7 +242,7 @@ test("before 09:00 JST is a no-op even when credentials are absent", async () =>
 
 test("recipient configuration rejects duplicates and header injection before any fetch", async () => {
   for (const invalid of [
-    { ...env, REPORT_RECIPIENT_2: "OWNER-ONE@example.com" },
+    { ...env, REPORT_RECIPIENT_2: "181WYC@gmail.com" },
     { ...env, REPORT_RECIPIENT_1: "owner@example.com\nBcc: outsider@example.com" },
   ]) {
     await assert.rejects(
@@ -265,7 +265,7 @@ test("daily text contains only metadata and separates acceptance by recipient", 
   assert.deepEqual(result.providerChecks.map((item) => item.event), ["delivered", "delivered"]);
   assert.equal(result.providerAdverseCount, 0);
   const sends = client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails");
-  assert.deepEqual(sends.map(({ init }) => JSON.parse(init.body).to[0]), ["owner-one@example.com", "owner-two@example.com"]);
+  assert.deepEqual(sends.map(({ init }) => JSON.parse(init.body).to[0]), ["181wyc@gmail.com", "awakes2025@gmail.com"]);
   assert.notEqual(sends[0].init.headers["Idempotency-Key"], sends[1].init.headers["Idempotency-Key"]);
   for (const { init } of sends) {
     const payload = JSON.parse(init.body);
@@ -273,7 +273,9 @@ test("daily text contains only metadata and separates acceptance by recipient", 
     assert.match(payload.text, /前日のやりとり・作業時系列: 2件/);
     assert.match(payload.text, /利用者投稿/);
     assert.match(payload.text, /作業記録/);
-    assert.match(payload.text, new RegExp(TICKET_ID));
+    assert.match(payload.text, /【今、あなたがすること】/u);
+    assert.match(payload.text, /あなたの判断と返信が必要な問い合わせはありません/u);
+    assert.doesNotMatch(payload.text, new RegExp(TICKET_ID));
     for (const privateText of ["PRIVATE SUBJECT", "PRIVATE MESSAGE", "PRIVATE EVENT TYPE", "PRIVATE LOG", "PRIVATE METADATA", "customer@example.com"]) {
       assert.equal(payload.text.includes(privateText), false);
     }
@@ -281,9 +283,24 @@ test("daily text contains only metadata and separates acceptance by recipient", 
   const again = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
   assert.equal(again.ok, true);
   assert.equal(again.deliveries.every((item) => !item.sentNow), true);
-  assert.equal(JSON.stringify(again).includes("owner-one@example.com"), false);
-  assert.equal(JSON.stringify(again).includes("owner-two@example.com"), false);
+  assert.equal(JSON.stringify(again).includes("181wyc@gmail.com"), false);
+  assert.equal(JSON.stringify(again).includes("awakes2025@gmail.com"), false);
   assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 2);
+});
+
+test("reports from 18 September go only to the first approved owner address", async () => {
+  const records = { createdTickets: [], updatedTickets: [], messages: [],
+    workLogs: [], tickets: [], openTickets: [] };
+  const client = testFetch({ records, cursorDate: "2026-09-18" });
+  const result = await runDailySupportReport({ env,
+    now: new Date("2026-09-19T00:05:00Z"), fetchImpl: client.fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.reportDateJst, "2026-09-18");
+  assert.equal(result.deliveries.length, 1);
+  const sends = client.requests.filter(({ url }) => url.host === "api.resend.com" &&
+    url.pathname === "/emails");
+  assert.deepEqual(sends.map(({ init }) => JSON.parse(init.body).to),
+    [[env.REPORT_RECIPIENT_1]]);
 });
 
 test("daily report excludes a synthetic ticket, its messages and work logs", async () => {
@@ -373,7 +390,7 @@ test("an uncertain Resend response is recorded and never retried automatically",
   let sends = 0;
   const client = testFetch({ resendBehavior: async (_url, init) => {
     sends += 1;
-    if (JSON.parse(init.body).to[0] === "owner-one@example.com") throw new Error("network broke after request");
+    if (JSON.parse(init.body).to[0] === "181wyc@gmail.com") throw new Error("network broke after request");
     return json({ id: resendIdFor(JSON.parse(init.body).to[0]) });
   } });
   const first = await runDailySupportReport({ env, now: NOW, fetchImpl: client.fetchImpl });
@@ -388,7 +405,7 @@ test("an uncertain Resend response is recorded and never retried automatically",
 test("a definite HTTP 429 rejection retries only the rejected recipient on the next run", async () => {
   let firstRecipientAttempts = 0;
   const client = testFetch({ resendBehavior: async (_url, init) => {
-    if (JSON.parse(init.body).to[0] === "owner-one@example.com" && firstRecipientAttempts++ === 0) {
+    if (JSON.parse(init.body).to[0] === "181wyc@gmail.com" && firstRecipientAttempts++ === 0) {
       return json({ name: "rate_limit_exceeded" }, 429);
     }
     return json({ id: resendIdFor(JSON.parse(init.body).to[0]) });
@@ -426,7 +443,7 @@ test("zero activity still creates a truthful daily report", () => {
 
 test("an old unresolved ticket is counted even on a day with no new activity", () => {
   const empty = { createdTickets: [], updatedTickets: [], messages: [], workLogs: [], tickets: [],
-    openTickets: [{ id: TICKET_ID, status: "waiting_user", decision_required: true,
+    openTickets: [{ id: TICKET_ID, category: "billing", status: "waiting_user", decision_required: true,
       user_email: "member@example.com",
       automation_status: "blocked_decision", updated_at: "2026-09-11T00:00:00.000Z" }] };
   const report = buildDailyReport("2026-09-16", empty, NOW);
@@ -434,18 +451,22 @@ test("an old unresolved ticket is counted even on a day with no new activity", (
   assert.match(report.text, /現在の未解決: 1件/);
   assert.match(report.text, /運営判断要1件/);
   assert.match(report.text, /運営判断待ち1件/);
-  assert.match(report.text, new RegExp(`あなたの判断が必要なチケット: 1件[\\s\\S]*ID ${TICKET_ID}`));
+  assert.match(report.text, /あなたの判断と返信が必要な問い合わせが1件あります/u);
+  assert.match(report.text, /請求・契約の問い合わせ。管理画面で内容を確認し/u);
+  assert.doesNotMatch(report.text, new RegExp(TICKET_ID));
 });
 
 test("an old manual review remains visible as an action in every daily report", () => {
   const records = { createdTickets: [], updatedTickets: [], messages: [], workLogs: [], tickets: [],
-    openTickets: [{ id: TICKET_ID, status: "in_progress", decision_required: false,
+    openTickets: [{ id: TICKET_ID, category: "technical", status: "in_progress", decision_required: false,
       user_email: "PRIVATE-ADDRESS@example.com", automation_status: "manual_review",
       updated_at: "2026-09-11T00:00:00.000Z" }] };
   const report = buildDailyReport("2026-09-16", records, NOW);
   assert.match(report.text, /自動処理停止1件/);
-  assert.match(report.text, /あなたの判断が必要なチケット: 0件/);
-  assert.match(report.text, new RegExp(`自動処理が止まっているチケット（判断依頼ではありません）: 1件[\\s\\S]*ID ${TICKET_ID} \\| 自動処理:自動処理停止・確認待ち`));
+  assert.match(report.text, /あなたの判断と返信が必要な問い合わせはありません/u);
+  assert.match(report.text, /自動対応が止まり、確認が必要な報告が1件あります/u);
+  assert.match(report.text, /技術の報告。自動対応が止まっています/u);
+  assert.doesNotMatch(report.text, new RegExp(TICKET_ID));
   assert.equal(report.text.includes("PRIVATE-ADDRESS"), false);
 });
 
@@ -453,7 +474,7 @@ test("current unresolved pagination retrieves the 501st row", async () => {
   const openTickets = Array.from({ length: 501 }, (_, index) => ({
     id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`,
     user_email: `member-${index}@example.com`,
-    status: "open", decision_required: false, automation_status: "queued",
+    category: "technical", status: "open", decision_required: false, automation_status: "queued",
     updated_at: "2026-09-11T00:00:00.000Z",
   }));
   const client = testFetch({ records: { createdTickets: [], updatedTickets: [], messages: [], workLogs: [], tickets: [], openTickets } });
@@ -480,7 +501,7 @@ test("message pagination counts the 501st event without exposing any body", asyn
   const firstSend = client.requests.find(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails");
   const text = JSON.parse(firstSend.init.body).text;
   assert.match(text, /利用者501件/);
-  assert.match(text, /ほか402件。時系列の表示は最大100件/);
+  assert.match(text, /ほか492件。時系列の表示は最大10件/);
   assert.equal(text.includes("PRIVATE MESSAGE"), false);
 });
 
@@ -601,15 +622,15 @@ test("the last closed day is sent immediately and one older missed day is recove
   assert.equal(first.reportDateJst, "2026-09-18");
   assert.deepEqual(first.recoveredReportDatesJst, ["2026-09-16"]);
   assert.equal(client.state.cursorDate, "2026-09-17");
-  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 4);
+  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 3);
   const second = await runDailySupportReport({ env, now: later, fetchImpl: client.fetchImpl });
   assert.deepEqual(second.recoveredReportDatesJst, ["2026-09-17"]);
   assert.equal(client.state.cursorDate, "2026-09-18");
-  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 6);
+  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 5);
   const third = await runDailySupportReport({ env, now: later, fetchImpl: client.fetchImpl });
   assert.deepEqual(third.recoveredReportDatesJst, []);
-  assert.equal(client.state.cursorDate, "2026-09-19");
-  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 6);
+  assert.equal(client.state.cursorDate, "2026-09-18");
+  assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 5);
 });
 
 test("a failed latest-day query does not block an older missed day", async () => {

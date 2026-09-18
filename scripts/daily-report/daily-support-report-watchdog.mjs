@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { FIRST_REPORT_DATE_JST, nextJstDate } from "./daily-report-reliability.mjs";
+import { FIRST_REPORT_DATE_JST, nextJstDate,
+  reportRecipientsForDate } from "./daily-report-reliability.mjs";
 import { reportingDate } from "./daily-support-report.mjs";
 
 const FROM = "noreply@silversense.cc";
@@ -39,7 +40,7 @@ function validateEmailConfig(env, approvedRecipientHashes) {
       value.split("@")[0].endsWith(".")) || recipients[0] === recipients[1]) {
     fail("report_recipients_missing_or_invalid");
   }
-  if (approvedRecipientHashes.size !== 2 || recipients.some((recipient) =>
+  if (recipients[0] !== "181wyc@gmail.com" || approvedRecipientHashes.size !== 2 || recipients.some((recipient) =>
     !approvedRecipientHashes.has(createHash("sha256").update(recipient).digest("hex")))) {
     fail("report_recipients_not_approved");
   }
@@ -112,7 +113,7 @@ function oneRow(payload) {
   return payload[0];
 }
 
-async function reportState(config, reportDateJst, recipients, fetchImpl) {
+async function reportState(config, reportDateJst, recipients, historicalRecipients, fetchImpl) {
   const query = new URLSearchParams({
     select: "report_date_jst,recipient,status,provider_last_event",
     report_date_jst: `eq.${reportDateJst}`,
@@ -134,7 +135,8 @@ async function reportState(config, reportDateJst, recipients, fetchImpl) {
   if (cursor.next_report_date_jst < nextJstDate(reportDateJst)) return "backlog_unresolved";
 
   const health = oneRow(await sourceJson(config, "rest/v1/rpc/get_yutakasa_daily_report_health", {
-    method: "POST", body: { p_recipient_1: recipients[0], p_recipient_2: recipients[1] }, fetchImpl,
+    method: "POST", body: { p_recipient_1: historicalRecipients[0],
+      p_recipient_2: historicalRecipients[1] }, fetchImpl,
   }));
   for (const key of ["uncertain_count", "failed_count", "provider_adverse_count", "pending_overdue_count"]) {
     if (!Number.isSafeInteger(health[key]) || health[key] < 0) fail("source_response_invalid");
@@ -153,7 +155,7 @@ function alertPayload(reportDateJst, recipient) {
       from: `豊かさAI 日報監視 <${FROM}>`,
       to: [recipient],
       subject: `【豊かさBOT】日次対応レポートの配信確認が必要です（${reportDateJst}）`,
-      text: `対象日（日本時間）: ${reportDateJst}\n\n日次対応レポートの両宛先への配信を確認できませんでした。Railwayの日報実行履歴、Supabaseの送信台帳、Resendの配達履歴を確認してください。\n\nこの通知には顧客の問い合わせ内容、メールアドレス、添付情報を含めていません。`,
+      text: `対象日（日本時間）: ${reportDateJst}\n\n日次対応レポートの配信を確認できませんでした。Railwayの日報実行履歴、Supabaseの送信台帳、Resendの配達履歴を確認してください。\n\nこの通知には顧客の問い合わせ内容、メールアドレス、添付情報を含めていません。`,
     },
   };
 }
@@ -186,17 +188,19 @@ export async function runDailyReportWatchdog({ env = process.env, now = new Date
     return { ok: true, skipped: "before_report_due" };
   }
   const emailConfig = validateEmailConfig(env, approvedRecipientHashes);
+  const recipients = reportRecipientsForDate(emailConfig.recipients, reportDateJst);
   let state;
   try {
     const sourceConfig = validateSourceConfig(env);
-    state = await reportState(sourceConfig, reportDateJst, emailConfig.recipients, fetchImpl);
+    state = await reportState(sourceConfig, reportDateJst, recipients,
+      emailConfig.recipients, fetchImpl);
   } catch (error) {
     state = error instanceof WatchdogError ? error.code : "source_unavailable";
   }
   if (state === "healthy") return { ok: true, reportDateJst, state };
 
   const notifications = [];
-  for (const [index, recipient] of emailConfig.recipients.entries()) {
+  for (const [index, recipient] of recipients.entries()) {
     const result = await sendAlert(emailConfig, reportDateJst, recipient, fetchImpl);
     notifications.push({ recipientNumber: index + 1, ...result });
   }

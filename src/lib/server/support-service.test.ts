@@ -451,10 +451,14 @@ describe("support attachment delivery", () => {
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
-      to: ["support@example.com"],
+      to: ["181wyc@gmail.com"],
     });
     expect(payload.reply_to).toBeUndefined();
-    expect(payload.text).toContain(`案件ID: ${ticketId}`);
+    expect(payload.subject).toContain("あなたの返信が必要");
+    expect(payload.text).toContain("質問・報告の内容:");
+    expect(payload.text).toContain(newTicketInput().body);
+    expect(payload.text).toContain("管理画面で履歴を確認し、会員サイト内で返信");
+    expect(payload.text).not.toContain(ticketId);
     expect(payload.text).not.toContain("member@example.com");
   });
 
@@ -494,7 +498,7 @@ describe("support attachment delivery", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("sends only owner-decision follow-ups without customer text or reply-to", async () => {
+  it("sends owner-decision follow-ups with the question only to 181, without reply-to", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
@@ -505,7 +509,7 @@ describe("support attachment delivery", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
-        data: { decision_required: true },
+        data: { decision_required: true, subject: "返金について" },
         error: null,
       }),
     };
@@ -528,11 +532,13 @@ describe("support attachment delivery", () => {
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
-      to: ["support@example.com"],
+      to: ["181wyc@gmail.com"],
     });
     expect(payload.reply_to).toBeUndefined();
-    expect(payload.text).toContain(`案件ID: ${ticketId}`);
-    expect(payload.text).not.toContain("返金の追加情報です");
+    expect(payload.subject).toContain("追加連絡");
+    expect(payload.text).toContain("返金について");
+    expect(payload.text).toContain("返金の追加情報です。");
+    expect(payload.text).not.toContain(ticketId);
     expect(payload.text).not.toContain("member@example.com");
   });
 
@@ -562,20 +568,18 @@ describe("support attachment delivery", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed and preserves the ticket when the notification recipient is missing", async () => {
+  it("pins owner notices to 181 even when the old notification setting is empty", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
     vi.stubEnv("SUPPORT_NOTIFICATION_EMAIL", "");
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: "email-id" }));
     vi.stubGlobal("fetch", fetchMock);
-    const workLogInsert = vi.fn().mockResolvedValue({ error: null });
     getSupabaseMock.mockReturnValue({
       rpc: vi.fn().mockResolvedValue({
         data: [{ ticket_id: ticketId, message_id: ticketId, created: true }],
         error: null,
       }),
-      from: vi.fn().mockReturnValue({ insert: workLogInsert }),
     } as never);
 
     await expect(
@@ -587,17 +591,9 @@ describe("support attachment delivery", () => {
       })
     ).resolves.toMatchObject({ ticket_id: ticketId, created: true });
 
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(workLogInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ticket_id: ticketId,
-        event_type: "notification_failed",
-        metadata: expect.objectContaining({
-          recipient_type: "admin",
-          error: "Invalid notification recipient address",
-        }),
-      })
-    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(payload.to).toEqual(["181wyc@gmail.com"]);
   });
 
   it("does not set the user as reply-to on admin reply notifications", async () => {

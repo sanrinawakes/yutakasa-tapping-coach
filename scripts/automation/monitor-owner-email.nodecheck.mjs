@@ -102,6 +102,9 @@ test("new monitored error sends one private email, verifies delivery, and does n
       assert.equal(options.headers["Idempotency-Key"],"yutakasa-monitor-alert/123");
       const body=JSON.parse(options.body);
       assert.deepEqual(body.to,[recipient]);
+      assert.match(body.subject,/サービスのエラーを検知しました/u);
+      assert.match(body.text,/本番サービスの記録にエラー/u);
+      assert.doesNotMatch(body.text,/理由コード/u);
       assert.match(body.text,/issues\/123/u);
       assert.equal(JSON.stringify(body).includes("private customer text"),false);
       return json({id:providerId},201);

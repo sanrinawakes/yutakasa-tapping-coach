@@ -7,6 +7,7 @@ const EMAIL=/^[^\s@,;<>"\u0000-\u001f\u007f]+@[^\s@,;<>"\u0000-\u001f\u007f]+\.[
 const REPOSITORY="sanrinawakes/yutakasa-tapping-coach";
 const SUPPORT_URL="https://yutakasa-tapping-coach.vercel.app/admin/support";
 const FROM="豊かさAI サポート <noreply@silversense.cc>";
+const OWNER_EMAIL="181wyc@gmail.com";
 
 export class TicketTechnicalEscalationNoticeError extends Error {
   constructor(code){super(code);this.name="TicketTechnicalEscalationNoticeError";this.code=code;}
@@ -51,6 +52,26 @@ async function markUncertain(env,fetchImpl,ticketId,messageId,claimToken,code){
     fail("technical_escalation_uncertain_receipt_invalid");
 }
 
+async function latestReportExcerpt(env,fetchImpl,ticketId,messageId){
+  const query=new URLSearchParams({id:`eq.${messageId}`,ticket_id:`eq.${ticketId}`,
+    sender_type:"eq.user",select:"id,body",limit:"2"});
+  const response=await fetchImpl(`${env.SUPABASE_URL}/rest/v1/support_messages?${query}`,{
+    method:"GET",headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept:"application/json"},redirect:"error",signal:AbortSignal.timeout(15_000),
+  }).catch(()=>fail("technical_escalation_report_lookup_failed"));
+  if(response.status!==200)fail("technical_escalation_report_lookup_failed");
+  const raw=await response.text();
+  if(Buffer.byteLength(raw)>16*1024)fail("technical_escalation_report_invalid");
+  let rows;
+  try{rows=JSON.parse(raw);}catch{fail("technical_escalation_report_invalid");}
+  if(!Array.isArray(rows)||rows.length!==1||rows[0]?.id!==messageId||
+      typeof rows[0].body!=="string"||rows[0].body.length>10_000)
+    fail("technical_escalation_report_invalid");
+  const excerpt=rows[0].body.replace(/\r\n?/gu,"\n").trim().slice(0,700).trim();
+  return excerpt||"報告本文は管理画面で確認してください。";
+}
+
 export async function drainTechnicalEscalationNotices({env=process.env,
   fetchImpl=globalThis.fetch,uuid=randomUUID}={}){
   if(env.TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED!=="true")
@@ -63,7 +84,8 @@ export async function drainTechnicalEscalationNotices({env=process.env,
       typeof env.SUPABASE_SERVICE_ROLE_KEY!=="string"||env.SUPABASE_SERVICE_ROLE_KEY.length<20||
       typeof env.YUTAKASA_RESEND_API_KEY!=="string"||env.YUTAKASA_RESEND_API_KEY.length<20||
       typeof env.YUTAKASA_TECHNICAL_ESCALATION_EMAIL!=="string"||
-      !EMAIL.test(env.YUTAKASA_TECHNICAL_ESCALATION_EMAIL)){
+      !EMAIL.test(env.YUTAKASA_TECHNICAL_ESCALATION_EMAIL)||
+      env.YUTAKASA_TECHNICAL_ESCALATION_EMAIL.toLowerCase()!==OWNER_EMAIL){
     fail("technical_escalation_configuration_invalid");
   }
   const due=await rpc(env,fetchImpl,"list_due_yutakasa_technical_escalation_notices");
@@ -83,17 +105,25 @@ export async function drainTechnicalEscalationNotices({env=process.env,
       entry.latest_user_message_id,claimToken);
     if(claim.status==="needs_review"){needsReview+=1;continue;}
     if(claim.status!=="sending")continue;
+    let report;
+    try{report=await latestReportExcerpt(env,fetchImpl,entry.ticket_id,
+      entry.latest_user_message_id);}catch{
+      await markUncertain(env,fetchImpl,entry.ticket_id,entry.latest_user_message_id,
+        claimToken,"report_lookup_unavailable");
+      uncertain+=1;continue;
+    }
     let response;
     try{
       response=await fetchImpl("https://api.resend.com/emails",{
         method:"POST",headers:{Authorization:`Bearer ${env.YUTAKASA_RESEND_API_KEY}`,
           "Content-Type":"application/json","Idempotency-Key":claim.idempotency_key},
-        body:JSON.stringify({from:FROM,to:[env.YUTAKASA_TECHNICAL_ESCALATION_EMAIL],
-          subject:"【豊かさAI】技術案件の自動対応が停止しました",
-          text:`技術案件の自動対応が停止し、Codexによる調査が必要です。\n`+
-            `案件ID: ${entry.ticket_id}\n\n`+
-            `最新の状況を管理画面で確認してください。\n${SUPPORT_URL}\n\n`+
-            "この通知は修正や顧客返信の完了を示すものではありません。"}),
+        body:JSON.stringify({from:FROM,to:[OWNER_EMAIL],
+          subject:"【豊かさBOT】技術的な報告への返信が必要です",
+          text:"お客様からの技術的な報告について、自動対応が止まりました。あなたの確認と返信が必要です。\n\n"+
+            `報告内容:\n${report}\n\n`+
+            `あなたがすること: 管理画面で履歴を確認し、必要な対応を行ってから会員サイト内で返信してください。\n`+
+            `管理画面: ${SUPPORT_URL}\n\n`+
+            "技術的な修正とお客様への返信は、まだ完了していません。このメールに返信してもお客様には届きません。"}),
         redirect:"error",signal:AbortSignal.timeout(15_000),
       });
     }catch{
