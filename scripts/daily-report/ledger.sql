@@ -1,7 +1,9 @@
 -- Internal Yutakasa daily report delivery ledger.
 -- Apply with the Supabase SQL editor or a privileged migration connection.
--- The caller must pass a report containing aggregate operational facts only;
--- customer messages and personal details must not be placed in the report body.
+-- Before 2026-09-18 JST the caller stores aggregate operational facts only.
+-- From that report date, one owner-only snapshot may also include bounded,
+-- redacted excerpts for tickets requiring an operator reply. Never put full
+-- messages, attachments, or internal log bodies into this immutable ledger.
 
 BEGIN;
 
