@@ -9,8 +9,8 @@ const env = {
   YUTAKASA_SUPABASE_URL: "https://example.supabase.co",
   YUTAKASA_SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key-with-sufficient-length",
   YUTAKASA_RESEND_API_KEY: "re_test-key",
-  YUTAKASA_REPORT_RECIPIENT_1: "owner-one@example.com",
-  YUTAKASA_REPORT_RECIPIENT_2: "owner-two@example.com",
+  YUTAKASA_REPORT_RECIPIENT_1: "181wyc@gmail.com",
+  YUTAKASA_REPORT_RECIPIENT_2: "awakes2025@gmail.com",
 };
 const approvedRecipientHashes = new Set([
   env.YUTAKASA_REPORT_RECIPIENT_1, env.YUTAKASA_REPORT_RECIPIENT_2,
@@ -72,6 +72,29 @@ test("a complete, healthy ledger sends no alert", async () => {
   const result = await runDailyReportWatchdog({ env, now: NOW, fetchImpl: client.fetchImpl });
   assert.deepEqual(result, { ok: true, reportDateJst: "2026-09-16", state: "healthy" });
   assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com").length, 0);
+});
+
+test("owner-only report after cutover is healthy and missing-report alerts go only to owner", async () => {
+  const current = new Date("2026-09-19T00:35:00Z");
+  const delivered = mock({ deliveries: [{ report_date_jst: "2026-09-18",
+    recipient: env.YUTAKASA_REPORT_RECIPIENT_1, status: "accepted",
+    provider_last_event: "delivered" }], nextDate: "2026-09-19" });
+  const healthy = await runDailyReportWatchdog({ env, now: current,
+    fetchImpl: delivered.fetchImpl });
+  assert.equal(healthy.state, "healthy");
+  assert.equal(delivered.providerMessages.size, 0);
+
+  const missing = mock({ deliveries: [], nextDate: "2026-09-19" });
+  const first = await runDailyReportWatchdog({ env, now: current,
+    fetchImpl: missing.fetchImpl });
+  const second = await runDailyReportWatchdog({ env, now: current,
+    fetchImpl: missing.fetchImpl });
+  assert.equal(first.state, "delivery_unresolved");
+  assert.equal(second.state, "delivery_unresolved");
+  assert.equal(missing.providerMessages.size, 1);
+  assert.deepEqual(missing.requests.filter(({ url }) => url.host === "api.resend.com")
+    .map(({ init }) => JSON.parse(init.body).to),
+  [[env.YUTAKASA_REPORT_RECIPIENT_1], [env.YUTAKASA_REPORT_RECIPIENT_1]]);
 });
 
 test("a missing report sends only the two approved operator alerts, once per date", async () => {

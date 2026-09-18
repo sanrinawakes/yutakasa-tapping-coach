@@ -13,7 +13,7 @@ const env={GITHUB_REPOSITORY:"sanrinawakes/yutakasa-tapping-coach",
   TICKET_RECONCILE_ENABLED:"true",TICKET_TECHNICAL_ESCALATION_NOTICE_ENABLED:"true",
   SUPABASE_URL:"https://example.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"s".repeat(40),
   YUTAKASA_RESEND_API_KEY:"r".repeat(32),
-  YUTAKASA_TECHNICAL_ESCALATION_EMAIL:"owner@example.com"};
+  YUTAKASA_TECHNICAL_ESCALATION_EMAIL:"181wyc@gmail.com"};
 
 function json(value){return new Response(JSON.stringify(value),{status:200});}
 function claim(){return {status:"sending",ticket_id:ticketId,
@@ -29,6 +29,7 @@ test("disabled escalation makes no database or provider request",async()=>{
 test("wrong repository, recipient, event, or credentials fail closed",async()=>{
   for(const changed of [{GITHUB_REPOSITORY:"other/repo"},
     {GITHUB_REF:"refs/heads/feature"},{GITHUB_EVENT_NAME:"workflow_dispatch"},
+    {YUTAKASA_TECHNICAL_ESCALATION_EMAIL:"other@example.com"},
     {YUTAKASA_TECHNICAL_ESCALATION_EMAIL:"other@example.com\r\nBcc:bad@example.com"},
     {YUTAKASA_RESEND_API_KEY:""}]){
     await assert.rejects(()=>drainTechnicalEscalationNotices({env:{...env,...changed},
@@ -42,11 +43,13 @@ test("one stopped technical ticket sends a private owner notice and records acce
   const requests=[];
   const result=await drainTechnicalEscalationNotices({env,uuid:()=>claimToken,
     fetchImpl:async(url,init)=>{
-      const name=String(url).split("/").at(-1);
+      const name=new URL(String(url)).pathname.split("/").at(-1);
       requests.push({name,init});
       if(name==="list_due_yutakasa_technical_escalation_notices")
         return json([{ticket_id:ticketId,latest_user_message_id:messageId}]);
       if(name==="claim_yutakasa_technical_escalation_notice")return json(claim());
+      if(name==="support_messages")return json([{id:messageId,
+        body:"ログイン画面でエラーが出て先に進めません。"}]);
       if(name==="emails")return json({id:providerId});
       if(name==="finish_yutakasa_technical_escalation_notice")
         return json([{status:"accepted"}]);
@@ -55,13 +58,16 @@ test("one stopped technical ticket sends a private owner notice and records acce
   assert.deepEqual(result,{examined:1,accepted:1,uncertain:0,needsReview:0});
   assert.deepEqual(requests.map((r)=>r.name),[
     "list_due_yutakasa_technical_escalation_notices",
-    "claim_yutakasa_technical_escalation_notice","emails",
+    "claim_yutakasa_technical_escalation_notice","support_messages","emails",
     "finish_yutakasa_technical_escalation_notice"]);
-  const email=requests[2];
+  const email=requests[3];
   assert.equal(email.init.headers["Idempotency-Key"],key);
   const body=JSON.parse(email.init.body);
-  assert.deepEqual(body.to,["owner@example.com"]);
-  assert.match(body.text,new RegExp(ticketId));
+  assert.deepEqual(body.to,["181wyc@gmail.com"]);
+  assert.match(body.subject,/返信が必要/u);
+  assert.match(body.text,/ログイン画面でエラーが出て先に進めません/u);
+  assert.match(body.text,/あなたの確認と返信が必要/u);
+  assert.doesNotMatch(body.text,new RegExp(ticketId));
   assert.match(body.text,/\/admin\/support/u);
   assert.equal(body.text.includes("customer@example.com"),false);
   assert.equal(JSON.stringify(requests).includes("customer@example.com"),false);
@@ -71,10 +77,11 @@ test("provider uncertainty is recorded and a later run reuses the same key",asyn
   let attempts=0;
   const keys=[];
   const fetchImpl=async(url,init)=>{
-    const name=String(url).split("/").at(-1);
+    const name=new URL(String(url)).pathname.split("/").at(-1);
     if(name==="list_due_yutakasa_technical_escalation_notices")
       return json([{ticket_id:ticketId,latest_user_message_id:messageId}]);
     if(name==="claim_yutakasa_technical_escalation_notice")return json(claim());
+    if(name==="support_messages")return json([{id:messageId,body:"技術報告です。"}]);
     if(name==="mark_yutakasa_technical_escalation_notice_uncertain")
       return json([{status:"uncertain"}]);
     if(name==="finish_yutakasa_technical_escalation_notice")
@@ -94,11 +101,29 @@ test("provider uncertainty is recorded and a later run reuses the same key",asyn
   assert.deepEqual(keys,[key,key]);
 });
 
+test("missing customer report never sends a misleading owner email",async()=>{
+  let sends=0;
+  const result=await drainTechnicalEscalationNotices({env,uuid:()=>claimToken,
+    fetchImpl:async(url)=>{
+      const name=new URL(String(url)).pathname.split("/").at(-1);
+      if(name==="list_due_yutakasa_technical_escalation_notices")
+        return json([{ticket_id:ticketId,latest_user_message_id:messageId}]);
+      if(name==="claim_yutakasa_technical_escalation_notice")return json(claim());
+      if(name==="support_messages")return json([]);
+      if(name==="mark_yutakasa_technical_escalation_notice_uncertain")
+        return json([{status:"uncertain"}]);
+      if(name==="emails")sends+=1;
+      assert.fail(`unexpected request: ${name}`);
+    }});
+  assert.equal(sends,0);
+  assert.deepEqual(result,{examined:1,accepted:0,uncertain:1,needsReview:0});
+});
+
 test("a ticket changed before claim cannot send email",async()=>{
   let sent=0;
   const result=await drainTechnicalEscalationNotices({env,uuid:()=>claimToken,
     fetchImpl:async(url)=>{
-      const name=String(url).split("/").at(-1);
+      const name=new URL(String(url)).pathname.split("/").at(-1);
       if(name==="list_due_yutakasa_technical_escalation_notices")
         return json([{ticket_id:ticketId,latest_user_message_id:messageId}]);
       if(name==="claim_yutakasa_technical_escalation_notice")return json({status:"suppressed"});

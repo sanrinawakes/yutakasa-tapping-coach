@@ -1,4 +1,12 @@
 export const FIRST_REPORT_DATE_JST = "2026-09-16";
+// Future daily reports go only to the owner. Earlier immutable snapshots keep
+// their original two-recipient delivery history.
+export const OWNER_ONLY_REPORT_DATE_JST = "2026-09-18";
+
+export function reportRecipientsForDate(recipients, reportDateJst) {
+  return reportDateJst >= OWNER_ONLY_REPORT_DATE_JST
+    ? recipients.slice(0, 1) : recipients;
+}
 
 export const PROVIDER_EVENTS = Object.freeze(new Set([
   "bounced", "canceled", "clicked", "complained", "delivered",

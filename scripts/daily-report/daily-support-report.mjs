@@ -7,6 +7,7 @@ import {
   FIRST_REPORT_DATE_JST,
   PROVIDER_EVENTS,
   reportDatesToRun,
+  reportRecipientsForDate,
   workEventLabel,
 } from "./daily-report-reliability.mjs";
 
@@ -14,8 +15,8 @@ const DEFAULT_FROM = "noreply@silversense.cc";
 const APP_SUPPORT_URL = "https://yutakasa-tapping-coach.vercel.app/admin/support";
 const PAGE_SIZE = 500;
 const MAX_PAGES = 100;
-const MAX_LISTED_TICKETS = 50;
-const MAX_LISTED_EVENTS = 100;
+const MAX_LISTED_TICKETS = 10;
+const MAX_LISTED_EVENTS = 10;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const PROVIDER_CHECK_BATCH = 4;
@@ -114,7 +115,8 @@ export function validateEnvironment(env = process.env) {
     !value.includes("..") && !value.split("@")[0].endsWith(".");
   if (!validAddress(from)) fail("from_email_invalid");
   const recipients = [env.REPORT_RECIPIENT_1?.trim().toLowerCase(), env.REPORT_RECIPIENT_2?.trim().toLowerCase()];
-  if (recipients.some((recipient) => !validAddress(recipient)) || recipients[0] === recipients[1]) {
+  if (recipients.some((recipient) => !validAddress(recipient)) ||
+      recipients[0] !== "181wyc@gmail.com" || recipients[0] === recipients[1]) {
     fail("report_recipients_invalid");
   }
   return { supabaseUrl: url.origin, serviceKey, resendKey, from, recipients };
@@ -218,7 +220,7 @@ async function listCurrentOpenTickets(config, fetchImpl) {
   let afterId = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const query = new URLSearchParams({
-      select: "id,user_email,status,decision_required,automation_status,updated_at",
+      select: "id,user_email,category,status,decision_required,automation_status,updated_at",
       status: "in.(open,in_progress,waiting_user)",
       order: "id.asc",
       limit: String(PAGE_SIZE),
@@ -291,6 +293,7 @@ export function validateSource(source, window) {
   for (const row of source.openTickets) {
     if (!UUID.test(row?.id) || openTicketIds.has(row.id) ||
         typeof row.user_email !== "string" || !row.user_email ||
+        !CATEGORY.has(row.category) ||
         !["open", "in_progress", "waiting_user"].includes(row.status) ||
         !AUTOMATION_STATUS.has(row.automation_status) ||
         typeof row.decision_required !== "boolean" || !validTimestamp(row.updated_at)) {
@@ -595,40 +598,45 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     manual_review: "自動処理停止・確認待ち", blocked_decision: "運営判断待ち",
     completed: "完了", failed: "自動処理失敗",
   };
-  const ticketActionLine = (ticket) =>
-    `ID ${ticket.id} | 自動処理:${automationLabels[ticket.automation_status]}` +
-    `${ticket.decision_required ? " | 運営判断要" : ""}` +
-    ` | 最終更新 ${jstTime(ticket.updated_at)}`;
-  const ownerActionLines = ownerDecisionRequired.slice(0, MAX_LISTED_TICKETS).map(ticketActionLine);
+  const categoryByTicket = new Map(source.tickets.map((ticket) =>
+    [ticket.id,categoryLabels[ticket.category]]));
+  const ownerActionLines = ownerDecisionRequired.slice(0, MAX_LISTED_TICKETS).map((ticket) =>
+    `・${categoryLabels[ticket.category]}の問い合わせ。管理画面で内容を確認し、会員サイト内で返信してください。`);
   if (ownerDecisionRequired.length > MAX_LISTED_TICKETS)
     ownerActionLines.push(`ほか${ownerDecisionRequired.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
-  const stalledLines = stalledAutomation.slice(0, MAX_LISTED_TICKETS).map(ticketActionLine);
+  const stalledLines = stalledAutomation.slice(0, MAX_LISTED_TICKETS).map((ticket) =>
+    `・${categoryLabels[ticket.category]}の報告。自動対応が止まっています。内容を確認し、必要な対応と返信をしてください。`);
   if (stalledAutomation.length > MAX_LISTED_TICKETS)
     stalledLines.push(`ほか${stalledAutomation.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
   const lines = [
+    "【今、あなたがすること】",
+    ownerDecisionRequired.length
+      ? `あなたの判断と返信が必要な問い合わせが${ownerDecisionRequired.length}件あります。`
+      : "あなたの判断と返信が必要な問い合わせはありません。",
+    ...ownerActionLines,
+    stalledAutomation.length
+      ? `自動対応が止まり、確認が必要な報告が${stalledAutomation.length}件あります。`
+      : "自動対応が止まっている報告はありません。",
+    ...stalledLines,
+    `管理画面: ${APP_SUPPORT_URL}`,
+    "",
+    "【昨日の問い合わせと対応】",
     `対象期間: ${date} 00:00–24:00（日本時間）`,
     `作成日時: ${jstTime(preparedAt.toISOString())}`,
     "データ元: 豊かさBOTの問い合わせDB。状態は作成時点の値です。",
     "",
     `現在の未解決: ${source.openTickets.length}件（未対応${currentOpenByStatus.get("open") || 0}件、対応中${currentOpenByStatus.get("in_progress") || 0}件、利用者回答待ち${currentOpenByStatus.get("waiting_user") || 0}件）`,
     `うち運営判断要${source.openTickets.filter((row) => row.decision_required).length}件、自動処理失敗${source.openTickets.filter((row) => row.automation_status === "failed").length}件、運営判断待ち${source.openTickets.filter((row) => row.automation_status === "blocked_decision").length}件、自動処理停止${source.openTickets.filter((row) => row.automation_status === "manual_review").length}件`,
-    `あなたの判断が必要なチケット: ${ownerDecisionRequired.length}件`,
-    ...ownerActionLines,
-    `自動処理が止まっているチケット（判断依頼ではありません）: ${stalledAutomation.length}件`,
-    ...stalledLines,
-    "",
     `前日に動きがあったチケット: ${sorted.length}件（新規${created.size}件、更新時刻が期間内${updated.size}件・新規を含む）`,
     `やりとり: 利用者${messages.get("user") || 0}件、運営${messages.get("admin") || 0}件、システム${messages.get("system") || 0}件`,
     `問い合わせへの作業記録: ${source.workLogs.length}件`,
     `前日の対象チケットで要運営判断: ${sorted.filter((row) => row.decision_required).length}件`,
-    ...monitorSummaryLines(monitorSummary),
-    ...repairProgressLines(repairProgress),
     "",
     `前日のやりとり・作業時系列: ${events.length}件`,
   ];
   if (events.length === 0) lines.push("前日の投稿・作業記録は0件です。");
   for (const event of events.slice(0, MAX_LISTED_EVENTS)) {
-    lines.push(`${jstTime(event.at)} | ID ${event.ticketId} | ${event.label}`);
+    lines.push(`${jstTime(event.at)} | ${categoryByTicket.get(event.ticketId)} | ${event.label}`);
   }
   if (events.length > MAX_LISTED_EVENTS) lines.push(`ほか${events.length - MAX_LISTED_EVENTS}件。時系列の表示は最大${MAX_LISTED_EVENTS}件です。`);
   lines.push("", "前日に動きがあったチケット:");
@@ -637,15 +645,19 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     const ticketMessages = source.messages.filter((row) => row.ticket_id === ticket.id);
     const ticketLogs = source.workLogs.filter((row) => row.ticket_id === ticket.id);
     lines.push(
-      `ID ${ticket.id} | ${categoryLabels[ticket.category]} | ${statusLabels[ticket.status]} | 自動処理:${automationLabels[ticket.automation_status]}` +
+      `${categoryLabels[ticket.category]} | ${statusLabels[ticket.status]} | 自動処理:${automationLabels[ticket.automation_status]}` +
       `${ticket.decision_required ? " | 運営判断要" : ""}` +
       ` | 投稿${ticketMessages.length}件・作業記録${ticketLogs.length}件` +
       ` | 最終記録 ${jstTime(lastEventTime(ticket.id, source))}`,
     );
   }
   if (sorted.length > MAX_LISTED_TICKETS) lines.push(`ほか${sorted.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
-  lines.push("", `管理画面: ${APP_SUPPORT_URL}`, "", "相談本文、氏名、メールアドレス、添付、内部ログの原文は掲載していません。", "本メールはDB上の記録の要約です。メール受理、配達、本番復旧を示すものではありません。");
-  return { subject: `【豊かさBOT】問い合わせ・障害対応 日報｜${date}（日本時間）`, text: lines.join("\n") };
+  lines.push("", "【システムの監視と自動修正】", ...monitorSummaryLines(monitorSummary),
+    ...repairProgressLines(repairProgress), "", "相談本文、氏名、メールアドレス、添付、内部ログの原文は掲載していません。", "本メールはDB上の記録の要約です。メール受理、配達、本番復旧を示すものではありません。");
+  const actionCount=ownerDecisionRequired.length+stalledAutomation.length;
+  return { subject: actionCount
+    ? `【豊かさBOT】確認・返信が必要な問い合わせ${actionCount}件｜${date}`
+    : `【豊かさBOT】昨日の対応｜${date}（返信待ちなし）`, text: lines.join("\n") };
 }
 
 function oneRpcRow(payload, code) {
@@ -920,9 +932,10 @@ async function auditDeliveryHealth(config, fetchImpl) {
 
 async function runReportDate(config, date, now, fetchImpl) {
   const existing = await readExistingDeliveries(config, date, fetchImpl);
-  if (config.recipients.every((recipient) =>
+  const recipients = reportRecipientsForDate(config.recipients, date);
+  if (recipients.every((recipient) =>
     existing.get(recipient) === "accepted" || existing.get(recipient) === "uncertain")) {
-    const deliveries = config.recipients.map((recipient, index) => ({
+    const deliveries = recipients.map((recipient, index) => ({
       recipientNumber: index + 1,
       status: existing.get(recipient),
       sentNow: false,
@@ -938,7 +951,7 @@ async function runReportDate(config, date, now, fetchImpl) {
   ]);
   const report = buildDailyReport(date, source, now, monitorSummary, repairProgress);
   const deliveries = [];
-  for (const [index, recipient] of config.recipients.entries()) {
+  for (const [index, recipient] of recipients.entries()) {
     const reserved = await reserveDelivery(config, date, recipient, report, fetchImpl);
     if (!reserved.can_send) {
       deliveries.push({ recipientNumber: index + 1, status: reserved.status, sentNow: false });

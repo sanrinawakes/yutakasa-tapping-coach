@@ -84,15 +84,37 @@ async function comment(fetchImpl,token,issueNumber,body){
   if(receipt?.body!==body||!Number.isSafeInteger(receipt.id))
     fail("monitor_email_comment_receipt_invalid");
 }
+function ownerMessage(reason){
+  if(reason==="support_owner_decision_required")return {
+    subject:"判断と返信が必要な問い合わせがあります",
+    detail:"運営者の判断が必要な問い合わせを検知しました。管理画面で内容と履歴を確認し、会員サイト内で返信してください。",
+    action:"https://yutakasa-tapping-coach.vercel.app/admin/support",
+  };
+  if(reason==="support_technical_review_required")return {
+    subject:"お客様の技術報告を確認してください",
+    detail:"技術的な報告の自動対応が止まりました。管理画面で報告内容と履歴を確認し、修正状況に応じてお客様へ返信してください。",
+    action:"https://yutakasa-tapping-coach.vercel.app/admin/support",
+  };
+  if(reason.startsWith("production_log_")||reason.startsWith("historical_production_log_"))
+    return {subject:"サービスのエラーを検知しました",
+      detail:"本番サービスの記録にエラーがありました。原因とお客様への影響はまだ確認できていません。監視記録を開いて調査してください。"};
+  if(reason.includes("snapshot")||reason.includes("monitor")||
+      reason.includes("dispatch")||reason.includes("reconcile"))
+    return {subject:"自動監視の確認が必要です",
+      detail:"問い合わせやサービス状態の自動確認が正常に終わりませんでした。監視記録を開いて原因を確認してください。"};
+  return {subject:"豊かさBOTで確認が必要な問題があります",
+    detail:"問い合わせ対応またはサービス状態の確認で問題を検知しました。監視記録を開いて内容を確認してください。"};
+}
 async function sendAndVerify(fetchImpl,key,reason,issueNumber,resendKey){
+  const message=ownerMessage(reason);
   const response=await request(fetchImpl,"https://api.resend.com/emails",{
     method:"POST",headers:{Authorization:`Bearer ${resendKey}`,
       "Content-Type":"application/json","Idempotency-Key":key},
     body:JSON.stringify({from:FROM,to:[RECIPIENT],
-      subject:`【豊かさBOT】監視エラー: ${reason}`,
-      text:"豊かさBOTの監視が異常を検知しました。\n"+
-        `理由コード: ${reason}\n`+
-        `確認先: https://github.com/${REPOSITORY}/issues/${issueNumber}\n\n`+
+      subject:`【豊かさBOT】${message.subject}`,
+      text:`${message.detail}\n\n`+
+        `${message.action ? `問い合わせ管理画面: ${message.action}\n` : ""}`+
+        `監視記録: https://github.com/${REPOSITORY}/issues/${issueNumber}\n\n`+
         "この通知は原因の確定や修正完了を示すものではありません。"})});
   if(response.status!==200&&response.status!==201)fail("monitor_email_provider_http_uncertain");
   const receipt=await boundedJson(response);

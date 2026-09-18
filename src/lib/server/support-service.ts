@@ -32,7 +32,25 @@ const SYNTHETIC_SUPPORT_EMAIL_LIKE = "yutakasa-auto-smoke+%@example.invalid";
 const SYNTHETIC_SUPPORT_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})@example\.invalid$/iu;
 
 function supportNotificationEmail(): string {
-  return process.env.SUPPORT_NOTIFICATION_EMAIL?.trim() || "";
+  // Owner action notices have one approved destination, independent of the
+  // account allowed to sign in to the admin page.
+  return "181wyc@gmail.com";
+}
+
+function ownerActionNotice(subject: string, body: string, followUp: boolean) {
+  const question = normalizeSupportText(body, 700);
+  return {
+    subject: followUp
+      ? "【豊かさBOT】返信が必要な問い合わせに追加連絡が届きました"
+      : "【豊かさBOT】あなたの返信が必要な問い合わせが届きました",
+    text:
+      `豊かさBOTに、あなたの判断と返信が必要な${followUp ? "追加連絡" : "問い合わせ"}が届きました。\n\n` +
+      `件名: ${normalizeSupportText(subject, MAX_SUPPORT_SUBJECT_LENGTH)}\n` +
+      `質問・報告の内容:\n${question || "本文は管理画面で確認してください。"}\n\n` +
+      `あなたがすること: 管理画面で履歴を確認し、会員サイト内で返信してください。\n` +
+      `管理画面: ${SUPPORT_APP_URL}/admin/support\n\n` +
+      "このメールに返信しても、お客様には届きません。",
+  };
 }
 
 export type SupportAttachment = {
@@ -472,12 +490,7 @@ export async function createSupportTicket(params: {
   if (result?.created && decisionRequired && !isTestAddress(params.userEmail)) {
     const notification = await sendSupportEmail({
       to: supportNotificationEmail(),
-      subject: "【豊かさAI】運営判断が必要な問い合わせ",
-      text:
-        `運営判断が必要な問い合わせが届きました。\n` +
-        `案件ID: ${result.ticket_id}\n\n` +
-        `相談内容を管理画面で確認し、アプリ内で返信してください。\n` +
-        `管理画面: ${SUPPORT_APP_URL}/admin/support`,
+      ...ownerActionNotice(subject, body, false),
     });
     await recordNotificationResult(result.ticket_id, "admin", notification);
   }
@@ -517,7 +530,7 @@ export async function appendUserSupportMessage(params: {
   if (result?.created && !isTestAddress(params.userEmail)) {
     const { data: ticket, error: ticketError } = await getSupabase()
       .from("support_tickets")
-      .select("decision_required")
+      .select("decision_required,subject")
       .eq("id", params.ticketId)
       .maybeSingle();
     if (ticketError || !ticket) {
@@ -527,12 +540,7 @@ export async function appendUserSupportMessage(params: {
     } else if (ticket.decision_required === true) {
       const notification = await sendSupportEmail({
         to: supportNotificationEmail(),
-        subject: "【豊かさAI】運営判断が必要な問い合わせへの追記",
-        text:
-          `運営判断が必要な問い合わせに追記がありました。\n` +
-          `案件ID: ${params.ticketId}\n\n` +
-          `追記内容を管理画面で確認し、アプリ内で返信してください。\n` +
-          `管理画面: ${SUPPORT_APP_URL}/admin/support`,
+        ...ownerActionNotice(ticket.subject, body, true),
       });
       await recordNotificationResult(params.ticketId, "admin", notification);
     }
