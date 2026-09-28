@@ -37,6 +37,8 @@ const GEMINI_RETRY_EVENT_KEYS = Object.freeze([
 ].sort());
 const FAILURE_LOG_WORDS = /\b(?:error|timeout|timed out|fail(?:ed|ure)?|exception|abort(?:ed)?|cancel(?:led)?)\b/iu;
 const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+const LOG_QUERY_TIMEOUT_MS = 90_000;
+const LOG_QUERY_RETRY_DELAY_MS = 1_000;
 const TRANSIENT_DEPLOYMENT_READ = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
 
 function fail(code) {
@@ -245,6 +247,7 @@ export async function collectRemoteLogs({
   deploymentId,
   token = process.env.VERCEL_TOKEN,
   runCommand = execFile,
+  waitImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   deploymentOnly = false,
   since = null,
 } = {}) {
@@ -267,26 +270,30 @@ export async function collectRemoteLogs({
   for (const [name, filter] of Object.entries(LOG_FILTERS)) {
     const counts = [];
     for (const scope of deploymentOnly ? ["current"] : ["project", "current"]) {
+      const args = [
+        "logs",
+        ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
+        `--since=${windowStart}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
+        "--environment=production",
+        "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
+        filter, "--token", token,
+      ];
       let stdout;
-      try {
-        ({ stdout } = await runCommand(VERCEL_CLI, [
-          "logs",
-          ...(scope === "current" ? [`--deployment=${deploymentId}`] : []),
-          `--since=${windowStart}`, `--until=${until}`, "--limit=100", "--no-follow", "--json",
-          "--environment=production",
-          "--project=yutakasa-tapping-coach", `--scope=${TEAM_SLUG}`,
-          filter, "--token", token,
-        ], {
-          timeout: 90_000,
-          maxBuffer: 8 * 1024 * 1024,
-          encoding: "utf8",
-          env: childEnv,
-        }));
-      } catch (error) {
-        if (error?.killed || error?.signal === "SIGTERM") {
-          fail(`log_${name}_${scope}_query_timeout`);
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          ({ stdout } = await runCommand(VERCEL_CLI, args, {
+            timeout: LOG_QUERY_TIMEOUT_MS,
+            maxBuffer: 8 * 1024 * 1024,
+            encoding: "utf8",
+            env: childEnv,
+          }));
+          break;
+        } catch (error) {
+          const timedOut = error?.killed || error?.signal === "SIGTERM";
+          if (!timedOut) fail(`log_${name}_${scope}_query_failed`);
+          if (attempt === 2) fail(`log_${name}_${scope}_query_timeout`);
+          await waitImpl(LOG_QUERY_RETRY_DELAY_MS);
         }
-        fail(`log_${name}_${scope}_query_failed`);
       }
       const parsed = parseBoundedLogQuery(stdout, { filterName: name });
       if (parsed.truncated) fail(`log_${name}_${scope}_truncated`);
