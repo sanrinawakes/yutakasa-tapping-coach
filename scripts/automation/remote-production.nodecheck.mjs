@@ -43,6 +43,21 @@ const benignGeminiRetry = Object.freeze({
     { level: "warn", message: "Retrying Gemini generation before response started: { attempt: 1, nextAttempt: 2, delayMs: 400 }" },
   ],
 });
+const secondGeminiRetry = Object.freeze({
+  level: "warn",
+  message: "Retrying Gemini generation before response started: { attempt: 2, nextAttempt: 3, delayMs: 1200 }",
+});
+const benignGeminiFallbackRecovery = Object.freeze({
+  ...benignGeminiRetry,
+  logs: [
+    ...benignGeminiRetry.logs,
+    secondGeminiRetry,
+    {
+      level: "warn",
+      message: "Recovered Gemini response with plain-text fallback after validation failures.",
+    },
+  ],
+});
 
 function fakeFetch({ loginId = id, readyState = "READY", mainSha = sha } = {}) {
   return async (url) => {
@@ -331,6 +346,39 @@ test("a bounded successful Gemini retry is not treated as a production failure",
   });
   assert.equal(result.queries.gemini.count, 0);
   assert.equal(result.historicalQueries.gemini.count, 0);
+});
+
+test("two bounded retries and an exact successful fallback are not treated as a failure", () => {
+  const structuredThirdAttempt = {
+    ...benignGeminiRetry,
+    logs: [...benignGeminiRetry.logs, secondGeminiRetry],
+  };
+  assert.equal(parseBoundedLogQuery(
+    `${JSON.stringify(structuredThirdAttempt)}\n`, { filterName: "gemini" },
+  ).count, 0);
+  assert.equal(parseBoundedLogQuery(
+    `${JSON.stringify(benignGeminiFallbackRecovery)}\n`, { filterName: "gemini" },
+  ).count, 0);
+
+  for (const [name, logs] of [
+    ["missing recovery", benignGeminiFallbackRecovery.logs.slice(0, 3).concat({
+      level: "warn", message: "Gemini fallback outcome unknown",
+    })],
+    ["changed second retry", [
+      ...benignGeminiRetry.logs,
+      { ...secondGeminiRetry, message: `${secondGeminiRetry.message} changed` },
+    ]],
+    ["error recovery", [
+      ...benignGeminiFallbackRecovery.logs.slice(0, 3),
+      { level: "error", message: benignGeminiFallbackRecovery.logs[3].message },
+    ]],
+    ["extra log", [...benignGeminiFallbackRecovery.logs, {
+      level: "warn", message: "unexpected",
+    }]],
+  ]) {
+    const line = `${JSON.stringify({ ...benignGeminiRetry, logs })}\n`;
+    assert.equal(parseBoundedLogQuery(line, { filterName: "gemini" }).count, 1, name);
+  }
 });
 
 test("Gemini retry exemption fails closed on any changed request or failure signal", () => {

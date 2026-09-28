@@ -30,6 +30,8 @@ const KNOWN_DISABLED_REPLY_PROBE = Object.freeze({
   level: "info",
 });
 const GEMINI_RETRY_PREFIX = "Retrying Gemini generation before response started:";
+const GEMINI_FALLBACK_RECOVERY =
+  "Recovered Gemini response with plain-text fallback after validation failures.";
 const GEMINI_RETRY_EVENT_KEYS = Object.freeze([
   "branch", "cache", "cacheReason", "deploymentId", "domain", "environment", "id",
   "level", "logs", "message", "pprState", "projectId", "requestMethod", "requestPath",
@@ -184,6 +186,12 @@ function hasOnlyLogFields(log) {
     Object.keys(log).sort().join(",") === "level,message";
 }
 
+function isGeminiRetryLog(log, attempt, nextAttempt, delayMs) {
+  return hasOnlyLogFields(log) &&
+    log.level === "warn" &&
+    log.message === `${GEMINI_RETRY_PREFIX} { attempt: ${attempt}, nextAttempt: ${nextAttempt}, delayMs: ${delayMs} }`;
+}
+
 function isBenignGeminiRetry(entry) {
   if (
     entry === null || typeof entry !== "object" || Array.isArray(entry) ||
@@ -197,24 +205,27 @@ function isBenignGeminiRetry(entry) {
     entry.responseStatusCode !== 200 ||
     typeof entry.message !== "string" || entry.message.length > 2_048 ||
     FAILURE_LOG_WORDS.test(entry.message) ||
-    !Array.isArray(entry.logs) || entry.logs.length !== 2
+    !Array.isArray(entry.logs) || ![2, 3, 4].includes(entry.logs.length)
   ) return false;
 
-  const [info, retry] = entry.logs;
+  const [info, firstRetry, secondRetry, recovery] = entry.logs;
   if (
-    !hasOnlyLogFields(info) || !hasOnlyLogFields(retry) ||
+    !hasOnlyLogFields(info) ||
     info.level !== "info" || typeof info.message !== "string" ||
     info.message.length > 2_048 ||
-    /gemini/iu.test(info.message) || FAILURE_LOG_WORDS.test(info.message) ||
-    retry.level !== "warn" || typeof retry.message !== "string" ||
-    !retry.message.startsWith(GEMINI_RETRY_PREFIX)
+    /gemini/iu.test(info.message) || FAILURE_LOG_WORDS.test(info.message)
   ) return false;
 
-  const detail = retry.message.slice(GEMINI_RETRY_PREFIX.length);
-  const match = /^ \{ attempt: ([12]), nextAttempt: ([23]), delayMs: (400|1200) \}$/u.exec(detail);
-  if (!match) return false;
-  return (match[1] === "1" && match[2] === "2" && match[3] === "400") ||
-    (match[1] === "2" && match[2] === "3" && match[3] === "1200");
+  if (entry.logs.length === 2) {
+    return isGeminiRetryLog(firstRetry, 1, 2, 400) ||
+      isGeminiRetryLog(firstRetry, 2, 3, 1200);
+  }
+  if (!isGeminiRetryLog(firstRetry, 1, 2, 400)) return false;
+  if (!isGeminiRetryLog(secondRetry, 2, 3, 1200)) return false;
+  if (entry.logs.length === 3) return true;
+  return hasOnlyLogFields(recovery) &&
+    recovery.level === "warn" &&
+    recovery.message === GEMINI_FALLBACK_RECOVERY;
 }
 
 export function parseBoundedLogQuery(stdout, { filterName } = {}) {
