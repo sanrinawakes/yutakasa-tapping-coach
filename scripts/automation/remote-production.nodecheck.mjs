@@ -166,14 +166,57 @@ test("log queries discard content and reject truncated results", async () => {
     }),
     /log_fiveXx_project_truncated/u,
   );
+  let timeoutAttempts = 0;
+  const timeoutWaits = [];
   await assert.rejects(collectRemoteLogs({
     deploymentId: id,
     token: "x".repeat(30),
     runCommand: async (_command, _args, options) => {
       assert.equal(options.timeout, 90_000);
+      timeoutAttempts += 1;
       throw Object.assign(new Error("private CLI output must stay private"), { killed: true });
     },
+    waitImpl: async (milliseconds) => { timeoutWaits.push(milliseconds); },
   }), /log_fiveXx_project_query_timeout/u);
+  assert.equal(timeoutAttempts, 2);
+  assert.deepEqual(timeoutWaits, [1_000]);
+});
+
+test("log queries retry one timeout with the exact same bounded query", async () => {
+  const invocations = [];
+  const waits = [];
+  const result = await collectRemoteLogs({
+    deploymentId: id,
+    token: "x".repeat(30),
+    runCommand: async (_command, args) => {
+      invocations.push([...args]);
+      if (invocations.length === 1) {
+        throw Object.assign(new Error("private CLI output must stay private"), { killed: true });
+      }
+      return { stdout: "" };
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.queries.fiveXx.count, 0);
+  assert.equal(invocations.length, 9);
+  assert.deepEqual(invocations[0], invocations[1]);
+  assert.deepEqual(waits, [1_000]);
+});
+
+test("log queries do not retry non-timeout command failures", async () => {
+  let attempts = 0;
+  let waits = 0;
+  await assert.rejects(collectRemoteLogs({
+    deploymentId: id,
+    token: "x".repeat(30),
+    runCommand: async () => {
+      attempts += 1;
+      throw new Error("private CLI output must stay private");
+    },
+    waitImpl: async () => { waits += 1; },
+  }), /log_fiveXx_project_query_failed/u);
+  assert.equal(attempts, 1);
+  assert.equal(waits, 0);
 });
 
 test("repair observations read only the current deployment after merge", async () => {
