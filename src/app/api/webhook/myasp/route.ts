@@ -70,9 +70,6 @@ export async function POST(request: NextRequest) {
     let scenarioId: string | null = null;
     let receiptState: string | null = null;
 
-    // Content-Type が当てにならない（MyASPがフォーム本文を application/json として送る）ため、
-    // ヘッダーではなく本文の中身で判定する。{ や [ で始まる時だけ JSON として解析し、
-    // それ以外は form-urlencoded として URLSearchParams で解析する。
     const rawBody = await request.text();
     const trimmedBody = rawBody.trim();
     let jsonBody: MyAspWebhookBody | null = null;
@@ -105,8 +102,10 @@ export async function POST(request: NextRequest) {
         params.get("data[User][receiptstate]") || params.get("receiptstate");
     }
 
-    // ガード: メールが取得できない・差し込みタグ未置換などの不正値は、
-    // ゴミ行を作らないよう登録せずスキップする（クラッシュもさせない）。
+    console.log(
+      `[myasp webhook] received: email=${(email || "n/a").slice(0, 60)} type=${type || "n/a"} receiptState=${receiptState || "n/a"} scenario=${scenarioId || "n/a"}`
+    );
+
     if (!email || !email.includes("@") || email.includes("%")) {
       console.log(
         `[myasp webhook] skipped invalid email: ${(email || "").slice(0, 40)}`
@@ -144,8 +143,36 @@ export async function POST(request: NextRequest) {
     }
 
     if (hasUnresolvedTemplateValue(receiptState)) {
+      const isReceiptEvent = (type || "").toLowerCase().includes("update");
+      if (isReceiptEvent) {
+        await upsertSubscriber(normalizedEmail, {
+          name: name || undefined,
+          status: "active",
+          myasp_data: {
+            type,
+            scenario_id: scenarioId,
+            receipt_state: receiptState,
+            receipt_class: "paid_on_update_unresolved",
+            last_event: "paid",
+            webhookReceivedAt: new Date().toISOString(),
+          },
+        });
+        try {
+          await recordFirstPaymentIfMissing(normalizedEmail, new Date());
+        } catch (e) {
+          console.warn("recordFirstPaymentIfMissing failed:", e);
+        }
+        console.log(
+          `[myasp webhook] added on update(unresolved receipt): ${normalizedEmail} (type: ${type || "n/a"}, scenario: ${scenarioId || "n/a"})`
+        );
+        return NextResponse.json({
+          success: true,
+          action: "added_active_update_unresolved",
+          email: normalizedEmail,
+        });
+      }
       console.log(
-        `[myasp webhook] skipped unresolved receipt state: ${normalizedEmail} (scenario: ${scenarioId || "n/a"})`
+        `[myasp webhook] skipped unresolved receipt state: ${normalizedEmail} (type: ${type || "n/a"}, scenario: ${scenarioId || "n/a"})`
       );
       return NextResponse.json({
         success: true,
