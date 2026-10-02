@@ -102,10 +102,12 @@ export async function POST(request: NextRequest) {
         params.get("data[User][receiptstate]") || params.get("receiptstate");
     }
 
+    // 観測用ログ: 受信した主要値を記録
     console.log(
       `[myasp webhook] received: email=${(email || "n/a").slice(0, 60)} type=${type || "n/a"} receiptState=${receiptState || "n/a"} scenario=${scenarioId || "n/a"}`
     );
 
+    // ガード: メール未取得・差し込みタグ未置換（%を含む）などの不正値はスキップ（ゴミ行防止）
     if (!email || !email.includes("@") || email.includes("%")) {
       console.log(
         `[myasp webhook] skipped invalid email: ${(email || "").slice(0, 40)}`
@@ -120,6 +122,7 @@ export async function POST(request: NextRequest) {
     const typeClass = classifyType(type);
     const receiptClass = classifyReceipt(receiptState);
 
+    // 解約通知
     if (typeClass === "cancel") {
       await upsertSubscriber(normalizedEmail, {
         name: name || undefined,
@@ -142,45 +145,40 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // 受領状態が読めない（%receiptstate% 等）場合:
+    // awakes1(複製先)では受領状態の置換タグが無く常にこのケース。
+    // 本登録完了(register/update)時点のPOSTは支払い完了を意味する
+    // （未入金の仮登録では本登録完了にならず、このPOSTは飛ばない）ため active で追加する。
+    // ゴミ行は上のメール不正ガードで弾き済み。
     if (hasUnresolvedTemplateValue(receiptState)) {
-      const isReceiptEvent = (type || "").toLowerCase().includes("update");
-      if (isReceiptEvent) {
-        await upsertSubscriber(normalizedEmail, {
-          name: name || undefined,
-          status: "active",
-          myasp_data: {
-            type,
-            scenario_id: scenarioId,
-            receipt_state: receiptState,
-            receipt_class: "paid_on_update_unresolved",
-            last_event: "paid",
-            webhookReceivedAt: new Date().toISOString(),
-          },
-        });
-        try {
-          await recordFirstPaymentIfMissing(normalizedEmail, new Date());
-        } catch (e) {
-          console.warn("recordFirstPaymentIfMissing failed:", e);
-        }
-        console.log(
-          `[myasp webhook] added on update(unresolved receipt): ${normalizedEmail} (type: ${type || "n/a"}, scenario: ${scenarioId || "n/a"})`
-        );
-        return NextResponse.json({
-          success: true,
-          action: "added_active_update_unresolved",
-          email: normalizedEmail,
-        });
+      await upsertSubscriber(normalizedEmail, {
+        name: name || undefined,
+        status: "active",
+        myasp_data: {
+          type,
+          scenario_id: scenarioId,
+          receipt_state: receiptState,
+          receipt_class: "added_unresolved_receipt",
+          last_event: "paid",
+          webhookReceivedAt: new Date().toISOString(),
+        },
+      });
+      try {
+        await recordFirstPaymentIfMissing(normalizedEmail, new Date());
+      } catch (e) {
+        console.warn("recordFirstPaymentIfMissing failed:", e);
       }
       console.log(
-        `[myasp webhook] skipped unresolved receipt state: ${normalizedEmail} (type: ${type || "n/a"}, scenario: ${scenarioId || "n/a"})`
+        `[myasp webhook] added (unresolved receipt): ${normalizedEmail} (type: ${type || "n/a"}, scenario: ${scenarioId || "n/a"})`
       );
       return NextResponse.json({
         success: true,
-        action: "skipped_unresolved_receipt_state",
+        action: "added_active_unresolved",
         email: normalizedEmail,
       });
     }
 
+    // 未払い: subscribers には追加しない
     if (receiptClass === "unpaid") {
       console.log(
         `[myasp webhook] unpaid (skipped): ${normalizedEmail} (state: ${receiptState}, scenario: ${scenarioId || "n/a"})`
@@ -193,6 +191,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // 受領済み or 状態不明（後方互換）: subscribers に upsert
     await upsertSubscriber(normalizedEmail, {
       name: name || undefined,
       status: "active",
