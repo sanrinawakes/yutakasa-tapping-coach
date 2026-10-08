@@ -76,10 +76,40 @@ BEGIN
   IF v_provider.provider_last_event <> 'bounced' OR v_provider.provider_checked_at IS NULL THEN
     RAISE EXCEPTION 'provider event was not persisted';
   END IF;
+
+  SELECT * INTO v_cursor FROM public.advance_yutakasa_daily_report_cursor(
+    DATE '2026-09-17', 'one@example.com', 'two@example.com');
+  IF v_cursor.advanced OR v_cursor.next_report_date_jst <> DATE '2026-09-17' THEN
+    RAISE EXCEPTION 'pre-cutover cursor advanced without both recipients';
+  END IF;
+
+  SELECT * INTO v_reserved FROM public.reserve_yutakasa_daily_report_delivery(
+    DATE '2026-09-17', 'two@example.com', 'Next report', 'Next body',
+    repeat('b', 64), 'daily-test-next-two');
+  PERFORM public.finish_yutakasa_daily_report_delivery(
+    DATE '2026-09-17', 'two@example.com', 'daily-test-next-two', 1,
+    'accepted', '66666666-6666-4666-8666-666666666666', NULL);
+  PERFORM public.record_yutakasa_daily_report_provider_event(
+    DATE '2026-09-17', 'two@example.com',
+    '66666666-6666-4666-8666-666666666666', 'delivered');
+
+  SELECT * INTO v_cursor FROM public.advance_yutakasa_daily_report_cursor(
+    DATE '2026-09-17', 'one@example.com', 'two@example.com');
+  IF NOT v_cursor.advanced OR v_cursor.next_report_date_jst <> DATE '2026-09-18' THEN
+    RAISE EXCEPTION 'pre-cutover cursor did not advance after both recipients';
+  END IF;
+
   IF has_function_privilege('anon',
     'public.record_yutakasa_daily_report_provider_event(date,text,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'provider event write is publicly accessible';
   END IF;
+
+  SELECT * INTO v_cursor FROM public.advance_yutakasa_daily_report_cursor(
+    DATE '2026-09-18', 'one@example.com', NULL);
+  IF v_cursor.advanced OR v_cursor.next_report_date_jst <> DATE '2026-09-18' THEN
+    RAISE EXCEPTION 'owner-only cursor advanced before its delivery existed';
+  END IF;
+
   SELECT * INTO v_reserved FROM public.reserve_yutakasa_daily_report_delivery(
     DATE '2026-09-18', 'one@example.com', 'Third report', 'Third body',
     repeat('c', 64), 'daily-test-third');
@@ -92,6 +122,30 @@ BEGIN
   UPDATE public.yutakasa_daily_report_deliveries
   SET last_send_started_at = clock_timestamp() - INTERVAL '3 hours'
   WHERE report_date_jst = DATE '2026-09-18' AND recipient = 'one@example.com';
+
+  SELECT * INTO v_cursor FROM public.advance_yutakasa_daily_report_cursor(
+    DATE '2026-09-18', 'one@example.com', NULL);
+  IF NOT v_cursor.advanced OR v_cursor.next_report_date_jst <> DATE '2026-09-19' THEN
+    RAISE EXCEPTION 'owner-only cursor did not advance after owner delivery';
+  END IF;
+
+  -- During a SQL-first rollout, an older worker can still send the legacy
+  -- second argument. Post-cutover dates must ignore it and require only owner.
+  SELECT * INTO v_reserved FROM public.reserve_yutakasa_daily_report_delivery(
+    DATE '2026-09-19', 'one@example.com', 'Fourth report', 'Fourth body',
+    repeat('d', 64), 'daily-test-fourth');
+  PERFORM public.finish_yutakasa_daily_report_delivery(
+    DATE '2026-09-19', 'one@example.com', 'daily-test-fourth', 1,
+    'accepted', '77777777-7777-4777-8777-777777777777', NULL);
+  PERFORM public.record_yutakasa_daily_report_provider_event(
+    DATE '2026-09-19', 'one@example.com',
+    '77777777-7777-4777-8777-777777777777', 'delivered');
+  SELECT * INTO v_cursor FROM public.advance_yutakasa_daily_report_cursor(
+    DATE '2026-09-19', 'one@example.com', 'two@example.com');
+  IF NOT v_cursor.advanced OR v_cursor.next_report_date_jst <> DATE '2026-09-20' THEN
+    RAISE EXCEPTION 'legacy caller was not compatible with owner-only cursor';
+  END IF;
+
   SELECT * INTO v_health FROM public.get_yutakasa_daily_report_health(
     'one@example.com', 'two@example.com');
   IF v_health.uncertain_count <> 2 OR v_health.failed_count <> 0

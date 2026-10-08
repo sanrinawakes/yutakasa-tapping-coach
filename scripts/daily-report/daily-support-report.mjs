@@ -7,6 +7,7 @@ import {
   FIRST_REPORT_DATE_JST,
   OWNER_ONLY_REPORT_DATE_JST,
   PROVIDER_EVENTS,
+  nextJstDate,
   reportDatesToRun,
   reportRecipientsForDate,
   workEventLabel,
@@ -792,14 +793,17 @@ async function earliestFailedDate(config, cursorDate, fetchImpl) {
 }
 
 async function advanceReportCursor(config, date, fetchImpl) {
+  const recipients = reportRecipientsForDate(config.recipients, date);
   const payload = await supabaseRequest(config,
     "rest/v1/rpc/advance_yutakasa_daily_report_cursor", {
       method: "POST", fetchImpl,
       body: { p_report_date_jst: date,
-        p_recipient_1: config.recipients[0], p_recipient_2: config.recipients[1] },
+        p_recipient_1: recipients[0], p_recipient_2: recipients[1] ?? null },
     });
   const row = oneRpcRow(payload, "report_cursor_advance_invalid");
-  if (!validDate(row.next_report_date_jst) || typeof row.advanced !== "boolean") {
+  if (!validDate(row.next_report_date_jst) || typeof row.advanced !== "boolean" ||
+      (row.advanced && row.next_report_date_jst !== nextJstDate(date)) ||
+      (!row.advanced && row.next_report_date_jst < date)) {
     fail("report_cursor_advance_invalid");
   }
   return row;
@@ -1062,7 +1066,12 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
     }
     results.push(result);
     if (date === cursorDate && !result.errorCode) {
-      await advanceReportCursor(config, date, fetchImpl);
+      const cursor = await advanceReportCursor(config, date, fetchImpl);
+      const terminal = result.deliveries.length > 0 && result.deliveries.every((delivery) =>
+        ["accepted", "failed", "uncertain"].includes(delivery.status));
+      if (terminal && !cursor.advanced && cursor.next_report_date_jst === date) {
+        fail("report_cursor_advance_stalled");
+      }
     }
   }
   const latest = results[0];

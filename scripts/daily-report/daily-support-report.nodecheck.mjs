@@ -222,7 +222,9 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
     if (url.pathname === "/rest/v1/rpc/advance_yutakasa_daily_report_cursor") {
       const params = JSON.parse(init.body);
       const date = params.p_report_date_jst;
-      const statuses = [params.p_recipient_1, params.p_recipient_2].map((recipient) => ledger.get(`${date}:${recipient}`)?.status);
+      const recipients = [params.p_recipient_1, params.p_recipient_2]
+        .filter((recipient) => recipient !== null);
+      const statuses = recipients.map((recipient) => ledger.get(`${date}:${recipient}`)?.status);
       const advanced = date === state.cursorDate && statuses.every((status) => ["accepted", "failed", "uncertain"].includes(status));
       if (advanced) state.cursorDate = new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
       return json([{ next_report_date_jst: state.cursorDate, advanced }]);
@@ -303,10 +305,49 @@ test("reports from 18 September go only to the first approved owner address", as
   assert.equal(result.ok, true);
   assert.equal(result.reportDateJst, "2026-09-18");
   assert.equal(result.deliveries.length, 1);
+  assert.equal(client.state.cursorDate, "2026-09-19");
   const sends = client.requests.filter(({ url }) => url.host === "api.resend.com" &&
     url.pathname === "/emails");
   assert.deepEqual(sends.map(({ init }) => JSON.parse(init.body).to),
     [[env.REPORT_RECIPIENT_1]]);
+});
+
+test("a terminal owner-only report fails closed when the cursor RPC makes no progress", async () => {
+  const reportDate = "2026-09-18";
+  const client = testFetch({ cursorDate: reportDate, initialLedger: {
+    [`${reportDate}:${env.REPORT_RECIPIENT_1}`]: { status: "accepted" },
+  } });
+  const fetchImpl = (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/rest/v1/rpc/advance_yutakasa_daily_report_cursor") {
+      return Promise.resolve(json([{ next_report_date_jst: reportDate, advanced: false }]));
+    }
+    return client.fetchImpl(input, init);
+  };
+
+  await assert.rejects(
+    () => runDailySupportReport({ env, now: new Date("2026-09-19T00:05:00Z"), fetchImpl }),
+    (error) => error instanceof DailyReportError && error.code === "report_cursor_advance_stalled",
+  );
+});
+
+test("a contradictory successful cursor response fails closed", async () => {
+  const reportDate = "2026-09-18";
+  const client = testFetch({ cursorDate: reportDate, initialLedger: {
+    [`${reportDate}:${env.REPORT_RECIPIENT_1}`]: { status: "accepted" },
+  } });
+  const fetchImpl = (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/rest/v1/rpc/advance_yutakasa_daily_report_cursor") {
+      return Promise.resolve(json([{ next_report_date_jst: reportDate, advanced: true }]));
+    }
+    return client.fetchImpl(input, init);
+  };
+
+  await assert.rejects(
+    () => runDailySupportReport({ env, now: new Date("2026-09-19T00:05:00Z"), fetchImpl }),
+    (error) => error instanceof DailyReportError && error.code === "report_cursor_advance_invalid",
+  );
 });
 
 test("owner-only daily report explains an actionable customer question without exposing identifiers", async () => {
@@ -684,7 +725,7 @@ test("the last closed day is sent immediately and one older missed day is recove
   assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 5);
   const third = await runDailySupportReport({ env, now: later, fetchImpl: client.fetchImpl });
   assert.deepEqual(third.recoveredReportDatesJst, []);
-  assert.equal(client.state.cursorDate, "2026-09-18");
+  assert.equal(client.state.cursorDate, "2026-09-19");
   assert.equal(client.requests.filter(({ url }) => url.host === "api.resend.com" && url.pathname === "/emails").length, 5);
 });
 
