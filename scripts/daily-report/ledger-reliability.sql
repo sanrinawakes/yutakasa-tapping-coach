@@ -1,6 +1,7 @@
 -- Apply after ledger.sql. The cursor records the oldest calendar day that has
--- not yet been attempted for both configured recipients. Delivery rows retain
--- failed and uncertain days after the cursor advances.
+-- not yet reached a terminal delivery state for every recipient required on
+-- that date. Delivery rows retain failed and uncertain days after the cursor
+-- advances. Reports dated 2026-09-18 JST or later are owner-only.
 BEGIN;
 
 ALTER TABLE public.yutakasa_daily_report_deliveries
@@ -47,13 +48,23 @@ AS $$
 DECLARE
   v_current DATE;
   v_ready_count INTEGER;
+  v_required_count INTEGER;
 BEGIN
   IF p_report_date_jst IS NULL OR p_report_date_jst < DATE '2026-09-16'
-    OR p_recipient_1 IS NULL OR p_recipient_2 IS NULL
-    OR p_recipient_1 = p_recipient_2
+    OR p_recipient_1 IS NULL
+    OR (p_report_date_jst < DATE '2026-09-18' AND p_recipient_2 IS NULL)
+    OR (p_recipient_2 IS NOT NULL AND p_recipient_1 = p_recipient_2)
   THEN
     RAISE EXCEPTION 'invalid daily report cursor input' USING ERRCODE = '22023';
   END IF;
+
+  -- The date, rather than the caller version, is authoritative. Accepting the
+  -- legacy second argument after the owner-only cutover keeps SQL-first
+  -- rollouts safe; it is deliberately ignored for those dates.
+  v_required_count := CASE
+    WHEN p_report_date_jst >= DATE '2026-09-18' THEN 1
+    ELSE 2
+  END;
 
   SELECT s.next_report_date_jst INTO STRICT v_current
   FROM public.yutakasa_daily_report_state AS s
@@ -67,10 +78,13 @@ BEGIN
   SELECT count(*) INTO v_ready_count
   FROM public.yutakasa_daily_report_deliveries AS d
   WHERE d.report_date_jst = p_report_date_jst
-    AND d.recipient IN (p_recipient_1, p_recipient_2)
+    AND (
+      d.recipient = p_recipient_1
+      OR (p_report_date_jst < DATE '2026-09-18' AND d.recipient = p_recipient_2)
+    )
     AND d.status IN ('accepted', 'failed', 'uncertain');
 
-  IF v_ready_count <> 2 THEN
+  IF v_ready_count <> v_required_count THEN
     RETURN QUERY SELECT v_current, FALSE;
     RETURN;
   END IF;
