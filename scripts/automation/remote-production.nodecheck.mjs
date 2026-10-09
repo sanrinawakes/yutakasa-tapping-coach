@@ -59,7 +59,12 @@ const benignGeminiFallbackRecovery = Object.freeze({
   ],
 });
 
-function fakeFetch({ loginId = id, readyState = "READY", mainSha = sha } = {}) {
+function fakeFetch({
+  loginId = id,
+  readyState = "READY",
+  mainSha = sha,
+  commitRef = "main",
+} = {}) {
   return async (url) => {
     let value;
     if (url.endsWith("/commits/main")) value = { sha: mainSha };
@@ -75,7 +80,7 @@ function fakeFetch({ loginId = id, readyState = "READY", mainSha = sha } = {}) {
       target: "production",
       projectId: "prj_YJUFNmsjGF7hHFJ3A0BTNvrGTXBW",
       alias: ["yutakasa-tapping-coach.vercel.app"],
-      meta: { githubCommitSha: sha, githubCommitRef: "main" },
+      meta: { githubCommitSha: sha, githubCommitRef: commitRef },
       url: deploymentUrl.replace(/^https:\/\//u, ""),
     };
     else if (url.includes("/statuses?")) value = [{ state: "success", environment_url: deploymentUrl }];
@@ -95,18 +100,21 @@ test("deployment parity requires all production identifiers to agree", async () 
   assert.equal(result.deploymentId, id);
 });
 
-test("deployment mismatch and not-ready states fail closed", async () => {
-  let waits = 0;
+test("persistent deployment mismatch and terminal states fail closed", async () => {
+  const waits = [];
   await assert.rejects(
     collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ loginId: "dpl_12345678" }),
-      waitImpl: async () => { waits += 1; } }),
+      waitImpl: async (milliseconds) => { waits.push(milliseconds); } }),
     /production_parity_mismatch/u,
   );
-  assert.equal(waits, 0);
+  assert.deepEqual(waits, [1_000, 15_000, 45_000, 150_000]);
+  let terminalWaits = 0;
   await assert.rejects(
-    collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ readyState: "BUILDING" }) }),
+    collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ readyState: "ERROR" }),
+      waitImpl: async () => { terminalWaits += 1; } }),
     /vercel_deployment_invalid/u,
   );
+  assert.equal(terminalWaits, 0);
 });
 
 test("deployment snapshot retries one transient read and rechecks every identifier", async () => {
@@ -128,8 +136,9 @@ test("deployment snapshot retries one transient read and rechecks every identifi
   assert.deepEqual(waits, [1_000]);
 });
 
-test("deployment snapshot fails after a second transient read", async () => {
+test("deployment snapshot fails after the bounded transient retry budget", async () => {
   let reads = 0;
+  const waits = [];
   await assert.rejects(collectRemoteDeployment({
     token: "x".repeat(30),
     fetchImpl: async (url, options) => {
@@ -139,9 +148,182 @@ test("deployment snapshot fails after a second transient read", async () => {
       }
       return fakeFetch()(url, options);
     },
-    waitImpl: async () => {},
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
   }), /github_main_http_503/u);
-  assert.equal(reads, 2);
+  assert.equal(reads, 5);
+  assert.deepEqual(waits, [1_000, 5_000, 15_000, 45_000]);
+});
+
+test("deployment convergence retries complete snapshots until parity agrees", async () => {
+  const fetchGood = fakeFetch();
+  const reads = new Map();
+  let attempts = 0;
+  const waits = [];
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      const key = url.endsWith("/commits/main") ? "main"
+        : url.includes("/deployments?") ? "deployments"
+        : url.includes("/v4/aliases/") ? "alias"
+        : url.endsWith("/login") ? "login"
+        : url.includes("/v13/deployments/") ? "deployment"
+        : url.includes("/statuses?") ? "statuses" : "unknown";
+      reads.set(key, (reads.get(key) ?? 0) + 1);
+      if (key === "main") attempts += 1;
+      if (key === "login" && attempts < 5) {
+        return new Response('<html data-dpl-id="dpl_12345678"></html>', { status: 200 });
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.deploymentId, id);
+  assert.equal(attempts, 5);
+  assert.deepEqual(waits, [1_000, 15_000, 45_000, 150_000]);
+  assert.deepEqual(Object.fromEntries(reads), {
+    main: 5,
+    deployments: 5,
+    alias: 5,
+    login: 5,
+    deployment: 5,
+    statuses: 5,
+  });
+});
+
+test("pending provider deployment states retry but malformed identity fails immediately", async () => {
+  const fetchGood = fakeFetch();
+  let statusReads = 0;
+  const waits = [];
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.includes("/statuses?") && statusReads++ === 0) {
+        return new Response(JSON.stringify([{ state: "pending" }]), { status: 200 });
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.ready, true);
+  assert.equal(statusReads, 2);
+  assert.deepEqual(waits, [1_000]);
+
+  let deploymentReads = 0;
+  const deploymentWaits = [];
+  const deploymentResult = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.includes("/v13/deployments/") && deploymentReads++ === 0) {
+        return fakeFetch({ readyState: "BUILDING" })(url, options);
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { deploymentWaits.push(milliseconds); },
+  });
+  assert.equal(deploymentResult.ready, true);
+  assert.equal(deploymentReads, 2);
+  assert.deepEqual(deploymentWaits, [1_000]);
+
+  let persistentStatusReads = 0;
+  const persistentStatusWaits = [];
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.includes("/statuses?")) {
+        persistentStatusReads += 1;
+        return new Response(JSON.stringify([{ state: "pending" }]), { status: 200 });
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { persistentStatusWaits.push(milliseconds); },
+  }), /production_deployment_converging/u);
+  assert.equal(persistentStatusReads, 5);
+  assert.deepEqual(persistentStatusWaits, [1_000, 15_000, 45_000, 150_000]);
+
+  let invalidWaits = 0;
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.includes("/v4/aliases/")) {
+        return new Response(JSON.stringify({
+          alias: "yutakasa-tapping-coach.vercel.app",
+          projectId: "prj_wrong",
+          deploymentId: id,
+        }), { status: 200 });
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async () => { invalidWaits += 1; },
+  }), /vercel_alias_invalid/u);
+  assert.equal(invalidWaits, 0);
+
+  let wrongRefWaits = 0;
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: fakeFetch({ commitRef: "feature" }),
+    waitImpl: async () => { wrongRefWaits += 1; },
+  }), /vercel_ref_invalid/u);
+  assert.equal(wrongRefWaits, 0);
+
+  let forbiddenWaits = 0;
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => url.endsWith("/commits/main")
+      ? new Response("forbidden", { status: 403 })
+      : fetchGood(url, options),
+    waitImpl: async () => { forbiddenWaits += 1; },
+  }), /github_main_http_403/u);
+  assert.equal(forbiddenWaits, 0);
+
+  let invalidShaWaits = 0;
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: fakeFetch({ mainSha: "invalid" }),
+    waitImpl: async () => { invalidShaWaits += 1; },
+  }), /github_main_invalid/u);
+  assert.equal(invalidShaWaits, 0);
+});
+
+test("retry categories share one budget and terminal transitions stop immediately", async () => {
+  const fetchGood = fakeFetch();
+  let attempts = 0;
+  const waits = [];
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("/commits/main")) {
+        attempts += 1;
+        if (attempts === 1) return new Response("unavailable", { status: 503 });
+      }
+      if (url.endsWith("/login") && attempts === 2) {
+        return new Response('<html data-dpl-id="dpl_12345678"></html>', { status: 200 });
+      }
+      if (url.includes("/statuses?") && attempts === 3) {
+        return new Response(JSON.stringify([{ state: "pending" }]), { status: 200 });
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.ready, true);
+  assert.equal(attempts, 4);
+  assert.deepEqual(waits, [1_000, 15_000, 45_000]);
+
+  let deploymentReads = 0;
+  const terminalWaits = [];
+  await assert.rejects(collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url.includes("/v13/deployments/")) {
+        deploymentReads += 1;
+        return fakeFetch({ readyState: deploymentReads === 1 ? "BUILDING" : "ERROR" })(url, options);
+      }
+      return fetchGood(url, options);
+    },
+    waitImpl: async (milliseconds) => { terminalWaits.push(milliseconds); },
+  }), /vercel_deployment_invalid/u);
+  assert.equal(deploymentReads, 2);
+  assert.deepEqual(terminalWaits, [1_000]);
 });
 
 test("log queries discard content and reject truncated results", async () => {

@@ -50,17 +50,36 @@ const REPAIRABLE_REASON_CODES = new Set([
 ]);
 const SUPPORT_URL =
   "https://yutakasa-tapping-coach.vercel.app/api/internal/support-automation?limit=25";
+const DEPLOYMENT_FAILURE_STAGES = new Set([
+  "deployment_snapshot_invalid",
+  "production_deployment_converging",
+  "production_parity_mismatch",
+  "provider_read_failed",
+]);
+const DEPLOYMENT_PROVIDER_READ_FAILURE = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
 
 export class RemoteMonitorError extends Error {
-  constructor(code) {
+  constructor(code, { deploymentFailureStage = null } = {}) {
     super(code);
     this.name = "RemoteMonitorError";
     this.code = code;
+    if (DEPLOYMENT_FAILURE_STAGES.has(deploymentFailureStage)) {
+      this.deploymentFailureStage = deploymentFailureStage;
+    }
   }
 }
 
-function fail(code) {
-  throw new RemoteMonitorError(code);
+function fail(code, details) {
+  throw new RemoteMonitorError(code, details);
+}
+
+function deploymentFailureStage(error) {
+  const code = error?.message ?? "";
+  if (code === "production_deployment_converging" || code === "production_parity_mismatch") {
+    return code;
+  }
+  if (DEPLOYMENT_PROVIDER_READ_FAILURE.test(code)) return "provider_read_failed";
+  return "deployment_snapshot_invalid";
 }
 
 function assertPrivateDirectory(directory) {
@@ -407,7 +426,9 @@ export async function preflightRemoteMonitor({
       deployment = await deploymentImpl({ token: secrets.VERCEL_TOKEN });
     } catch (error) {
       if (error instanceof MonitorLedgerError) throw error;
-      fail("deployment_snapshot_failed");
+      fail("deployment_snapshot_failed", {
+        deploymentFailureStage: deploymentFailureStage(error),
+      });
     }
     let logs;
     try {
@@ -606,6 +627,18 @@ function safeErrorCode(error) {
     return error.code;
   }
   return "remote_monitor_unexpected_failure";
+}
+
+export function monitorFailureResult(error) {
+  const reasonCode = safeErrorCode(error);
+  return {
+    ok: false,
+    actionRequired: true,
+    reasonCodes: [reasonCode],
+    ...(error instanceof RemoteMonitorError && error.deploymentFailureStage
+      ? { deploymentFailureStage: error.deploymentFailureStage }
+      : {}),
+  };
 }
 
 export function monitorResultExitCode(result, phase) {
@@ -852,12 +885,7 @@ const isMain =
   process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
   runRemoteMonitorCli().catch(async (error) => {
-    const reasonCode = safeErrorCode(error);
-    process.stdout.write(`${JSON.stringify({
-      ok: false,
-      actionRequired: true,
-      reasonCodes: [reasonCode],
-    })}\n`);
+    process.stdout.write(`${JSON.stringify(monitorFailureResult(error))}\n`);
     process.exitCode = 1;
   });
 }
