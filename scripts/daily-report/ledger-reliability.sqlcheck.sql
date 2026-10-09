@@ -4,6 +4,7 @@ DECLARE
   v_reserved RECORD;
   v_expired INTEGER;
   v_provider RECORD;
+  v_checked_at TIMESTAMPTZ;
   v_health RECORD;
 BEGIN
   IF NOT has_table_privilege('service_role', 'public.yutakasa_daily_report_state', 'SELECT')
@@ -70,6 +71,18 @@ BEGIN
   PERFORM public.finish_yutakasa_daily_report_delivery(
     DATE '2026-09-17', 'one@example.com', 'daily-test-next', 1,
     'accepted', '44444444-4444-4444-8444-444444444444', NULL);
+  SELECT provider_checked_at INTO v_checked_at
+  FROM public.record_yutakasa_daily_report_provider_event(
+    DATE '2026-09-17', 'one@example.com',
+    '44444444-4444-4444-8444-444444444444', NULL);
+  IF v_checked_at IS NULL OR EXISTS (
+    SELECT 1 FROM public.yutakasa_daily_report_deliveries
+    WHERE report_date_jst = DATE '2026-09-17'
+      AND recipient = 'one@example.com'
+      AND provider_last_event IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'provider check attempt was not persisted independently';
+  END IF;
   SELECT * INTO v_provider FROM public.record_yutakasa_daily_report_provider_event(
     DATE '2026-09-17', 'one@example.com',
     '44444444-4444-4444-8444-444444444444', 'bounced');

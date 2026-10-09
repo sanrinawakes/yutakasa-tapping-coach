@@ -968,6 +968,21 @@ async function retrieveProviderEvent(config, row, fetchImpl) {
   return result.last_event;
 }
 
+async function markProviderCheck(config, row, fetchImpl) {
+  const payload = await supabaseRequest(config,
+    "rest/v1/rpc/record_yutakasa_daily_report_provider_event", {
+      method: "POST", fetchImpl,
+      body: {
+        p_report_date_jst: row.report_date_jst,
+        p_recipient: row.recipient,
+        p_provider_email_id: row.provider_email_id,
+        p_last_event: null,
+      },
+    });
+  const marked = oneRpcRow(payload, "provider_check_mark_invalid");
+  if (!validTimestamp(marked.provider_checked_at)) fail("provider_check_mark_invalid");
+}
+
 async function recordProviderEvent(config, row, event, fetchImpl) {
   const payload = await supabaseRequest(config,
     "rest/v1/rpc/record_yutakasa_daily_report_provider_event", {
@@ -990,6 +1005,7 @@ async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
   const checks = [];
   for (const row of due) {
     try {
+      await markProviderCheck(config, row, fetchImpl);
       const event = await retrieveProviderEvent(config, row, fetchImpl);
       await recordProviderEvent(config, row, event, fetchImpl);
       checks.push({ reportDateJst: row.report_date_jst,

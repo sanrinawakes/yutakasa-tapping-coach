@@ -73,7 +73,7 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
   json({ id: resendIdFor(JSON.parse(init.body).to[0]) }),
   resendRetrieveBehavior,
   cursorDate = "2026-09-16", initialLedger = {}, ignoreWindowFilter = false,
-  healthNow = NOW } = {}) {
+  healthNow = NOW, providerCheckNow = NOW } = {}) {
   const requests = [];
   const ledger = new Map(Object.entries(initialLedger));
   const state = { cursorDate };
@@ -205,8 +205,9 @@ function testFetch({ records = source(), monitorRuns = [], monitorStatus = 200,
       const key = `${params.p_report_date_jst}:${params.p_recipient}`;
       const previous = ledger.get(key);
       assert.equal(previous.provider_email_id, params.p_provider_email_id);
-      const next = { ...previous, provider_last_event: params.p_last_event,
-        provider_checked_at: NOW.toISOString() };
+      const next = { ...previous,
+        provider_last_event: params.p_last_event ?? previous.provider_last_event ?? null,
+        provider_checked_at: providerCheckNow.toISOString() };
       ledger.set(key, next);
       return json([{ provider_last_event: next.provider_last_event,
         provider_checked_at: next.provider_checked_at }]);
@@ -449,7 +450,7 @@ test("provider receipt addressed to someone else fails verification without reco
   assert.equal(result.ok, false);
   assert.deepEqual(result.providerChecks.map((item) => item.errorCode),
     ["provider_receipt_invalid", "provider_receipt_invalid"]);
-  assert.equal(client.ledger.get(`2026-09-16:${env.REPORT_RECIPIENT_1}`).provider_last_event, undefined);
+  assert.equal(client.ledger.get(`2026-09-16:${env.REPORT_RECIPIENT_1}`).provider_last_event, null);
   assert.equal(client.requests.filter(({ url }) => url.pathname === "/emails").length, 2);
 });
 
@@ -541,6 +542,42 @@ test("a pending provider event older than the recent window is still reconciled"
   assert.deepEqual(result.providerChecks, [{
     reportDateJst: "2026-09-16", recipientNumber: 1, event: "delivered",
   }]);
+});
+
+test("failed provider lookups rotate so a later pending receipt is not starved", async () => {
+  const firstNow = new Date("2026-09-24T03:05:00Z");
+  const dates = ["2026-09-19", "2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23"];
+  const initialLedger = Object.fromEntries(dates.map((date, index) => [
+    `${date}:${env.REPORT_RECIPIENT_1}`,
+    {
+      status: "accepted", provider_email_id: providerId(index + 10),
+      provider_last_event: "queued", provider_checked_at: "2026-09-24T00:00:00Z",
+      last_send_started_at: "2026-09-23T20:00:00Z",
+    },
+  ]));
+  const successfulId = providerId(14);
+  const client = testFetch({
+    cursorDate: "2026-09-24", initialLedger, healthNow: firstNow,
+    providerCheckNow: firstNow,
+    resendRetrieveBehavior: async (url) => {
+      const id = url.pathname.split("/").at(-1);
+      if (id !== successfulId) return json({ message: "not found" }, 404);
+      return json({ object: "email", id, to: [env.REPORT_RECIPIENT_1], last_event: "delivered" });
+    },
+  });
+
+  const first = await runDailySupportReport({ env, now: firstNow, fetchImpl: client.fetchImpl });
+  assert.equal(first.providerChecks.length, 4);
+  assert.equal(first.providerChecks.every((check) => check.errorCode === "provider_http_404"), true);
+
+  const second = await runDailySupportReport({
+    env, now: new Date(firstNow.getTime() + 31 * 60 * 1000), fetchImpl: client.fetchImpl,
+  });
+  assert.deepEqual(second.providerChecks[0], {
+    reportDateJst: "2026-09-23", recipientNumber: 1, event: "delivered",
+  });
+  assert.equal(client.ledger.get(`2026-09-23:${env.REPORT_RECIPIENT_1}`).provider_last_event,
+    "delivered");
 });
 
 test("an uncertain Resend response is recorded and never retried automatically", async () => {
