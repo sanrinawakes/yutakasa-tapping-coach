@@ -24,6 +24,10 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const PROVIDER_CHECK_BATCH = 4;
 const PROVIDER_RECHECK_MS = 12 * 60 * 60 * 1000;
+const PROVIDER_PENDING_RECHECK_MS = 30 * 60 * 1000;
+const PROVIDER_PENDING_EVENTS = new Set([
+  "delivery_delayed", "queued", "scheduled", "sent",
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const CATEGORY = new Set(["technical", "login", "quality", "how_to", "feature", "billing", "other"]);
@@ -904,24 +908,47 @@ async function providerCandidates(config, latestDate, now, fetchImpl) {
     order: "provider_checked_at.asc.nullsfirst,report_date_jst.asc,recipient.asc",
     limit: "14",
   });
+  const pendingQuery = new URLSearchParams({
+    select, recipient: `in.(${config.recipients.join(",")})`, status: "eq.accepted",
+    provider_last_event: `in.(${[...PROVIDER_PENDING_EVENTS].join(",")})`,
+    order: "provider_checked_at.asc.nullsfirst,report_date_jst.asc,recipient.asc",
+    limit: "14",
+  });
   const uncheckedQuery = new URLSearchParams({
     select, recipient: `in.(${config.recipients.join(",")})`, status: "eq.accepted",
     provider_checked_at: "is.null", order: "report_date_jst.asc,recipient.asc",
-    limit: String(PROVIDER_CHECK_BATCH),
+    limit: "14",
   });
-  const recent = await providerLedgerRows(config, recentQuery, fetchImpl);
-  const unchecked = await providerLedgerRows(config, uncheckedQuery, fetchImpl);
+  const [pending, unchecked, recent] = await Promise.all([
+    providerLedgerRows(config, pendingQuery, fetchImpl),
+    providerLedgerRows(config, uncheckedQuery, fetchImpl),
+    providerLedgerRows(config, recentQuery, fetchImpl),
+  ]);
   const seen = new Set();
-  const due = [];
-  for (const row of [...recent, ...unchecked]) {
+  const candidates = [];
+  for (const row of [...pending, ...unchecked, ...recent]) {
     const key = `${row.report_date_jst}:${row.recipient}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (row.provider_checked_at !== null &&
-        Date.parse(row.provider_checked_at) > now.getTime() - PROVIDER_RECHECK_MS) continue;
-    if (due.length < PROVIDER_CHECK_BATCH) due.push(row);
+    candidates.push(row);
   }
-  return due;
+  const pendingEvent = (row) => row.provider_last_event === null ||
+    PROVIDER_PENDING_EVENTS.has(row.provider_last_event);
+  return candidates.filter((row) => {
+    if (row.provider_checked_at === null) return true;
+    const recheckMs = pendingEvent(row) ? PROVIDER_PENDING_RECHECK_MS : PROVIDER_RECHECK_MS;
+    return Date.parse(row.provider_checked_at) <= now.getTime() - recheckMs;
+  }).sort((left, right) => {
+    const pendingDifference = Number(pendingEvent(right)) - Number(pendingEvent(left));
+    if (pendingDifference !== 0) return pendingDifference;
+    const leftCheckedAt = left.provider_checked_at === null
+      ? Number.NEGATIVE_INFINITY : Date.parse(left.provider_checked_at);
+    const rightCheckedAt = right.provider_checked_at === null
+      ? Number.NEGATIVE_INFINITY : Date.parse(right.provider_checked_at);
+    if (leftCheckedAt !== rightCheckedAt) return leftCheckedAt < rightCheckedAt ? -1 : 1;
+    return left.report_date_jst.localeCompare(right.report_date_jst) ||
+      left.recipient.localeCompare(right.recipient);
+  }).slice(0, PROVIDER_CHECK_BATCH);
 }
 
 async function retrieveProviderEvent(config, row, fetchImpl) {
