@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   RemoteMonitorError,
   completeRemoteMonitor,
+  monitorFailureResult,
   monitorResultExitCode,
   planMonitorDispatches,
   preflightRemoteMonitor,
@@ -116,6 +117,51 @@ test("Vercel log failures retain only bounded diagnostic codes", async () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("deployment failures retain only a bounded diagnostic stage", async () => {
+  const root = tempRoot();
+  try {
+    for (const [message, expectedStage] of [
+      ["production_parity_mismatch", "production_parity_mismatch"],
+      ["github_main_http_503", "provider_read_failed"],
+      ["private provider response", "deployment_snapshot_invalid"],
+    ]) {
+      await assert.rejects(preflightRemoteMonitor({
+        secrets: SECRETS,
+        tempRoot: root,
+        snapshotImpl: async () => snapshot(),
+        ...evidence(),
+        deploymentImpl: async () => { throw new Error(message); },
+      }), (error) => error instanceof RemoteMonitorError &&
+        error.code === "deployment_snapshot_failed" &&
+        error.deploymentFailureStage === expectedStage &&
+        !JSON.stringify(error).includes("private provider response"));
+      assert.deepEqual(fs.readdirSync(root), []);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI failure output exposes only the allowlisted deployment stage", () => {
+  const bounded = monitorFailureResult(new RemoteMonitorError(
+    "deployment_snapshot_failed",
+    { deploymentFailureStage: "production_parity_mismatch" },
+  ));
+  assert.deepEqual(bounded, {
+    ok: false,
+    actionRequired: true,
+    reasonCodes: ["deployment_snapshot_failed"],
+    deploymentFailureStage: "production_parity_mismatch",
+  });
+  const unexpected = monitorFailureResult(new Error("private provider response"));
+  assert.deepEqual(unexpected, {
+    ok: false,
+    actionRequired: true,
+    reasonCodes: ["remote_monitor_unexpected_failure"],
+  });
+  assert.equal(JSON.stringify(unexpected).includes("private provider response"), false);
 });
 
 test("preflight and complete keep secrets private, produce anonymous no-op, and clean up", async () => {

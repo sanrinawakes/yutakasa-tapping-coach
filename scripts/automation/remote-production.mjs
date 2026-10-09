@@ -42,6 +42,24 @@ const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
 const LOG_QUERY_TIMEOUT_MS = 90_000;
 const LOG_QUERY_RETRY_DELAY_MS = 1_000;
 const TRANSIENT_DEPLOYMENT_READ = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
+const TRANSIENT_READ_RETRY_DELAYS_MS = Object.freeze([
+  1_000,
+  5_000,
+  15_000,
+  45_000,
+]);
+const CONVERGING_SNAPSHOT_RETRY_DELAYS_MS = Object.freeze([
+  1_000,
+  15_000,
+  45_000,
+  150_000,
+]);
+const CONVERGING_DEPLOYMENT_SNAPSHOT = new Set([
+  "production_deployment_converging",
+  "production_parity_mismatch",
+]);
+const VERCEL_CONVERGING_STATES = new Set(["BUILDING", "INITIALIZING", "QUEUED"]);
+const GITHUB_CONVERGING_STATES = new Set(["in_progress", "pending", "queued"]);
 
 function fail(code) {
   throw new Error(code);
@@ -119,12 +137,17 @@ async function collectRemoteDeploymentOnce(token, fetchImpl) {
   ]);
   if (
     deployment?.id !== id ||
-    deployment?.readyState !== "READY" ||
     deployment?.target !== "production" ||
     deployment?.projectId !== PROJECT_ID ||
     !Array.isArray(deployment?.alias) ||
     !deployment.alias.includes(ALIAS_HOST)
   ) fail("vercel_deployment_invalid");
+  if (deployment.readyState !== "READY") {
+    if (VERCEL_CONVERGING_STATES.has(deployment.readyState)) {
+      fail("production_deployment_converging");
+    }
+    fail("vercel_deployment_invalid");
+  }
   const vercelSha = requireMatch(
     deployment.meta?.githubCommitSha ?? deployment.meta?.gitCommitSha,
     SHA,
@@ -135,17 +158,23 @@ async function collectRemoteDeploymentOnce(token, fetchImpl) {
     deployment.meta?.gitCommitSha &&
     deployment.meta.githubCommitSha !== deployment.meta.gitCommitSha
   ) fail("vercel_sha_ambiguous");
+  if ((deployment.meta?.githubCommitRef ?? deployment.meta?.gitCommitRef) !== "main") {
+    fail("vercel_ref_invalid");
+  }
   if (!/^[a-z0-9-]+\.vercel\.app$/u.test(deployment.url ?? "")) {
     fail("vercel_deployment_url_invalid");
   }
   const vercelUrl = `https://${deployment.url}`;
-  if (!Array.isArray(statuses) || statuses[0]?.state !== "success") fail("github_status_invalid");
+  if (!Array.isArray(statuses)) fail("github_status_invalid");
+  if (statuses.length === 0 || GITHUB_CONVERGING_STATES.has(statuses[0]?.state)) {
+    fail("production_deployment_converging");
+  }
+  if (statuses[0]?.state !== "success") fail("github_status_invalid");
   const statusUrl = statuses[0].environment_url;
   const loginIds = [...login.matchAll(/data-dpl-id="(dpl_[A-Za-z0-9]{8,160})"/gu)].map((match) => match[1]);
   if (
     mainSha !== githubSha ||
     mainSha !== vercelSha ||
-    (deployment.meta?.githubCommitRef ?? deployment.meta?.gitCommitRef) !== "main" ||
     statusUrl !== vercelUrl ||
     loginIds.length === 0 ||
     loginIds.some((loginId) => loginId !== id)
@@ -164,16 +193,24 @@ export async function collectRemoteDeployment({
   fetchImpl = fetch,
   waitImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 } = {}) {
-  try {
-    return await collectRemoteDeploymentOnce(token, fetchImpl);
-  } catch (error) {
-    // A read-only provider request may fail during a deployment. Retry the
-    // entire snapshot once, so every identity is re-read together. Never
-    // retry a mismatch or malformed response as if it were healthy.
-    if (!TRANSIENT_DEPLOYMENT_READ.test(error?.message ?? "")) throw error;
+  let retryIndex = 0;
+  while (true) {
+    try {
+      return await collectRemoteDeploymentOnce(token, fetchImpl);
+    } catch (error) {
+      const code = error?.message ?? "";
+      const retryDelays = TRANSIENT_DEPLOYMENT_READ.test(code)
+        ? TRANSIENT_READ_RETRY_DELAYS_MS
+        : CONVERGING_DEPLOYMENT_SNAPSHOT.has(code)
+          ? CONVERGING_SNAPSHOT_RETRY_DELAYS_MS
+          : null;
+      if (!retryDelays || retryIndex >= retryDelays.length) {
+        throw error;
+      }
+      await waitImpl(retryDelays[retryIndex]);
+      retryIndex += 1;
+    }
   }
-  await waitImpl(1_000);
-  return collectRemoteDeploymentOnce(token, fetchImpl);
 }
 
 function isKnownDisabledReplyProbe(entry) {
