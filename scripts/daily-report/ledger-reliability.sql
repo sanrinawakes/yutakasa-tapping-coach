@@ -137,6 +137,9 @@ REVOKE ALL ON FUNCTION public.expire_yutakasa_daily_report_leases()
 GRANT EXECUTE ON FUNCTION public.expire_yutakasa_daily_report_leases()
   TO service_role;
 
+-- A null event records only the attempted-check time. This lets failed
+-- provider lookups rotate behind other pending receipts without overwriting
+-- the last verified provider state.
 CREATE OR REPLACE FUNCTION public.record_yutakasa_daily_report_provider_event(
   p_report_date_jst DATE,
   p_recipient TEXT,
@@ -150,19 +153,19 @@ SET search_path = pg_catalog
 AS $$
 BEGIN
   IF p_report_date_jst IS NULL OR p_recipient IS NULL
-    OR p_provider_email_id IS NULL OR p_last_event IS NULL
-    OR p_last_event NOT IN (
+    OR p_provider_email_id IS NULL
+    OR (p_last_event IS NOT NULL AND p_last_event NOT IN (
       'bounced', 'canceled', 'clicked', 'complained', 'delivered',
       'delivery_delayed', 'failed', 'opened', 'queued', 'scheduled',
       'sent', 'suppressed'
-    )
+    ))
   THEN
     RAISE EXCEPTION 'invalid provider event' USING ERRCODE = '22023';
   END IF;
 
   RETURN QUERY
   UPDATE public.yutakasa_daily_report_deliveries AS d
-  SET provider_last_event = p_last_event,
+  SET provider_last_event = COALESCE(p_last_event, d.provider_last_event),
       provider_checked_at = clock_timestamp(),
       updated_at = clock_timestamp()
   WHERE d.report_date_jst = p_report_date_jst
