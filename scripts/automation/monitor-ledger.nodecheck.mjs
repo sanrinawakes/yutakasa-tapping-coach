@@ -16,6 +16,10 @@ function response(value, status = 200) {
   return new Response(JSON.stringify(value), { status });
 }
 
+function acceptedAlert() {
+  return { accepted: true };
+}
+
 test("lease acquisition, ownership checks, and finish use only fixed RPC payloads", async () => {
   const names = [];
   const fetchImpl = async (input, init) => {
@@ -159,12 +163,12 @@ test("actionable monitor result dispatches under lease then persists metadata", 
       await leaseGuard();
       events.push("monitor");
       return {
-        actionRequired: true, reasonCodes: ["production_log_fiveXx"],
+        ok: true, actionRequired: true, reasonCodes: ["production_log_fiveXx"],
         deploymentId: "dpl_123", queueStartExact: 0, queueFinalExact: 0,
         driveStartCount: 0, driveFinalCount: 0,
       };
     },
-    alertImpl: async () => { events.push("alert"); },
+    alertImpl: async () => { events.push("alert"); return acceptedAlert(); },
     repairImpl: async () => { events.push("repair"); },
   });
   assert.equal(result.alertDispatched, true);
@@ -172,26 +176,122 @@ test("actionable monitor result dispatches under lease then persists metadata", 
   assert.deepEqual(events, ["guard", "monitor", "finish", "stop", "alert", "record-alert", "repair", "record-repair"]);
 });
 
-test("failed observation records a fixed failure and never reports healthy", async () => {
+test("malformed monitor outcome records a fixed failure instead of healthy", async () => {
   let saved;
+  const result = await runLeasedMonitor({
+    secrets,
+    leaseImpl: async () => ({
+      assertActive: async () => {},
+      finish: async (value) => { saved = value; },
+      stop: async () => {},
+      recordDispatch: async ({ alertDispatched }) => assert.equal(alertDispatched, true),
+    }),
+    monitorImpl: async () => ({ ok: true, reasonCodes: [], deploymentId: "dpl_123" }),
+    alertImpl: async ({ reasonCodes }) => {
+      assert.deepEqual(reasonCodes, ["remote_monitor_result_invalid"]);
+      return acceptedAlert();
+    },
+  });
+  assert.equal(saved.status, "failed");
+  assert.deepEqual(saved.reasonCodes, ["remote_monitor_result_invalid"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.failureRecorded, true);
+  assert.equal(result.alertDispatched, true);
+});
+
+test("failed observation records a fixed failure and exits cleanly after durable alerting", async () => {
+  let saved;
+  const result = await runLeasedMonitor({
+    secrets,
+    leaseImpl: async () => ({
+      assertActive: async () => {},
+      finish: async (value) => { saved = value; },
+      stop: async () => {},
+      recordDispatch: async ({ alertDispatched }) => assert.equal(alertDispatched, true),
+    }),
+    monitorImpl: async () => { throw new Error("private customer text"); },
+    alertImpl: async ({ reasonCodes }) => {
+      assert.deepEqual(reasonCodes, ["remote_monitor_unexpected_failure"]);
+      return acceptedAlert();
+    },
+  });
+  assert.equal(saved.status, "failed");
+  assert.deepEqual(saved.reasonCodes, ["remote_monitor_unexpected_failure"]);
+  assert.equal(saved.errorCode, "remote_monitor_unexpected_failure");
+  assert.equal(JSON.stringify(saved).includes("private customer text"), false);
+  assert.equal(result.ok, false);
+  assert.equal(result.actionRequired, true);
+  assert.equal(result.failureRecorded, true);
+  assert.equal(result.alertDispatched, true);
+  assert.equal(JSON.stringify(result).includes("private customer text"), false);
+});
+
+test("failed observation remains nonzero when durable alerting is unavailable", async () => {
   await assert.rejects(
     () => runLeasedMonitor({
       secrets,
       leaseImpl: async () => ({
         assertActive: async () => {},
-        finish: async (value) => { saved = value; },
+        finish: async () => {},
         stop: async () => {},
-        recordDispatch: async () => {},
+        recordDispatch: async () => assert.fail("alert was not accepted"),
       }),
-      monitorImpl: async () => { throw new Error("private customer text"); },
-      alertImpl: async ({ reasonCodes }) => assert.deepEqual(reasonCodes, ["remote_monitor_unexpected_failure"]),
+      monitorImpl: async () => { throw new Error("private provider details"); },
+      alertImpl: async () => { throw new Error("alert provider unavailable"); },
     }),
-    /private customer text/u,
+    /private provider details/u,
   );
-  assert.equal(saved.status, "failed");
-  assert.deepEqual(saved.reasonCodes, ["remote_monitor_unexpected_failure"]);
-  assert.equal(saved.errorCode, "remote_monitor_unexpected_failure");
-  assert.equal(JSON.stringify(saved).includes("private customer text"), false);
+});
+
+test("failed observation rejects an unaccepted alert receipt", async () => {
+  await assert.rejects(
+    () => runLeasedMonitor({
+      secrets,
+      leaseImpl: async () => ({
+        assertActive: async () => {},
+        finish: async () => {},
+        stop: async () => {},
+        recordDispatch: async () => assert.fail("unaccepted alert must not be recorded"),
+      }),
+      monitorImpl: async () => { throw new Error("private provider details"); },
+      alertImpl: async () => ({ accepted: false }),
+    }),
+    /private provider details/u,
+  );
+});
+
+test("failed observation remains nonzero when its failed ledger verdict is unavailable", async () => {
+  await assert.rejects(
+    () => runLeasedMonitor({
+      secrets,
+      leaseImpl: async () => ({
+        assertActive: async () => {},
+        finish: async () => { throw new Error("ledger unavailable"); },
+        stop: async () => {},
+        recordDispatch: async ({ alertDispatched }) => assert.equal(alertDispatched, true),
+      }),
+      monitorImpl: async () => { throw new Error("private provider details"); },
+      alertImpl: async () => acceptedAlert(),
+    }),
+    /private provider details/u,
+  );
+});
+
+test("failed observation remains nonzero when its alert receipt cannot be recorded", async () => {
+  await assert.rejects(
+    () => runLeasedMonitor({
+      secrets,
+      leaseImpl: async () => ({
+        assertActive: async () => {},
+        finish: async () => {},
+        stop: async () => {},
+        recordDispatch: async () => { throw new Error("receipt unavailable"); },
+      }),
+      monitorImpl: async () => { throw new Error("private provider details"); },
+      alertImpl: async () => acceptedAlert(),
+    }),
+    /private provider details/u,
+  );
 });
 
 test("enabled ticket bridge alerts on queued work even when GitHub skips dispatch",async()=>{
@@ -201,10 +301,10 @@ test("enabled ticket bridge alerts on queued work even when GitHub skips dispatc
     secrets:{...secrets,TICKET_REPAIR_BRIDGE_ENABLED:"true"},
     leaseImpl:async()=>({assertActive:async()=>{},
       finish:async(value)=>{saved=value;},stop:async()=>{},recordDispatch:async()=>{}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     ticketBacklogImpl:async()=>({pending:1,overflow:false}),
     ticketDispatchImpl:async()=>({dispatched:1}),
-    alertImpl:async({reasonCodes})=>{alerts.push(reasonCodes);},
+    alertImpl:async({reasonCodes})=>{alerts.push(reasonCodes);return acceptedAlert();},
   });
   assert.equal(saved.status,"action_required");
   assert.deepEqual(saved.reasonCodes,["ticket_repair_work_pending"]);
@@ -216,7 +316,7 @@ test("reconcile fallback is disabled by default and makes no database or GitHub 
   const result=await runLeasedMonitor({secrets,
     leaseImpl:async()=>({assertActive:async()=>{},finish:async()=>{},stop:async()=>{},
       recordDispatch:async()=>{}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     reconcileInspectImpl:async()=>assert.fail("fallback must remain off"),
     reconcileDispatchImpl:async()=>assert.fail("fallback must remain off"),
     alertImpl:async()=>assert.fail("no alert")});
@@ -241,7 +341,7 @@ test("Drive scheduler runs only under the monitor lease and keeps intake actiona
       recordDispatch: async () => { events.push("record"); },
     }),
     monitorImpl: async () => ({
-      actionRequired: true, reasonCodes: ["drive_intake_items"],
+      ok: true, actionRequired: true, reasonCodes: ["drive_intake_items"],
       deploymentId: "dpl_123", driveStartCount: 1, driveFinalCount: 1,
     }),
     driveScheduleImpl: async ({ assertLease }) => {
@@ -249,7 +349,7 @@ test("Drive scheduler runs only under the monitor lease and keeps intake actiona
       assert.equal(await assertLease(), true);
       return receipt;
     },
-    alertImpl: async () => { events.push("alert"); },
+    alertImpl: async () => { events.push("alert"); return acceptedAlert(); },
   });
   assert.deepEqual(result.driveSchedule, receipt);
   assert.deepEqual(events, ["drive", "lease", "finish", "stop", "alert", "record"]);
@@ -262,7 +362,7 @@ test("Drive scheduler remains off without its exact flag", async () => {
       assertActive: async () => {}, finish: async () => {}, stop: async () => {},
       recordDispatch: async () => {},
     }),
-    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [] }),
+    monitorImpl: async () => ({ ok: true, actionRequired: false, reasonCodes: [] }),
     driveScheduleImpl: async () => assert.fail("Drive scheduler must remain off"),
     alertImpl: async () => assert.fail("healthy monitor must not alert"),
   });
@@ -277,14 +377,14 @@ test("Drive item arriving after monitor snapshot still prevents a healthy verdic
       stop: async () => {}, recordDispatch: async () => {},
     }),
     monitorImpl: async () => ({
-      actionRequired: false, reasonCodes: [], deploymentId: "dpl_123",
+      ok: true, actionRequired: false, reasonCodes: [], deploymentId: "dpl_123",
       driveStartCount: 0, driveFinalCount: 0,
     }),
     driveScheduleImpl: async () => ({
       scanned: 1, unbound: 1, processed: 0, alreadyProcessed: 0,
       blocked: 0, deferred: 0,
     }),
-    alertImpl: async () => {},
+    alertImpl: async () => acceptedAlert(),
   });
   assert.equal(saved.status, "action_required");
   assert.deepEqual(saved.reasonCodes, ["drive_intake_items"]);
@@ -294,23 +394,24 @@ test("Drive item arriving after monitor snapshot still prevents a healthy verdic
 test("Drive scheduler failure records only a fixed code and never healthy", async () => {
   let saved;
   const alerts = [];
-  await assert.rejects(runLeasedMonitor({
+  const result = await runLeasedMonitor({
     secrets: { ...secrets, YUTAKASA_DRIVE_SCHEDULED_ENABLED: "true" },
     leaseImpl: async () => ({
       assertActive: async () => {}, finish: async (value) => { saved = value; },
       stop: async () => {}, recordDispatch: async () => {},
     }),
     monitorImpl: async () => ({
-      actionRequired: true, reasonCodes: ["drive_intake_items"],
+      ok: true, actionRequired: true, reasonCodes: ["drive_intake_items"],
       deploymentId: "dpl_123", driveFinalCount: 1,
     }),
     driveScheduleImpl: async () => { throw new DriveIntakeError("drive_schedule_version_missing"); },
-    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); },
-  }), (error) => error instanceof DriveIntakeError &&
-    error.code === "drive_schedule_version_missing");
+    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); return acceptedAlert(); },
+  });
   assert.equal(saved.status, "failed");
   assert.deepEqual(saved.reasonCodes, ["drive_schedule_version_missing"]);
   assert.deepEqual(alerts, [["drive_schedule_version_missing"]]);
+  assert.deepEqual(result.reasonCodes, ["drive_schedule_version_missing"]);
+  assert.equal(result.alertDispatched, true);
 });
 
 test("due review is actionable, dispatches once after lease release, then alerts",async()=>{
@@ -321,13 +422,13 @@ test("due review is actionable, dispatches once after lease release, then alerts
     leaseImpl:async()=>({assertActive:async()=>{},
       finish:async(value)=>{events.push("finish");saved=value;},
       stop:async()=>{events.push("stop");},recordDispatch:async()=>{events.push("record");}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     reconcileInspectImpl:async()=>{events.push("inspect");
       return {dueReviews:1,expiredClaims:0,dueNotices:0,due:true};},
     reconcileDispatchImpl:async()=>{events.push("dispatch");
       return {dispatched:1,alreadyRunning:false};},
     alertImpl:async({reasonCodes})=>{events.push("alert");
-      assert.deepEqual(reasonCodes,["ticket_reconcile_work_due"]);},
+      assert.deepEqual(reasonCodes,["ticket_reconcile_work_due"]);return acceptedAlert();},
   });
   assert.deepEqual(events,["inspect","finish","stop","dispatch","alert","record"]);
   assert.equal(saved.status,"action_required");
@@ -344,12 +445,12 @@ test("notice-only work remains actionable through Railway fallback",async()=>{
     leaseImpl:async()=>({assertActive:async()=>{},
       finish:async(value)=>{events.push("finish");saved=value;},
       stop:async()=>{events.push("stop");},recordDispatch:async()=>{}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     reconcileInspectImpl:async()=>{events.push("inspect");
       return {dueReviews:0,expiredClaims:0,dueNotices:1,due:true};},
     reconcileDispatchImpl:async()=>{events.push("dispatch");
       return {dispatched:1,alreadyRunning:false};},
-    alertImpl:async()=>{events.push("alert");},
+    alertImpl:async()=>{events.push("alert");return acceptedAlert();},
   });
   assert.deepEqual(events,["inspect","finish","stop","dispatch","alert"]);
   assert.equal(saved.status,"action_required");
@@ -359,16 +460,18 @@ test("notice-only work remains actionable through Railway fallback",async()=>{
 
 test("notice activation without Railway fallback records a failed monitor",async()=>{
   let saved,monitored=false;
-  await assert.rejects(()=>runLeasedMonitor({secrets:{...secrets,
+  const result=await runLeasedMonitor({secrets:{...secrets,
     TICKET_COMPLETION_NOTICE_ENABLED:"true"},
     leaseImpl:async()=>({assertActive:async()=>{},
       finish:async(value)=>{saved=value;},stop:async()=>{},recordDispatch:async()=>{}}),
     monitorImpl:async()=>{monitored=true;assert.fail("must not monitor");},
-    alertImpl:async()=>{},
-  }),/ticket_reconcile_fallback_required/u);
+    alertImpl:async()=>acceptedAlert(),
+  });
   assert.equal(monitored,false);
   assert.equal(saved.status,"failed");
   assert.deepEqual(saved.reasonCodes,["ticket_reconcile_fallback_required"]);
+  assert.deepEqual(result.reasonCodes,["ticket_reconcile_fallback_required"]);
+  assert.equal(result.alertDispatched,true);
 });
 
 test("active GitHub run prevents duplicate dispatch while due work remains actionable",async()=>{
@@ -377,10 +480,10 @@ test("active GitHub run prevents duplicate dispatch while due work remains actio
     TICKET_RECONCILE_FALLBACK_ENABLED:"true"},
     leaseImpl:async()=>({assertActive:async()=>{},finish:async(value)=>{saved=value;},
       stop:async()=>{},recordDispatch:async()=>{}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     reconcileInspectImpl:async()=>({dueReviews:0,expiredClaims:1,dueNotices:0,due:true}),
     reconcileDispatchImpl:async()=>({dispatched:0,alreadyRunning:true}),
-    alertImpl:async()=>{},
+    alertImpl:async()=>acceptedAlert(),
   });
   assert.equal(saved.status,"action_required");
   assert.equal(result.ticketReconcileAlreadyRunning,true);
@@ -394,10 +497,10 @@ test("reconcile dispatch failure alerts with fixed reason and exits nonzero",asy
     TICKET_RECONCILE_FALLBACK_ENABLED:"true"},
     leaseImpl:async()=>({assertActive:async()=>{},finish:async(value)=>{saved=value;},
       stop:async()=>{},recordDispatch:async()=>{}}),
-    monitorImpl:async()=>({actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
+    monitorImpl:async()=>({ok:true,actionRequired:false,reasonCodes:[],deploymentId:"dpl_123"}),
     reconcileInspectImpl:async()=>({dueReviews:1,expiredClaims:0,dueNotices:0,due:true}),
     reconcileDispatchImpl:async()=>{throw new Error("private provider details");},
-    alertImpl:async({reasonCodes})=>{alertReasons.push(reasonCodes);},
+    alertImpl:async({reasonCodes})=>{alertReasons.push(reasonCodes);return acceptedAlert();},
   }),/private provider details/u);
   assert.equal(saved.status,"action_required");
   assert.deepEqual(alertReasons,[["ticket_reconcile_dispatch_failed","ticket_reconcile_work_due"]]);
@@ -408,7 +511,7 @@ test("repair observer fallback stays off without its exact Railway flag", async 
   const result = await runLeasedMonitor({ secrets,
     leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
       stop: async () => {}, recordDispatch: async () => {} }),
-    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+    monitorImpl: async () => ({ ok: true, actionRequired: false, reasonCodes: [],
       deploymentId: "dpl_123" }),
     repairObserveInspectImpl: async () => assert.fail("observer fallback must stay off"),
     repairObserveDispatchImpl: async () => assert.fail("observer fallback must stay off"),
@@ -427,14 +530,14 @@ test("due release dispatches after lease release and remains actionable", async 
       finish: async (value) => { events.push("finish"); saved = value; },
       stop: async () => { events.push("stop"); },
       recordDispatch: async () => { events.push("record"); } }),
-    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+    monitorImpl: async () => ({ ok: true, actionRequired: false, reasonCodes: [],
       deploymentId: "dpl_123" }),
     repairObserveInspectImpl: async () => { events.push("inspect");
       return { slot: 123, dueReleases: 1, due: true }; },
     repairObserveDispatchImpl: async () => { events.push("dispatch");
       return { dispatched: 1, alreadyRunning: false }; },
     alertImpl: async ({ reasonCodes }) => { events.push("alert");
-      assert.deepEqual(reasonCodes, ["repair_observation_due"]); },
+      assert.deepEqual(reasonCodes, ["repair_observation_due"]); return acceptedAlert(); },
   });
   assert.deepEqual(events, ["inspect", "finish", "stop", "dispatch", "alert", "record"]);
   assert.equal(saved.status, "action_required");
@@ -447,11 +550,11 @@ test("active observer run skips duplicate while release remains due", async () =
     secrets: { ...secrets, YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: "true" },
     leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
       stop: async () => {}, recordDispatch: async () => {} }),
-    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+    monitorImpl: async () => ({ ok: true, actionRequired: false, reasonCodes: [],
       deploymentId: "dpl_123" }),
     repairObserveInspectImpl: async () => ({ slot: 123, dueReleases: 1, due: true }),
     repairObserveDispatchImpl: async () => ({ dispatched: 0, alreadyRunning: true }),
-    alertImpl: async () => {},
+    alertImpl: async () => acceptedAlert(),
   });
   assert.equal(result.repairObservationAlreadyRunning, true);
   assert.equal(result.repairObservationDispatches, 0);
@@ -463,11 +566,11 @@ test("observer dispatch failure exits nonzero and sends fixed alert reason", asy
     secrets: { ...secrets, YUTAKASA_REPAIR_OBSERVER_RAILWAY_FALLBACK_ENABLED: "true" },
     leaseImpl: async () => ({ assertActive: async () => {}, finish: async () => {},
       stop: async () => {}, recordDispatch: async () => {} }),
-    monitorImpl: async () => ({ actionRequired: false, reasonCodes: [],
+    monitorImpl: async () => ({ ok: true, actionRequired: false, reasonCodes: [],
       deploymentId: "dpl_123" }),
     repairObserveInspectImpl: async () => ({ slot: 123, dueReleases: 1, due: true }),
     repairObserveDispatchImpl: async () => { throw new Error("private provider details"); },
-    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); },
+    alertImpl: async ({ reasonCodes }) => { alerts.push(reasonCodes); return acceptedAlert(); },
   }), /private provider details/u);
   assert.deepEqual(alerts, [["repair_observation_due", "repair_observer_dispatch_failed"]]);
 });
