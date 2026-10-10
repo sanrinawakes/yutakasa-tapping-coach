@@ -641,8 +641,13 @@ export function monitorFailureResult(error) {
   };
 }
 
-export function monitorResultExitCode(result, phase) {
-  return phase === "preflight" || !result.actionRequired ? 0 : 2;
+export function monitorResultExitCode(result) {
+  if (result?.ok === true && result.actionRequired === false) return 0;
+  if (result?.ok === true && result.actionRequired === true &&
+      result.alertDispatched === true) return 0;
+  if (result?.ok === false && result.actionRequired === true &&
+      result.failureRecorded === true && result.alertDispatched === true) return 0;
+  return 1;
 }
 
 export function planMonitorDispatches(reasonCodes) {
@@ -653,6 +658,10 @@ export function planMonitorDispatches(reasonCodes) {
     alertReasons: [...new Set(reasonCodes)].sort(),
     repairReasons: [...new Set(reasonCodes.filter((code) => REPAIRABLE_REASON_CODES.has(code)))].sort(),
   };
+}
+
+function assertAlertDispatchAccepted(receipt) {
+  if (receipt?.accepted !== true) fail("alert_dispatch_receipt_invalid");
 }
 
 export async function runLeasedMonitor({
@@ -673,6 +682,7 @@ export async function runLeasedMonitor({
   const lease = await leaseImpl({ secrets, kind: "scheduled" });
   let result;
   let observationError;
+  let failureRecorded = false;
   let reconcileInspection;
   let repairObserveInspection;
   try {
@@ -682,6 +692,13 @@ export async function runLeasedMonitor({
       fail("ticket_reconcile_fallback_required");
     }
     result = await monitorImpl({ ...options, secrets, leaseGuard: () => lease.assertActive() });
+    if (result?.ok !== true || typeof result.actionRequired !== "boolean" ||
+        !Array.isArray(result.reasonCodes) ||
+        result.reasonCodes.some((code) => typeof code !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_]{0,127}$/u.test(code)) ||
+        result.actionRequired !== (result.reasonCodes.length > 0)) {
+      fail("remote_monitor_result_invalid");
+    }
     if (secrets.YUTAKASA_DRIVE_SCHEDULED_ENABLED === "true") {
       const driveSchedule = await driveScheduleImpl({
         secrets,
@@ -759,6 +776,7 @@ export async function runLeasedMonitor({
         alertDispatched: false,
         repairDispatched: false,
       });
+      failureRecorded = true;
     } catch {
       // A lost lease must never be treated as a successful observation.
     }
@@ -770,16 +788,31 @@ export async function runLeasedMonitor({
   // acquires the same lease before its own support snapshot.
   if (observationError) {
     try {
-      await alertImpl({
+      const alertReceipt = await alertImpl({
         token: secrets.GITHUB_DISPATCH_TOKEN,
         reasonCodes: [safeErrorCode(observationError)],
         deploymentId: result?.deploymentId ?? "unknown",
       });
+      assertAlertDispatchAccepted(alertReceipt);
       await lease.recordDispatch({ alertDispatched: true });
     } catch {
-      // Railway also retains the failed cron result if the alert is unavailable.
+      // Keep a nonzero Railway result when the durable alert path is unavailable.
+      throw observationError;
     }
-    throw observationError;
+    if (!failureRecorded) throw observationError;
+    return {
+      ...monitorFailureResult(observationError),
+      deploymentId: result?.deploymentId ?? "unknown",
+      failureRecorded: true,
+      alertDispatched: true,
+      repairDispatched: false,
+      ticketRepairDispatches: 0,
+      ticketReconcileDispatches: 0,
+      ticketReconcileAlreadyRunning: false,
+      repairObservationDueReleases: repairObserveInspection?.dueReleases ?? 0,
+      repairObservationDispatches: 0,
+      repairObservationAlreadyRunning: false,
+    };
   }
 
   let alertDispatched = false;
@@ -825,7 +858,7 @@ export async function runLeasedMonitor({
   if (result.actionRequired) {
     const { alertReasons, repairReasons } = planMonitorDispatches(result.reasonCodes);
     try {
-      await alertImpl({
+      const alertReceipt = await alertImpl({
         token: secrets.GITHUB_DISPATCH_TOKEN,
         reasonCodes: [...new Set([...alertReasons,
           ...(reconcileFailure ? ["ticket_reconcile_dispatch_failed"] : []),
@@ -833,6 +866,7 @@ export async function runLeasedMonitor({
         ])].sort(),
         deploymentId: result.deploymentId,
       });
+      assertAlertDispatchAccepted(alertReceipt);
     } catch (error) {
       throw reconcileFailure ?? repairObserverFailure ?? error;
     }
@@ -865,13 +899,13 @@ export async function runRemoteMonitorCli(argv = process.argv.slice(2)) {
   let result;
   if (argv.length === 2 && argv[0] === "cleanup-run") {
     cleanupRemoteRun(argv[1]);
-    result = { ok: true, runCleaned: true };
+    result = { ok: true, actionRequired: false, runCleaned: true };
   } else if (argv.length === 2 && argv[0] === "context-path") {
     const directory = runDirectory(argv[1]);
     assertPrivateDirectory(directory);
     const contextPath = path.join(directory, "ticket-context.json");
     assertPrivateFile(contextPath);
-    result = { ok: true, contextPath };
+    result = { ok: true, actionRequired: false, contextPath };
   } else if (argv.length === 0 || (argv.length === 1 && argv[0] === "run")) {
     result = await runLeasedMonitor();
   } else {

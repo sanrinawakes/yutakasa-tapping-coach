@@ -536,12 +536,28 @@ test("dotenv text preserves quoted secret characters and rejects newline injecti
   );
 });
 
-test("Railway cron run fails on actionable findings while two-phase preflight can continue", () => {
-  const actionable = { ok: true, actionRequired: true };
-  assert.equal(monitorResultExitCode(actionable, "run"), 2);
-  assert.equal(monitorResultExitCode(actionable, "complete"), 2);
-  assert.equal(monitorResultExitCode(actionable, "preflight"), 0);
+test("Railway cron exits cleanly after actionable findings use the durable alert path", () => {
+  const actionable = { ok: true, actionRequired: true, alertDispatched: true };
+  assert.equal(monitorResultExitCode(actionable, "run"), 0);
+  assert.equal(monitorResultExitCode(actionable, "complete"), 0);
   assert.equal(monitorResultExitCode({ ok: true, actionRequired: false }, "run"), 0);
+  assert.equal(monitorResultExitCode({
+    ok: false, actionRequired: true, failureRecorded: true, alertDispatched: true,
+  }, "run"), 0);
+  assert.equal(monitorResultExitCode({
+    ok: false, actionRequired: true, alertDispatched: false,
+  }, "run"), 1);
+  assert.equal(monitorResultExitCode({
+    ok: true, actionRequired: true, alertDispatched: false,
+  }, "run"), 1);
+  assert.equal(monitorResultExitCode({
+    ok: false, actionRequired: true, alertDispatched: true,
+  }, "run"), 1);
+  assert.equal(monitorResultExitCode({ ok: true }, "run"), 1);
+  assert.equal(monitorResultExitCode(null, "run"), 1);
+  assert.equal(monitorResultExitCode({}, "run"), 1);
+  assert.equal(monitorResultExitCode(0, "run"), 1);
+  assert.equal(monitorResultExitCode("ok", "run"), 1);
 });
 
 test("all-time user-last baseline drift requires action without exposing anomaly data", async () => {
@@ -560,7 +576,8 @@ test("all-time user-last baseline drift requires action without exposing anomaly
     });
     assert.equal(result.actionRequired, true);
     assert.deepEqual(result.reasonCodes, ["all_time_user_last_baseline_changed"]);
-    assert.equal(monitorResultExitCode(result, "run"), 2);
+    assert.equal(monitorResultExitCode(result, "run"), 1);
+    assert.equal(monitorResultExitCode({ ...result, alertDispatched: true }, "run"), 0);
     assert.deepEqual(fs.readdirSync(root), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
