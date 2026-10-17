@@ -40,6 +40,9 @@ Resend受理IDだけを記録する。`accepted` はResendの受理を意味し�
 1回最大4通までResendの取得APIで確認し、`delivered`、`bounced`、
 `failed`、`suppressed`等を送信台帳へ記録する。`delivered`は宛先側の
 メールサーバーでの受理を意味し、受信箱への表示までは証明しない。
+同じ実行で受理された送信IDがResendの取得APIにまだ反映されず404となった
+場合に限り、`provider_receipt_visibility_pending`と記録して次の毎時実行へ照合を
+繰り越す。次回以降の404、宛先不一致、配達失敗はこれまでどおり異常とする。
 配達失敗、送信結果不明、照合失敗はcronを非0終了させ、日付と宛先番号、
 エラーコードを標準出力へ残す。
 送信カーソルを越えた古い日も、`uncertain`、再試行待ちの`failed`、

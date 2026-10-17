@@ -454,6 +454,44 @@ test("provider receipt addressed to someone else fails verification without reco
   assert.equal(client.requests.filter(({ url }) => url.pathname === "/emails").length, 2);
 });
 
+test("a just-accepted provider receipt may be briefly invisible without crashing the report", async () => {
+  const firstNow = new Date("2026-09-19T00:05:00Z");
+  let lookups = 0;
+  const records = { createdTickets: [], updatedTickets: [], messages: [],
+    workLogs: [], tickets: [], openTickets: [] };
+  const client = testFetch({
+    records,
+    cursorDate: "2026-09-18",
+    healthNow: firstNow,
+    providerCheckNow: firstNow,
+    resendRetrieveBehavior: async (url) => {
+      lookups += 1;
+      if (lookups === 1) return json({ message: "not found" }, 404);
+      return json({ object: "email", id: url.pathname.split("/").at(-1),
+        to: [env.REPORT_RECIPIENT_1], last_event: "delivered" });
+    },
+  });
+
+  const first = await runDailySupportReport({ env, now: firstNow,
+    fetchImpl: client.fetchImpl });
+  assert.equal(first.ok, true);
+  assert.deepEqual(first.deliveries.map((delivery) => delivery.status), ["accepted"]);
+  assert.deepEqual(first.providerChecks, [{
+    reportDateJst: "2026-09-18",
+    recipientNumber: 1,
+    deferredCode: "provider_receipt_visibility_pending",
+  }]);
+
+  const second = await runDailySupportReport({ env,
+    now: new Date("2026-09-19T01:05:00Z"), fetchImpl: client.fetchImpl });
+  assert.equal(second.ok, true);
+  assert.deepEqual(second.providerChecks, [{
+    reportDateJst: "2026-09-18", recipientNumber: 1, event: "delivered",
+  }]);
+  assert.equal(client.requests.filter(({ url }) =>
+    url.host === "api.resend.com" && url.pathname === "/emails").length, 1);
+});
+
 test("old uncertain sends and old bounces remain visible after the day cursor advances", async () => {
   const initialLedger = {
     [`2026-09-16:${env.REPORT_RECIPIENT_1}`]: { status: "uncertain" },
@@ -567,6 +605,7 @@ test("failed provider lookups rotate so a later pending receipt is not starved",
   });
 
   const first = await runDailySupportReport({ env, now: firstNow, fetchImpl: client.fetchImpl });
+  assert.equal(first.ok, false);
   assert.equal(first.providerChecks.length, 4);
   assert.equal(first.providerChecks.every((check) => check.errorCode === "provider_http_404"), true);
 
