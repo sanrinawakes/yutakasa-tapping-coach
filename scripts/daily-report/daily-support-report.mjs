@@ -1000,7 +1000,8 @@ async function recordProviderEvent(config, row, event, fetchImpl) {
   }
 }
 
-async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
+async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl,
+  newlyAcceptedProviderIds = new Set()) {
   const due = await providerCandidates(config, latestDate, now, fetchImpl);
   const checks = [];
   for (const row of due) {
@@ -1011,9 +1012,21 @@ async function reconcileProviderDeliveries(config, latestDate, now, fetchImpl) {
       checks.push({ reportDateJst: row.report_date_jst,
         recipientNumber: config.recipients.indexOf(row.recipient) + 1, event });
     } catch (error) {
+      const errorCode = error instanceof DailyReportError
+        ? error.code : "provider_unexpected_failure";
+      // A just-accepted Resend ID can briefly return 404 before the receipt is
+      // visible through the retrieval API. Defer that one lookup until the
+      // next hourly run; a later 404 remains an actionable failure.
+      if (errorCode === "provider_http_404" &&
+          newlyAcceptedProviderIds.has(row.provider_email_id)) {
+        checks.push({ reportDateJst: row.report_date_jst,
+          recipientNumber: config.recipients.indexOf(row.recipient) + 1,
+          deferredCode: "provider_receipt_visibility_pending" });
+        continue;
+      }
       checks.push({ reportDateJst: row.report_date_jst,
         recipientNumber: config.recipients.indexOf(row.recipient) + 1,
-        errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" });
+        errorCode });
     }
   }
   return checks;
@@ -1118,8 +1131,18 @@ export async function runDailySupportReport({ env = process.env, now = new Date(
     }
   }
   const latest = results[0];
+  const newlyAcceptedProviderIds = new Set(results.flatMap((result) =>
+    Array.isArray(result.deliveries)
+      ? result.deliveries
+        .filter((delivery) => delivery.sentNow === true &&
+          typeof delivery.providerEmailId === "string" && UUID.test(delivery.providerEmailId))
+        .map((delivery) => delivery.providerEmailId)
+      : []));
   let provider;
-  try { provider = { checks: await reconcileProviderDeliveries(config, latestDate, now, fetchImpl) }; }
+  try {
+    provider = { checks: await reconcileProviderDeliveries(
+      config, latestDate, now, fetchImpl, newlyAcceptedProviderIds) };
+  }
   catch (error) {
     provider = { checks: [],
       errorCode: error instanceof DailyReportError ? error.code : "provider_unexpected_failure" };
