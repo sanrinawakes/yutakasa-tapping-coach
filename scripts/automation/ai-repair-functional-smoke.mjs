@@ -230,7 +230,30 @@ async function openPage(browser, deviceOptions, token, errors) {
 
 async function sendFromBrowser(page, prompt, expectedAssistantCount) {
   const input = page.locator('textarea[placeholder="メッセージを入力..."]');
-  await input.fill(prompt);
+  const newlineIndex = prompt.indexOf("\n");
+  if (newlineIndex === -1) {
+    await input.fill(prompt);
+  } else {
+    const firstLine = prompt.slice(0, newlineIndex);
+    const rest = prompt.slice(newlineIndex + 1);
+    let chatPosts = 0;
+    const trackChatPost = (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && path === "/api/chat") chatPosts += 1;
+    };
+    page.on("request", trackChatPost);
+    try {
+      await input.fill(firstLine);
+      await input.press("Enter");
+      await page.waitForTimeout(250);
+      if (chatPosts !== 0) fail("smoke_chat_enter_submitted");
+      if (await input.inputValue() !== `${firstLine}\n`) fail("smoke_chat_enter_did_not_add_newline");
+      await input.type(rest);
+      if (await input.inputValue() !== prompt) fail("smoke_chat_multiline_input_mismatch");
+    } finally {
+      page.off("request", trackChatPost);
+    }
+  }
   const pendingResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === "/api/chat" && response.request().method() === "POST",
   { timeout: 60_000 });
@@ -664,7 +687,7 @@ export async function runProductionFunctionalSmoke({
     const desktop = await openPage(browser, { viewport: { width: 1440, height: 900 } }, token, errors);
     assertBrowserTime();
     try {
-      const prompt = `${marker} desktop：動作確認です。短く返答してください。`;
+      const prompt = `${marker} desktop：動作確認です。\n短く返答してください。`;
       prompts.push(prompt);
       const rendered = await sendFromBrowser(desktop.page, prompt, 1);
       assertBrowserTime();
@@ -731,6 +754,8 @@ export async function runProductionFunctionalSmoke({
     streamComplete: true,
     databaseSaved: true,
     reloadPersisted: true,
+    enterCreatesNewline: true,
+    sendButtonOnly: true,
     testDataCleaned: true,
     clientErrors: 0,
     ...(supportEvidence ? { support: supportEvidence } : {}),
