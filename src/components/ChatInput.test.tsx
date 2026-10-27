@@ -16,7 +16,7 @@ describe("ChatInput", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not send while Japanese text conversion is being confirmed", async () => {
+  it("uses Enter for a newline and sends only from the send button", async () => {
     const onSendMessage = vi.fn();
     render(<ChatInput onSendMessage={onSendMessage} />);
     const input = screen.getByPlaceholderText("メッセージを入力...");
@@ -27,20 +27,26 @@ describe("ChatInput", () => {
     expect(onSendMessage).not.toHaveBeenCalled();
 
     fireEvent.compositionEnd(input);
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(fireEvent.keyDown(input, { key: "Enter", code: "Enter" })).toBe(true);
+    fireEvent.change(input, { target: { value: "日本語\n改行後" } });
+    expect(input).toHaveValue("日本語\n改行後");
+    expect(onSendMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await waitFor(() => {
-      expect(onSendMessage).toHaveBeenCalledWith("日本語");
+      expect(onSendMessage).toHaveBeenCalledWith("日本語\n改行後");
     });
   });
 
-  it("does not send the same message twice when Enter is pressed rapidly", () => {
+  it("does not send the same message twice when the send button is clicked rapidly", () => {
     const onSendMessage = vi.fn(() => new Promise<boolean>(() => {}));
     render(<ChatInput onSendMessage={onSendMessage} />);
     const input = screen.getByPlaceholderText("メッセージを入力...");
 
     fireEvent.change(input, { target: { value: "二重送信しない" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    const sendButton = screen.getByRole("button", { name: "送信" });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
 
     expect(onSendMessage).toHaveBeenCalledTimes(1);
   });
