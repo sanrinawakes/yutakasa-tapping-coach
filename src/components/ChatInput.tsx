@@ -43,7 +43,6 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalTranscriptRef = useRef<string>("");
-  const isComposingRef = useRef(false);
   const isSubmittingRef = useRef(false);
 
   // ブラウザがWeb Speech APIに対応してるか初期チェック
@@ -166,14 +165,6 @@ export default function ChatInput({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e as unknown as React.FormEvent);
-    }
-  };
-
   return (
     <div
       className="px-4 md:px-8 py-4 md:py-5"
@@ -231,13 +222,6 @@ export default function ChatInput({
             onChange={(e) => {
               setMessage(e.target.value);
               finalTranscriptRef.current = e.target.value; // 手入力時にbase更新
-            }}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              isComposingRef.current = false;
             }}
             placeholder={isRecording ? "聞き取り中..." : "メッセージを入力..."}
             disabled={disabled || isSubmitting}
