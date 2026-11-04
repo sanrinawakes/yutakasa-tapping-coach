@@ -161,7 +161,7 @@ export function isRetryableGeminiError(error: unknown): boolean {
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:fetch|network|socket|timeout|timed out|ECONNRESET|503 Service Unavailable)/iu.test(
+  return /(?:fetch|network|socket|timeout|timed out|ECONNRESET|\b(?:429|500|502|503|504)\b|Too Many Requests|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)/iu.test(
     message
   );
 }

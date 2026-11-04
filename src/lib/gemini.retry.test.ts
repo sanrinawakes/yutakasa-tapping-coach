@@ -97,6 +97,25 @@ describe("Gemini generation retry", () => {
     expect(output).toContain("不安を感じているのですね。");
   });
 
+  it("retries a transient 502 included only in an error message", async () => {
+    mocks.generateContentStream
+      .mockRejectedValueOnce(
+        new Error("Gemini request failed: 502 Bad Gateway")
+      )
+      .mockResolvedValueOnce(
+        successfulStream(validStructuredResponse("不安を感じているのですね。"))
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "返済が不安です。" },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(output).toContain("不安を感じているのですね。");
+  });
+
   it("discards an interrupted hidden draft and returns only the retry", async () => {
     mocks.generateContentStream
       .mockResolvedValueOnce(
