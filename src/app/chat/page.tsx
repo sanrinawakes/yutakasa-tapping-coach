@@ -437,6 +437,23 @@ export default function ChatPage() {
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Remove after production answer generation has been verified to recover. */}
+        <div
+          role="status"
+          aria-label="サービスのお知らせ"
+          className="shrink-0 border-b px-4 py-3 text-sm leading-relaxed sm:px-5"
+          style={{
+            backgroundColor: "var(--accent-gold-soft)",
+            borderColor: "var(--border-primary)",
+            color: "var(--text-primary)",
+          }}
+        >
+          <p className="font-bold">AIコーチの回答に関するお知らせ</p>
+          <p>
+            現在、質問を送っても回答が返らない不具合が発生しており、復旧対応を進めています。
+            ご不便をおかけして申し訳ございません。
+          </p>
+        </div>
         {(threadError || historyError || sendError) && (
           <div
             role="alert"
