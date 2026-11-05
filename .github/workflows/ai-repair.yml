@@ -20,7 +20,11 @@ concurrency:
 
 jobs:
   recheck:
-    if: github.repository == 'sanrinawakes/yutakasa-tapping-coach' && github.ref == 'refs/heads/main'
+    # Keep dispatch available to the monitor while the optional paid investigation is paused.
+    if: >-
+      github.repository == 'sanrinawakes/yutakasa-tapping-coach' &&
+      github.ref == 'refs/heads/main' &&
+      vars.YUTAKASA_ANOMALY_INVESTIGATION_PAUSED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
