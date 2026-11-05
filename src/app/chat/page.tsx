@@ -441,7 +441,7 @@ export default function ChatPage() {
         <div
           role="status"
           aria-label="サービスのお知らせ"
-          className="shrink-0 border-b px-4 py-3 text-sm leading-relaxed sm:px-5"
+          className="shrink-0 border-b py-3 pr-4 pl-20 text-sm leading-relaxed md:px-5"
           style={{
             backgroundColor: "var(--accent-gold-soft)",
             borderColor: "var(--border-primary)",
