@@ -9,18 +9,49 @@ import {
   titleChatThreadFromFirstMessage,
 } from "@/lib/supabase";
 import { evaluateAccess, accessReasonToMessage } from "@/lib/access-control";
-import { streamChatCompletion, ChatMessage as GeminiMessage } from "@/lib/gemini";
+import {
+  GEMINI_GENERATION_FAILED_CODE,
+  geminiGenerationErrorCode,
+  streamChatCompletion,
+  ChatMessage as GeminiMessage,
+} from "@/lib/gemini";
 import { DAILY_MESSAGE_LIMIT } from "@/lib/constants";
 import {
   createChatTitle,
   sanitizeAssistantContent,
 } from "@/lib/chat-thread";
+import {
+  AI_RESPONSE_NOT_GENERATED_CODE,
+  AI_RESPONSE_NOT_GENERATED_MESSAGE,
+} from "@/lib/chat-errors";
 
 const MAX_MESSAGE_LENGTH = 20_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const PARTIAL_RESPONSE_NOTICE =
   "\n\n※通信が途中で中断されたため、ここまでの回答を履歴へ保存しました。続きが必要な場合は、そのままお知らせください。";
+
+function aiResponseNotGeneratedResponse(
+  requestId: string,
+  providerCode: string
+) {
+  console.error("Chat AI response generation failed:", {
+    requestId,
+    code: providerCode,
+  });
+  return NextResponse.json(
+    {
+      error: AI_RESPONSE_NOT_GENERATED_MESSAGE,
+      code: AI_RESPONSE_NOT_GENERATED_CODE,
+      userMessageSaved: true,
+      assistantResponseGenerated: false,
+    },
+    {
+      status: 503,
+      headers: { "X-Request-Id": requestId },
+    }
+  );
+}
 
 async function saveMessageWithRetry(
   threadId: string,
@@ -149,14 +180,36 @@ export async function POST(request: NextRequest) {
       content: msg.content,
     }));
 
-    // Get streaming response from Gemini
-    const stream = await streamChatCompletion(geminiMessages);
+    // Read the first model result before returning HTTP 200. Gemini currently
+    // validates and buffers the full answer before this first chunk, so a
+    // provider failure can still be returned as a truthful 503 response.
+    let reader: ReadableStreamDefaultReader<string>;
+    let firstRead: ReadableStreamReadResult<string>;
+    try {
+      const stream = await streamChatCompletion(geminiMessages);
+      reader = stream.getReader();
+      firstRead = await reader.read();
+    } catch (error) {
+      return aiResponseNotGeneratedResponse(
+        requestId,
+        geminiGenerationErrorCode(error)
+      );
+    }
+
+    if (firstRead.done || !firstRead.value?.trim()) {
+      if (!firstRead.done) {
+        await reader.cancel().catch(() => undefined);
+      }
+      return aiResponseNotGeneratedResponse(
+        requestId,
+        GEMINI_GENERATION_FAILED_CODE
+      );
+    }
 
     // Create a custom response that will save the assistant message
-    const reader = stream.getReader();
     const textEncoder = new TextEncoder();
 
-    let fullResponse = "";
+    let fullResponse = firstRead.value;
     const assistantMessageId = crypto.randomUUID();
     let responseSaved = false;
 
@@ -175,6 +228,7 @@ export async function POST(request: NextRequest) {
 
     const customStream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        controller.enqueue(textEncoder.encode(firstRead.value));
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -191,7 +245,10 @@ export async function POST(request: NextRequest) {
             }
           }
         } catch (error) {
-          console.error("Streaming error:", { requestId, error });
+          console.error("Chat AI response generation failed:", {
+            requestId,
+            code: geminiGenerationErrorCode(error),
+          });
           const partialResponse = sanitizeAssistantContent(fullResponse);
           if (partialResponse && !responseSaved) {
             const recoveredResponse = `${partialResponse}${PARTIAL_RESPONSE_NOTICE}`;
@@ -207,7 +264,7 @@ export async function POST(request: NextRequest) {
               });
             }
           }
-          controller.error(error);
+          controller.error(new Error(AI_RESPONSE_NOT_GENERATED_CODE));
         }
       },
     });

@@ -151,17 +151,76 @@ const PLAIN_TEXT_FALLBACK_INSTRUCTION =
 const DRAFT_VALIDATION_RECOVERY_INSTRUCTION =
   "\n\n前回までの出力には必須項目の欠落がありました。元の相談文と最新の修正指示を読み直し、番号付き質問を一つも飛ばさず、指定された謝罪と結論を含む返信本文だけを最初から作り直してください。";
 
-export function isRetryableGeminiError(error: unknown): boolean {
-  const status =
+export const GEMINI_CREDITS_DEPLETED_CODE = "gemini_credits_depleted";
+export const GEMINI_GENERATION_FAILED_CODE = "gemini_generation_failed";
+
+export type GeminiGenerationErrorCode =
+  | typeof GEMINI_CREDITS_DEPLETED_CODE
+  | typeof GEMINI_GENERATION_FAILED_CODE;
+
+export class GeminiGenerationError extends Error {
+  constructor(
+    readonly code: GeminiGenerationErrorCode,
+    cause?: unknown
+  ) {
+    super(code, { cause });
+    this.name = "GeminiGenerationError";
+  }
+}
+
+function geminiErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function geminiHttpStatus(error: unknown): number | null {
+  const rawStatus =
     typeof error === "object" && error !== null && "status" in error
-      ? Number((error as { status?: unknown }).status)
+      ? (error as { status?: unknown }).status
       : null;
-  if (status !== null && [429, 500, 502, 503, 504].includes(status)) {
-    return true;
+  const status = Number(rawStatus);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) {
+    return status;
   }
 
-  const message = error instanceof Error ? error.message : String(error);
-  return /(?:fetch|network|socket|timeout|timed out|ECONNRESET|503 Service Unavailable)/iu.test(
+  const statusMatch = geminiErrorMessage(error).match(
+    /\[(\d{3})(?:\s+[^\]]*)?\]/u
+  );
+  return statusMatch ? Number(statusMatch[1]) : null;
+}
+
+export function geminiGenerationErrorCode(
+  error: unknown
+): GeminiGenerationErrorCode {
+  if (error instanceof GeminiGenerationError) {
+    return error.code;
+  }
+
+  const message = geminiErrorMessage(error);
+  if (
+    geminiHttpStatus(error) === 402 ||
+    /prepayment credits are depleted/iu.test(message)
+  ) {
+    return GEMINI_CREDITS_DEPLETED_CODE;
+  }
+  return GEMINI_GENERATION_FAILED_CODE;
+}
+
+function normalizedGeminiGenerationError(
+  error: unknown
+): GeminiGenerationError {
+  return error instanceof GeminiGenerationError
+    ? error
+    : new GeminiGenerationError(geminiGenerationErrorCode(error), error);
+}
+
+export function isRetryableGeminiError(error: unknown): boolean {
+  const status = geminiHttpStatus(error);
+  if (status !== null) {
+    return [429, 500, 502, 503, 504].includes(status);
+  }
+
+  const message = geminiErrorMessage(error);
+  return /(?:failed to fetch|fetch failed|network|socket|timeout|timed out|ECONNRESET|503 Service Unavailable)/iu.test(
     message
   );
 }
@@ -684,7 +743,6 @@ export async function streamChatCompletion(
   return new ReadableStream<string>({
     async start(controller) {
       let lastError: unknown = null;
-      let lastValidationError: unknown = null;
 
       for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
         let bufferedResponse = "";
@@ -710,9 +768,6 @@ export async function streamChatCompletion(
           return;
         } catch (error) {
           lastError = error;
-          if (isResponseValidationError(error)) {
-            lastValidationError = error;
-          }
           const canRetry =
             (isRetryableGeminiError(error) ||
               isResponseValidationError(error)) &&
@@ -731,7 +786,10 @@ export async function streamChatCompletion(
         }
       }
 
-      if ((useStructuredResponse || isDraftReply) && lastValidationError) {
+      if (
+        (useStructuredResponse || isDraftReply) &&
+        isResponseValidationError(lastError)
+      ) {
         try {
           let fallbackResponse = "";
           const fallbackStream =
@@ -756,15 +814,12 @@ export async function streamChatCompletion(
           );
           return;
         } catch (fallbackError) {
-          console.error("Gemini plain-text fallback failed:", fallbackError);
-          console.error("Gemini streaming error:", lastValidationError);
-          controller.error(lastValidationError);
+          controller.error(normalizedGeminiGenerationError(fallbackError));
           return;
         }
       }
 
-      console.error("Gemini streaming error:", lastError);
-      controller.error(lastError);
+      controller.error(normalizedGeminiGenerationError(lastError));
     },
   });
 }

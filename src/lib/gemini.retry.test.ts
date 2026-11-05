@@ -15,7 +15,10 @@ vi.mock("@google/generative-ai", () => ({
   },
 }));
 
-import { streamChatCompletion } from "./gemini";
+import {
+  GEMINI_CREDITS_DEPLETED_CODE,
+  streamChatCompletion,
+} from "./gemini";
 
 function successfulStream(content: string) {
   return {
@@ -90,6 +93,80 @@ describe("Gemini generation retry", () => {
     const output = await readText(
       await streamChatCompletion([
         { role: "user", content: "返済が不安です。" },
+      ])
+    );
+
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(output).toContain("不安を感じているのですね。");
+  });
+
+  it("does not retry a 402 response even when the SDK message says fetching", async () => {
+    const depletedError = Object.assign(
+      new Error(
+        "Error fetching from Gemini: [402 Payment Required] Your prepayment credits are depleted"
+      ),
+      { status: 402 }
+    );
+    mocks.generateContentStream.mockRejectedValueOnce(depletedError);
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: GEMINI_CREDITS_DEPLETED_CODE,
+      message: GEMINI_CREDITS_DEPLETED_CODE,
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when depleted credits are reported without a status field", async () => {
+    mocks.generateContentStream.mockRejectedValueOnce(
+      new Error("Your prepayment credits are depleted")
+    );
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: GEMINI_CREDITS_DEPLETED_CODE,
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run a fallback after credits deplete following a validation retry", async () => {
+    mocks.generateContentStream
+      .mockResolvedValueOnce(successfulStream('{"acknowledgement":""}'))
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            "Error fetching from Gemini: [402 Payment Required] Your prepayment credits are depleted"
+          ),
+          { status: 402 }
+        )
+      );
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: GEMINI_CREDITS_DEPLETED_CODE,
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+  });
+
+  it("still retries a transport failure without an HTTP status", async () => {
+    mocks.generateContentStream
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(
+        successfulStream(validStructuredResponse("不安を感じているのですね。"))
+      );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "今の不安を相談したいです。" },
       ])
     );
 
