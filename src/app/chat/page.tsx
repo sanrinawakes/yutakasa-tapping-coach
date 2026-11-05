@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import ChatSidebar from "@/components/ChatSidebar";
 import ChatMessages from "@/components/ChatMessages";
 import ChatInput from "@/components/ChatInput";
+import { AI_RESPONSE_NOT_GENERATED_MESSAGE } from "@/lib/chat-errors";
 
 interface ChatThread {
   id: string;
@@ -241,6 +242,8 @@ export default function ChatPage() {
     setLoading(true);
     setStreaming(true);
     const clientMessageId = crypto.randomUUID();
+    let safeSendError = "メッセージを送信できませんでした。";
+    let assistantResponseGenerated = false;
 
     try {
       const userMessage: ChatMessage = {
@@ -280,9 +283,11 @@ export default function ChatPage() {
       }
 
       if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "メッセージを送信できませんでした。")
+        safeSendError = await responseErrorMessage(
+          response,
+          "メッセージを送信できませんでした。"
         );
+        throw new Error(safeSendError);
       }
 
       let assistantMessage = "";
@@ -324,22 +329,24 @@ export default function ChatPage() {
 
       assistantMessage += decoder.decode();
       if (!assistantMessage.trim()) {
-        throw new Error("AIから回答を受信できませんでした。もう一度お試しください。");
+        safeSendError = AI_RESPONSE_NOT_GENERATED_MESSAGE;
+        throw new Error(safeSendError);
       }
+      assistantResponseGenerated = true;
 
       await loadThreadMessages(threadId);
       await Promise.all([loadThreads(), loadUsage()]);
       return true;
-    } catch (error) {
-      console.error("Failed to send message:", error);
-      setSendError(
-        error instanceof Error
-          ? error.message
-          : "メッセージを送信できませんでした。"
-      );
+    } catch {
+      console.error("Failed to send message.");
       const persistedMessages = await loadThreadMessages(threadId);
       const userMessageWasSaved =
         persistedMessages?.some((item) => item.id === clientMessageId) ?? false;
+      setSendError(
+        userMessageWasSaved && !assistantResponseGenerated
+          ? AI_RESPONSE_NOT_GENERATED_MESSAGE
+          : safeSendError
+      );
       if (!userMessageWasSaved) {
         setMessages((previous) =>
           previous.filter((item) => item.id !== clientMessageId)

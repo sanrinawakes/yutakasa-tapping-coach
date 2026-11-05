@@ -10,6 +10,10 @@ import {
   titleChatThreadFromFirstMessage,
 } from "@/lib/supabase";
 import { streamChatCompletion } from "@/lib/gemini";
+import {
+  AI_RESPONSE_NOT_GENERATED_CODE,
+  AI_RESPONSE_NOT_GENERATED_MESSAGE,
+} from "@/lib/chat-errors";
 
 vi.mock("@/lib/auth", () => ({
   getSessionFromCookies: vi.fn(),
@@ -30,6 +34,8 @@ vi.mock("@/lib/supabase", () => ({
 }));
 
 vi.mock("@/lib/gemini", () => ({
+  GEMINI_GENERATION_FAILED_CODE: "gemini_generation_failed",
+  geminiGenerationErrorCode: vi.fn(() => "gemini_credits_depleted"),
   streamChatCompletion: vi.fn(),
 }));
 
@@ -148,5 +154,39 @@ describe("chat API persistence", () => {
       expect.stringContaining("ここまでの回答です。\n\n※通信が途中で中断されたため"),
       expect.any(String)
     );
+  });
+
+  it("returns a fixed 503 without saving an assistant reply when generation never starts", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    streamMock.mockResolvedValue(textStream([], true));
+
+    const response = await POST(chatRequest());
+    const responseBody = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(responseBody).toEqual({
+      error: AI_RESPONSE_NOT_GENERATED_MESSAGE,
+      code: AI_RESPONSE_NOT_GENERATED_CODE,
+      userMessageSaved: true,
+      assistantResponseGenerated: false,
+    });
+    expect(JSON.stringify(responseBody)).not.toContain("provider disconnected");
+    expect(addMessageMock).toHaveBeenCalledTimes(1);
+    expect(addMessageMock).toHaveBeenCalledWith(
+      THREAD_ID,
+      "user",
+      "仕事の不安を相談したいです",
+      MESSAGE_ID
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      "Chat AI response generation failed:",
+      {
+        requestId: expect.any(String),
+        code: "gemini_credits_depleted",
+      }
+    );
+    consoleError.mockRestore();
   });
 });

@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ChatPage from "./page";
+import { AI_RESPONSE_NOT_GENERATED_MESSAGE } from "@/lib/chat-errors";
 
 const push = vi.fn();
 const router = { push };
@@ -117,5 +118,75 @@ describe("ChatPage initialization", () => {
         ),
       });
     });
+  });
+
+  it("shows that a saved input has no AI answer without exposing a stream error", async () => {
+    const thread = {
+      id: "thread-existing",
+      user_email: "member@example.com",
+      title: "相談",
+      created_at: "2026-11-05T00:00:00.000Z",
+      updated_at: "2026-11-05T00:00:00.000Z",
+    };
+    let savedMessageId: string | null = null;
+    const rawProviderError = "402 Payment Required: secret provider detail";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url === "/api/threads" && !init?.method) {
+          return jsonResponse({ threads: [thread], email: "member@example.com" });
+        }
+        if (url === "/api/chat/usage") {
+          return jsonResponse({ remaining: 14, limit: 15 });
+        }
+        if (url === "/api/threads/thread-existing") {
+          return jsonResponse({
+            thread,
+            messages: savedMessageId
+              ? [
+                  {
+                    id: savedMessageId,
+                    thread_id: thread.id,
+                    role: "user",
+                    content: "最初の相談です",
+                    created_at: "2026-11-05T00:00:01.000Z",
+                  },
+                ]
+              : [],
+          });
+        }
+        if (url === "/api/chat" && init?.method === "POST") {
+          const requestBody = JSON.parse(init.body as string) as {
+            clientMessageId: string;
+          };
+          savedMessageId = requestBody.clientMessageId;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new Error(rawProviderError));
+              },
+            }),
+            { status: 200 }
+          );
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    render(<ChatPage />);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/threads/thread-existing")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "テスト送信" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(AI_RESPONSE_NOT_GENERATED_MESSAGE);
+    expect(alert).not.toHaveTextContent(rawProviderError);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(rawProviderError);
+    consoleError.mockRestore();
   });
 });
