@@ -37,6 +37,38 @@ function interruptedStream(content: string, error: unknown) {
   };
 }
 
+function openAiCompletedResponse(content: string) {
+  return new Response(
+    JSON.stringify({
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: content }],
+        },
+      ],
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
+
+function enableOpenAiChatFallback() {
+  process.env.YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED = "true";
+  process.env.YUTAKASA_CHAT_OPENAI_API_KEY = `sk-chat-${"a".repeat(40)}`;
+  process.env.YUTAKASA_CHAT_OPENAI_PROJECT_ID = "proj_chatfallback123";
+  process.env.YUTAKASA_CHAT_OPENAI_MODEL = "gpt-chat-fallback-test";
+}
+
+function clearOpenAiChatFallbackEnvironment() {
+  delete process.env.YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED;
+  delete process.env.YUTAKASA_CHAT_OPENAI_API_KEY;
+  delete process.env.YUTAKASA_CHAT_OPENAI_PROJECT_ID;
+  delete process.env.YUTAKASA_CHAT_OPENAI_MODEL;
+  delete process.env.YUTAKASA_OPENAI_API_KEY;
+  delete process.env.YUTAKASA_OPENAI_PROJECT_ID;
+}
+
 function validStructuredResponse(
   acknowledgement: string,
   instruction = "今の感情を1から10で数値化してください。"
@@ -80,10 +112,18 @@ async function readText(stream: ReadableStream<string>) {
 describe("Gemini generation retry", () => {
   beforeEach(() => {
     process.env.GEMINI_API_KEY = "test-key";
+    clearOpenAiChatFallbackEnvironment();
     mocks.generateContentStream.mockReset();
   });
 
+  afterEach(() => {
+    clearOpenAiChatFallbackEnvironment();
+    vi.restoreAllMocks();
+  });
+
   it("retries a transient initial 503 before returning an answer", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     mocks.generateContentStream
       .mockRejectedValueOnce({ status: 503 })
       .mockResolvedValueOnce(
@@ -98,9 +138,11 @@ describe("Gemini generation retry", () => {
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("不安を感じているのですね。");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not retry a 402 response even when the SDK message says fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const depletedError = Object.assign(
       new Error(
         "Error fetching from Gemini: [402 Payment Required] Your prepayment credits are depleted"
@@ -118,6 +160,7 @@ describe("Gemini generation retry", () => {
       message: GEMINI_CREDITS_DEPLETED_CODE,
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not retry when depleted credits are reported without a status field", async () => {
@@ -135,7 +178,9 @@ describe("Gemini generation retry", () => {
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
   });
 
-  it("does not run a fallback after credits deplete following a validation retry", async () => {
+  it("does not run a provider fallback after credits deplete following a validation retry", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     mocks.generateContentStream
       .mockResolvedValueOnce(successfulStream('{"acknowledgement":""}'))
       .mockRejectedValueOnce(
@@ -155,9 +200,233 @@ describe("Gemini generation retry", () => {
       code: GEMINI_CREDITS_DEPLETED_CODE,
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the opt-in fallback once after an initial explicit prepay depletion", async () => {
+    enableOpenAiChatFallback();
+    const consoleWarn = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        openAiCompletedResponse(
+          validStructuredResponse("今の不安を確認したいのですね。")
+        )
+      );
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Error fetching from Gemini: [402 Payment Required] Your prepayment credits are depleted"
+        ),
+        { status: 402 }
+      )
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "古い相談1です。" },
+        { role: "user", content: "古い相談2です。" },
+        { role: "assistant", content: "古い回答です。" },
+        { role: "user", content: "古い相談3です。" },
+        {
+          role: "assistant",
+          content: "直前の回答です。".repeat(80),
+        },
+        { role: "user", content: "今の不安を相談したいです。" },
+      ])
+    );
+
+    expect(output).toContain("今の不安を確認したいのですね。");
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/responses");
+    const request = JSON.parse(String(init.body));
+    expect(request.store).toBe(false);
+    expect(request.tools).toEqual([]);
+    expect(request.model).toBe("gpt-chat-fallback-test");
+    expect(request.text.format).toMatchObject({
+      type: "json_schema",
+      name: "yutakasa_coach_response",
+      strict: true,
+    });
+    expect(request.input[0].role).toBe("developer");
+    expect(request.input).toHaveLength(5);
+    expect(JSON.stringify(request.input)).not.toContain("古い相談1");
+    expect(JSON.stringify(request.input)).toContain("今の不安を相談したい");
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "Recovered chat generation with the configured OpenAI fallback after Gemini credit depletion."
+    );
+  });
+
+  it("does not retry Gemini when explicit depletion has a retryable status", async () => {
+    enableOpenAiChatFallback();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        openAiCompletedResponse(
+          validStructuredResponse("残高不足時の回答です。")
+        )
+      );
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(new Error("Your prepayment credits are depleted"), {
+        status: 503,
+      })
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        { role: "user", content: "今の不安を相談したいです。" },
+      ])
+    );
+
+    expect(output).toContain("残高不足時の回答です。");
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not change provider for a non-credit Gemini error", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    mocks.generateContentStream.mockRejectedValueOnce({ status: 400 });
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: "gemini_generation_failed",
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not change provider for a generic 402 without explicit depletion text", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(new Error("Payment Required"), { status: 402 })
+    );
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: GEMINI_CREDITS_DEPLETED_CODE,
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not change provider after Gemini emitted any partial response", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const depletion = Object.assign(
+      new Error("Your prepayment credits are depleted"),
+      { status: 402 }
+    );
+    mocks.generateContentStream.mockResolvedValueOnce(
+      interruptedStream('{"acknowledgement":"途中', depletion)
+    );
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: GEMINI_CREDITS_DEPLETED_CODE,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("makes no second fallback request when OpenAI output fails validation", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        openAiCompletedResponse('{"acknowledgement":""}')
+      );
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(new Error("Your prepayment credits are depleted"), {
+        status: 402,
+      })
+    );
+
+    const stream = await streamChatCompletion([
+      { role: "user", content: "今の不安を相談したいです。" },
+    ]);
+
+    await expect(readText(stream)).rejects.toMatchObject({
+      code: "gemini_generation_failed",
+      message: "gemini_generation_failed",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses draft reply validation for the opt-in fallback", async () => {
+    enableOpenAiChatFallback();
+    const consoleWarn = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(openAiCompletedResponse(validDraftReply));
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(new Error("Your prepayment credits are depleted"), {
+        status: 402,
+      })
+    );
+
+    const output = await readText(
+      await streamChatCompletion([{ role: "user", content: draftQuestion }])
+    );
+
+    expect(output).toBe(validDraftReply);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const request = JSON.parse(
+      String((fetchSpy.mock.calls[0]?.[1] as RequestInit).body)
+    );
+    expect(request.text).toEqual({ format: { type: "text" } });
+    expect(request.input.at(-1).content).toContain("① 今いちばん強く");
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses one-sentence enforcement for the opt-in fallback", async () => {
+    enableOpenAiChatFallback();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        openAiCompletedResponse(
+          "これは短い前置きです。最初に今の感情を1から10で数値化してください。"
+        )
+      );
+    mocks.generateContentStream.mockRejectedValueOnce(
+      Object.assign(new Error("Your prepayment credits are depleted"), {
+        status: 402,
+      })
+    );
+
+    const output = await readText(
+      await streamChatCompletion([
+        {
+          role: "user",
+          content: "不安なとき最初にすることを一文で教えてください。",
+        },
+      ])
+    );
+
+    expect(output).toBe("最初に今の感情を1から10で数値化してください。");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("still retries a transport failure without an HTTP status", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     mocks.generateContentStream
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce(
@@ -172,6 +441,7 @@ describe("Gemini generation retry", () => {
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("不安を感じているのですね。");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("discards an interrupted hidden draft and returns only the retry", async () => {
