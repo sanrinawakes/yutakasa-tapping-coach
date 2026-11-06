@@ -83,6 +83,8 @@ The fallback sends only the same bounded chat context already selected for Gemin
 
 To activate, set the dedicated key, project, and model, change `YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED` to `true`, and deploy after mock and synthetic verification. To roll back, set the flag to `false` and redeploy. Removing the three dedicated values is an additional cleanup step. Rollback restores Gemini-only behavior and does not require changing the automation credentials.
 
+During a confirmed Google outage, explicitly set `YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED=true` along with the four dedicated settings above. In this mode a turn uses OpenAI once without contacting Gemini. It fails closed if the dedicated configuration is invalid. Disable the primary flag to return to Gemini-first routing; unset both flags to return to Gemini only.
+
 ### 3. Database Setup
 
 1. Create a new Supabase project
