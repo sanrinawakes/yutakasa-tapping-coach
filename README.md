@@ -58,6 +58,10 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 GEMINI_API_KEY=your-gemini-api-key
+YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED=false
+YUTAKASA_CHAT_OPENAI_API_KEY=
+YUTAKASA_CHAT_OPENAI_PROJECT_ID=
+YUTAKASA_CHAT_OPENAI_MODEL=
 RESEND_API_KEY=your-resend-api-key
 JWT_SECRET=your-jwt-secret-min-32-chars
 MYASP_WEBHOOK_SECRET=your-webhook-secret
@@ -68,6 +72,16 @@ NEXT_PUBLIC_SITE_NAME=豊かさタッピング AIコーチ
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+### Optional emergency chat fallback
+
+The chat fallback is disabled by default. It can make one stateless request to the OpenAI Responses API only when the first Gemini attempt returns the explicit `prepayment credits are depleted` error before producing any output. Other HTTP 402 responses, transient errors, validation retries, partial Gemini output, and later Gemini attempts never change providers.
+
+Activation requires all four `YUTAKASA_CHAT_OPENAI_*` values above. Create a dedicated production Chat project and project-scoped key with only `Responses: Write` permission, then set an explicit model that is available to that project. Do not reuse the automation key or project configured through `YUTAKASA_OPENAI_API_KEY` and `YUTAKASA_OPENAI_PROJECT_ID`. No fallback credentials or model are included in this repository.
+
+The fallback sends only the same bounded chat context already selected for Gemini. Requests use the fixed `/v1/responses` endpoint with `store: false`, `tools: []`, a 60 second timeout, and request, response, and output size limits. The implementation reads the typed `output` array and rejects anything except one completed assistant `output_text`. `store: false` disables response object storage, but does not by itself promise Zero Data Retention. See the [OpenAI Responses migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses) and review the project's data controls before activation.
+
+To activate, set the dedicated key, project, and model, change `YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED` to `true`, and deploy after mock and synthetic verification. To roll back, set the flag to `false` and redeploy. Removing the three dedicated values is an additional cleanup step. Rollback restores Gemini-only behavior and does not require changing the automation credentials.
 
 ### 3. Database Setup
 

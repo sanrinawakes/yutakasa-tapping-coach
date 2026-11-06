@@ -27,6 +27,10 @@ import {
   parseStructuredCoachResponse,
   renderStructuredCoachResponse,
 } from "./coach-response";
+import {
+  generateOpenAiChatFallback,
+  isOpenAiChatFallbackEnabled,
+} from "./openai-chat-fallback";
 
 function getClient(): GoogleGenerativeAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -146,6 +150,63 @@ const COACH_RESPONSE_SCHEMA: ResponseSchema = {
   ],
 };
 
+const OPENAI_COACH_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    acknowledgement: {
+      type: "string",
+      description:
+        "相談内容を具体的に確認する1文（50文字以内）。よく分かります、理解できます、お察ししますは禁止。",
+    },
+    explanation: {
+      type: "string",
+      description:
+        "講座の根拠を含む理由の説明（合計160文字以内、2文以内）。練習フレーズは書かない。",
+    },
+    steps: {
+      type: "array",
+      maxItems: 3,
+      description: "今すぐ実行できる手順。不要な場合は空配列。",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: {
+            type: "string",
+            description: "20文字以内の短い見出し。",
+          },
+          instruction: {
+            type: "string",
+            description:
+              "120文字以内の具体的な指示を1文で書く。練習フレーズはpracticePhrasesへ分ける。",
+          },
+        },
+        required: ["title", "instruction"],
+      },
+    },
+    practicePhrases: {
+      type: "array",
+      maxItems: 2,
+      description:
+        "タッピング中に唱える短いフレーズ。回答に不要なら空配列。",
+      items: { type: "string" },
+    },
+    closing: {
+      type: "string",
+      description:
+        "必要な場合だけ、60文字以内の締めまたは確認質問を1文で書く。不要なら空文字。",
+    },
+  },
+  required: [
+    "acknowledgement",
+    "explanation",
+    "steps",
+    "practicePhrases",
+    "closing",
+  ],
+};
+
 const PLAIN_TEXT_FALLBACK_INSTRUCTION =
   "\n\n構造化JSONの代わりに、利用者へそのまま表示できる本文だけを日本語で返してください。JSON、コードブロック、見出し名のラベル、補足メモは出さないでください。";
 const DRAFT_VALIDATION_RECOVERY_INSTRUCTION =
@@ -211,6 +272,13 @@ function normalizedGeminiGenerationError(
   return error instanceof GeminiGenerationError
     ? error
     : new GeminiGenerationError(geminiGenerationErrorCode(error), error);
+}
+
+function isExplicitGeminiPrepayDepletion(error: unknown): boolean {
+  return (
+    geminiGenerationErrorCode(error) === GEMINI_CREDITS_DEPLETED_CODE &&
+    /\bprepayment credits are depleted\b/iu.test(geminiErrorMessage(error))
+  );
 }
 
 export function isRetryableGeminiError(error: unknown): boolean {
@@ -743,6 +811,7 @@ export async function streamChatCompletion(
   return new ReadableStream<string>({
     async start(controller) {
       let lastError: unknown = null;
+      let openAiFallbackEligibleForDepletion = false;
 
       for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
         let bufferedResponse = "";
@@ -768,9 +837,15 @@ export async function streamChatCompletion(
           return;
         } catch (error) {
           lastError = error;
+          const explicitPrepayDepletion =
+            isExplicitGeminiPrepayDepletion(error);
+          openAiFallbackEligibleForDepletion =
+            attempt === 1 &&
+            bufferedResponse.length === 0 &&
+            explicitPrepayDepletion;
           const canRetry =
-            (isRetryableGeminiError(error) ||
-              isResponseValidationError(error)) &&
+            !explicitPrepayDepletion &&
+            (isRetryableGeminiError(error) || isResponseValidationError(error)) &&
             attempt < GEMINI_MAX_ATTEMPTS;
           if (!canRetry) {
             break;
@@ -783,6 +858,48 @@ export async function streamChatCompletion(
             delayMs,
           });
           await wait(delayMs);
+        }
+      }
+
+      if (
+        openAiFallbackEligibleForDepletion &&
+        isOpenAiChatFallbackEnabled()
+      ) {
+        try {
+          const fallbackResponse = await generateOpenAiChatFallback({
+            systemPrompt,
+            messages: boundedMessages,
+            responseFormat: useStructuredResponse
+              ? {
+                  type: "json_schema",
+                  name: "yutakasa_coach_response",
+                  schema: OPENAI_COACH_RESPONSE_SCHEMA,
+                }
+              : { type: "text" },
+          });
+          const formatted = responsePlan.draftReply
+            ? formatDraftReplyResponse(
+                fallbackResponse,
+                responsePlan.draftReply
+              )
+            : enforceOneSentence
+              ? formatOneSentenceResponse(
+                  fallbackResponse,
+                  latestUserMessage
+                )
+              : formatStructuredResponse(
+                  fallbackResponse,
+                  latestUserMessage
+                );
+          controller.enqueue(formatted);
+          controller.close();
+          console.warn(
+            "Recovered chat generation with the configured OpenAI fallback after Gemini credit depletion."
+          );
+          return;
+        } catch (fallbackError) {
+          controller.error(normalizedGeminiGenerationError(fallbackError));
+          return;
         }
       }
 
