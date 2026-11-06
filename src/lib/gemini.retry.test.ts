@@ -61,6 +61,7 @@ function enableOpenAiChatFallback() {
 }
 
 function clearOpenAiChatFallbackEnvironment() {
+  delete process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED;
   delete process.env.YUTAKASA_CHAT_OPENAI_FALLBACK_ENABLED;
   delete process.env.YUTAKASA_CHAT_OPENAI_API_KEY;
   delete process.env.YUTAKASA_CHAT_OPENAI_PROJECT_ID;
@@ -119,6 +120,37 @@ describe("Gemini generation retry", () => {
   afterEach(() => {
     clearOpenAiChatFallbackEnvironment();
     vi.restoreAllMocks();
+  });
+
+  it("uses the dedicated OpenAI primary route without a Gemini key or call", async () => {
+    enableOpenAiChatFallback();
+    process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED = "true";
+    delete process.env.GEMINI_API_KEY;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      openAiCompletedResponse(validStructuredResponse("返済が気になっているのですね。"))
+    );
+
+    const output = await readText(await streamChatCompletion([
+      { role: "user", content: "返済が不安です。" },
+    ]));
+
+    expect(output).toContain("返済が気になっているのですね。");
+    expect(mocks.generateContentStream).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the primary provider has no approved dedicated configuration", async () => {
+    process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED = "true";
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(readText(await streamChatCompletion([
+      { role: "user", content: "返済が不安です。" },
+    ]))).rejects.toThrow("gemini_generation_failed");
+    expect(warn).toHaveBeenCalledWith("OpenAI chat generation did not complete", {
+      reason: "configuration_invalid",
+    });
+    expect(mocks.generateContentStream).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("retries a transient initial 503 before returning an answer", async () => {

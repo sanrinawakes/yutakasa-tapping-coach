@@ -30,6 +30,7 @@ import {
 import {
   generateOpenAiChatFallback,
   isOpenAiChatFallbackEnabled,
+  OpenAiChatFallbackError,
 } from "./openai-chat-fallback";
 
 function getClient(): GoogleGenerativeAI {
@@ -759,9 +760,6 @@ export async function streamChatCompletion(
 ): Promise<ReadableStream<string>> {
   const responsePlan = buildConversationResponsePlan(messages);
   const systemPrompt = await getSystemPrompt(messages, responsePlan);
-  const client = getClient();
-
-  const model = client.getGenerativeModel({ model: GEMINI_MODEL });
   const boundedMessages = buildModelMessages(messages, responsePlan);
   const latestUserMessage = [...boundedMessages]
     .reverse()
@@ -770,6 +768,45 @@ export async function streamChatCompletion(
   const enforceOneSentence =
     !isDraftReply && isOneSentenceRequest(latestUserMessage);
   const useStructuredResponse = !isDraftReply && !enforceOneSentence;
+  const formatOpenAiResponse = (response: string) => responsePlan.draftReply
+    ? formatDraftReplyResponse(response, responsePlan.draftReply)
+    : enforceOneSentence
+      ? formatOneSentenceResponse(response, latestUserMessage)
+      : formatStructuredResponse(response, latestUserMessage);
+  const generateOpenAiResponse = async () => formatOpenAiResponse(await generateOpenAiChatFallback({
+    systemPrompt,
+    messages: boundedMessages,
+    responseFormat: useStructuredResponse
+      ? { type: "json_schema", name: "yutakasa_coach_response", schema: OPENAI_COACH_RESPONSE_SCHEMA }
+      : { type: "text" },
+  }));
+  const logOpenAiFailure = (error: unknown) => {
+    console.warn("OpenAI chat generation did not complete", {
+      reason: error instanceof OpenAiChatFallbackError ? error.reason : "formatting_failed",
+      ...(error instanceof OpenAiChatFallbackError && error.upstreamStatus !== undefined
+        ? { upstreamStatus: error.upstreamStatus }
+        : {}),
+    });
+  };
+
+  // An explicit recovery setting avoids a failing Google request on every turn.
+  // The dedicated credential and project guards still apply in this mode.
+  if (process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED === "true") {
+    return new ReadableStream<string>({
+      async start(controller) {
+        try {
+          controller.enqueue(await generateOpenAiResponse());
+          controller.close();
+          console.info("OpenAI primary chat generation completed.");
+        } catch (error) {
+          logOpenAiFailure(error);
+          controller.error(normalizedGeminiGenerationError(error));
+        }
+      },
+    });
+  }
+
+  const model = getClient().getGenerativeModel({ model: GEMINI_MODEL });
 
   const request = {
     contents: boundedMessages.map((msg) => ({
@@ -866,38 +903,14 @@ export async function streamChatCompletion(
         isOpenAiChatFallbackEnabled()
       ) {
         try {
-          const fallbackResponse = await generateOpenAiChatFallback({
-            systemPrompt,
-            messages: boundedMessages,
-            responseFormat: useStructuredResponse
-              ? {
-                  type: "json_schema",
-                  name: "yutakasa_coach_response",
-                  schema: OPENAI_COACH_RESPONSE_SCHEMA,
-                }
-              : { type: "text" },
-          });
-          const formatted = responsePlan.draftReply
-            ? formatDraftReplyResponse(
-                fallbackResponse,
-                responsePlan.draftReply
-              )
-            : enforceOneSentence
-              ? formatOneSentenceResponse(
-                  fallbackResponse,
-                  latestUserMessage
-                )
-              : formatStructuredResponse(
-                  fallbackResponse,
-                  latestUserMessage
-                );
-          controller.enqueue(formatted);
+          controller.enqueue(await generateOpenAiResponse());
           controller.close();
           console.warn(
             "Recovered chat generation with the configured OpenAI fallback after Gemini credit depletion."
           );
           return;
         } catch (fallbackError) {
+          logOpenAiFailure(fallbackError);
           controller.error(normalizedGeminiGenerationError(fallbackError));
           return;
         }

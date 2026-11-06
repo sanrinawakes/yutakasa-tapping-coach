@@ -24,7 +24,10 @@ export const OPENAI_CHAT_FALLBACK_FAILED_CODE =
   "openai_chat_fallback_failed";
 
 export class OpenAiChatFallbackError extends Error {
-  constructor(readonly reason: OpenAiFallbackFailureReason) {
+  constructor(
+    readonly reason: OpenAiFallbackFailureReason,
+    readonly upstreamStatus?: number,
+  ) {
     super(OPENAI_CHAT_FALLBACK_FAILED_CODE);
     this.name = "OpenAiChatFallbackError";
   }
@@ -55,8 +58,8 @@ interface OpenAiChatFallbackConfig {
   model: string;
 }
 
-function fail(reason: OpenAiFallbackFailureReason): never {
-  throw new OpenAiChatFallbackError(reason);
+function fail(reason: OpenAiFallbackFailureReason, upstreamStatus?: number): never {
+  throw new OpenAiChatFallbackError(reason, upstreamStatus);
 }
 
 export function isOpenAiChatFallbackEnabled(
@@ -253,7 +256,7 @@ export async function generateOpenAiChatFallback(
 
   if (response.status !== 200) {
     await response.body?.cancel().catch(() => undefined);
-    fail("response_failed");
+    fail("response_failed", response.status);
   }
   return parseOpenAiOutput(await readBoundedResponseBody(response));
 }
