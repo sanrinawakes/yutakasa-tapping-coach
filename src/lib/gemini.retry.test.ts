@@ -153,6 +153,30 @@ describe("Gemini generation retry", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("requests a substantive structured answer even for a short connection check", async () => {
+    enableOpenAiChatFallback();
+    process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED = "true";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      openAiCompletedResponse(JSON.stringify({
+        acknowledgement: "動作確認のメッセージを受け取りました。",
+        explanation: "このチャットで回答を表示できています。",
+        steps: [], practicePhrases: [], closing: "",
+      }))
+    );
+    const result = await readText(await streamChatCompletion([
+      { role: "user", content: "動作確認です。\n短く返答してください。" },
+    ]));
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.input[0].content).toContain("空欄にはせず");
+    expect(body.text.format.schema.properties).toMatchObject({
+      acknowledgement: { minLength: 1, pattern: "\\S" },
+      explanation: { minLength: 1, pattern: "\\S" },
+    });
+    expect(result).toContain("このチャットで回答を表示できています。");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mocks.generateContentStream).not.toHaveBeenCalled();
+  });
+
   it("retries a transient initial 503 before returning an answer", async () => {
     enableOpenAiChatFallback();
     const fetchSpy = vi.spyOn(globalThis, "fetch");

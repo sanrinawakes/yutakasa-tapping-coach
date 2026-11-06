@@ -157,13 +157,19 @@ const OPENAI_COACH_RESPONSE_SCHEMA: Record<string, unknown> = {
   properties: {
     acknowledgement: {
       type: "string",
+      minLength: 1,
+      maxLength: 90,
+      pattern: "\\S",
       description:
-        "相談内容を具体的に確認する1文（50文字以内）。よく分かります、理解できます、お察ししますは禁止。",
+        "入力の要点を確認する短い1文。挨拶や確認だけの場合も、受け取った内容に合わせて自然に応じる。空文字、よく分かります、理解できます、お察ししますは禁止。",
     },
     explanation: {
       type: "string",
+      minLength: 1,
+      maxLength: 220,
+      pattern: "\\S",
       description:
-        "講座の根拠を含む理由の説明（合計160文字以内、2文以内）。練習フレーズは書かない。",
+        "入力への実質的な答えを必ず1〜2文で書く。講座に関する相談には根拠を含め、挨拶や動作確認などには講座の話を無理に付け足さず簡潔に答える。空文字と練習フレーズは禁止。",
     },
     steps: {
       type: "array",
@@ -212,6 +218,8 @@ const PLAIN_TEXT_FALLBACK_INSTRUCTION =
   "\n\n構造化JSONの代わりに、利用者へそのまま表示できる本文だけを日本語で返してください。JSON、コードブロック、見出し名のラベル、補足メモは出さないでください。";
 const DRAFT_VALIDATION_RECOVERY_INSTRUCTION =
   "\n\n前回までの出力には必須項目の欠落がありました。元の相談文と最新の修正指示を読み直し、番号付き質問を一つも飛ばさず、指定された謝罪と結論を含む返信本文だけを最初から作り直してください。";
+const OPENAI_STRUCTURED_OUTPUT_INSTRUCTION =
+  "\n\nJSONの acknowledgement と explanation はどちらも必須です。入力が短くても、空欄にはせず、acknowledgement は受け取った内容への応答、explanation は実質的な答えを書いてください。挨拶や動作確認には簡潔に応じ、無関係な講座情報や助言は加えないでください。";
 
 export const GEMINI_CREDITS_DEPLETED_CODE = "gemini_credits_depleted";
 export const GEMINI_GENERATION_FAILED_CODE = "gemini_generation_failed";
@@ -774,7 +782,7 @@ export async function streamChatCompletion(
       ? formatOneSentenceResponse(response, latestUserMessage)
       : formatStructuredResponse(response, latestUserMessage);
   const generateOpenAiResponse = async () => formatOpenAiResponse(await generateOpenAiChatFallback({
-    systemPrompt,
+    systemPrompt: useStructuredResponse ? `${systemPrompt}${OPENAI_STRUCTURED_OUTPUT_INSTRUCTION}` : systemPrompt,
     messages: boundedMessages,
     responseFormat: useStructuredResponse
       ? { type: "json_schema", name: "yutakasa_coach_response", schema: OPENAI_COACH_RESPONSE_SCHEMA }
