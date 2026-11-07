@@ -59,6 +59,24 @@ test('CAS claims require current revision and a live exclusive owner',t=>{
   expectCode(()=>f.ledger.transition({...f.own,state:'investigating'}),'LEASE_REQUIRED');
 });
 
+test('releaseClaim clears only the current private lease and preserves state, proof and unknown sends',t=>{
+  const f=fixture(t);const p=proof(f);afterWindow(f);f.ledger.recordEvidence({...f.own,evidence:p});const op=completion(f);f.ledger.markSending({...f.own,operationId:op.operationId});f.ledger.markUnknown({...f.own,operationId:op.operationId});
+  const before=f.ledger.readCase({caseId:f.own.caseId});const released=f.ledger.releaseClaim(f.own);assert.equal(released.released,true);
+  const saved=f.ledger.readCase({caseId:f.own.caseId});assert.equal(saved.leaseOwner,null);assert.equal(saved.leaseUntil,null);for(const key of ['state','revision','context','condition','evidence','outbox','resolutions','closures'])assert.deepEqual(saved[key],before[key]);
+  const next={...f.own,owner:'release-next-owner'};f.ledger.claim(next);expectCode(()=>f.ledger.releaseClaim(f.own),'LEASE_OWNER_MISMATCH');expectCode(()=>completion({...f,own:next}),'UNCERTAIN_SEND_REQUIRES_RECONCILIATION');
+});
+
+test('releaseClaim fences wrong owner, stale revision and expired ownership taken by another worker',t=>{
+  const f=fixture(t);expectCode(()=>f.ledger.releaseClaim({...f.own,owner:'foreign-owner'}),'LEASE_OWNER_MISMATCH');expectCode(()=>f.ledger.releaseClaim({...f.own,revision:99}),'STALE_REVISION');
+  f.setTime(BASE+900_001);const next={...f.own,owner:'expired-lease-successor'};f.ledger.claim(next);expectCode(()=>f.ledger.releaseClaim(f.own),'LEASE_OWNER_MISMATCH');assert.equal(f.ledger.readCase({caseId:f.own.caseId}).leaseOwner,next.owner);
+  assert.equal(f.ledger.releaseClaim(next).released,true);expectCode(()=>f.ledger.releaseClaim(next),'LEASE_OWNER_MISMATCH');
+});
+
+test('releaseClaim CLI returns anonymous handoff status without exposing owner or private context',t=>{
+  const f=fixture(t);f.ledger.transition({...f.own,state:'observing'});const cfg=path.join(f.dir,'release-config.json');fs.writeFileSync(cfg,JSON.stringify(f.config),{mode:0o600});
+  const r=runCli(cfg,f.config,{command:'releaseClaim',args:f.own});assert.equal(r.status,0,r.stdout);const value=JSON.parse(r.stdout);assert.equal(value.released,true);assert.equal(value.state,'observing');assert.equal(value.id,f.own.caseId);assert.ok(!r.stdout.includes(f.own.owner));assert.ok(!r.stdout.includes('customer@example.com'));assert.ok(!r.stdout.includes('private customer body'));
+});
+
 test('image attachments are inert evidence and do not force permanent manual handling',t=>{
   const f=fixture(t);assert.equal(f.ledger.readCase({caseId:f.own.caseId}).context.trust,'untrusted_customer_content');
   assert.equal(f.ledger.transition({...f.own,state:'investigating'}).state,'investigating');
@@ -235,6 +253,24 @@ test('lookupEvent is scope bound; SQLite sidecar symlinks and unsafe configs are
   const r2=runCli(cfg,f.config,{command:'lookupEvent',args:{source:SOURCE,immutableMessageId:'message-1',messageRevision:'1'}});assert.equal(r2.status,1);
 });
 
+test('unverified source edits bind to the latest immutable revision and invalidate completion without inventing source time',t=>{
+  const original=event({source:CHATWORK_SOURCE,sender:{accountId:'synthetic-client'},recipient:{kind:'chatwork',roomId:CHATWORK_SOURCE.scopeId,replyToMessageId:'thread-1'}});
+  const f=fixture(t,original);const p=proof(f);afterWindow(f);f.ledger.recordEvidence({...f.own,evidence:p});const reserved=completion(f,{recipient:original.recipient});
+  const change={...original,messageRevision:'synthetic-unverified-edit-2',body:'豊かさBOTの発生条件を訂正します。',decisionRequired:true,sourceRevision:{kind:'observed_change_time_unverified',previousMessageRevision:'1'}};
+  for(const patch of [
+    {decisionRequired:false},{immutableMessageId:'not-observed-before'},
+    {sourceRevision:{kind:'observed_change_time_unverified',previousMessageRevision:'not-the-latest'}},
+    {sourceRevision:{...change.sourceRevision,forceReady:true}},
+    {sourceRevision:{kind:'invented-provider-time',previousMessageRevision:'1'}},
+  ])expectCode(()=>f.ledger.ingest({...change,...patch}),'UNVERIFIED_REVISION_BINDING_REQUIRED');
+  const changed=f.ledger.ingest(change);assert.equal(changed.state,'decision_required');assert.equal(changed.revision,2);const saved=f.ledger.readCase({caseId:changed.id});
+  assert.equal(saved.context.sourceUpdatedAt,original.sourceUpdatedAt);assert.equal(saved.condition,null);assert.equal(saved.evidence,null);assert.equal(saved.outbox[0].id,reserved.operationId);assert.equal(saved.outbox[0].status,'superseded');
+  assert.equal(f.ledger.lookupLatestEvent({source:CHATWORK_SOURCE,immutableMessageId:original.immutableMessageId}).body,change.body);
+  expectCode(()=>f.ledger.markSending({...f.own,operationId:reserved.operationId}),'STALE_REVISION');
+  expectCode(()=>f.ledger.lookupLatestEvent({source:{...CHATWORK_SOURCE,scopeId:'foreign'},immutableMessageId:original.immutableMessageId}),'UNVERIFIED_OR_FOREIGN_SOURCE');
+  const cfg=path.join(f.dir,'latest-event-config.json');fs.writeFileSync(cfg,JSON.stringify(f.config),{mode:0o600});const output=runCli(cfg,f.config,{command:'lookupLatestEvent',args:{source:CHATWORK_SOURCE,immutableMessageId:original.immutableMessageId}});assert.deepEqual(JSON.parse(output.stdout),{error:'CLI_COMMAND_FORBIDDEN'});
+});
+
 test('scan cursor records a bounded initial window and advances only through overlap',t=>{
   const f=fixture(t);assert.deepEqual(f.ledger.getScanCursor({source:SOURCE}),{checkedUntilMs:0,cursorRevision:0,checkedAtMs:null,coverageFromMs:null});
   const args={source:SOURCE,sourceVerified:true,expectedRevision:0,from:BASE-900_000,to:BASE,paginationComplete:true,sourceLoaded:true};const first=f.ledger.recordScanComplete(args);assert.equal(first.checkedUntilMs,BASE);assert.equal(first.coverageFromMs,BASE-900_000);assert.equal(first.cursorRevision,1);
@@ -334,6 +370,12 @@ test('fixed FAQ has its own final route, exact functional proof, stable send and
   const op=sendFinal(f,'guidance_final',LOGIN_FAQ.body);assert.equal(op.operationId,first.operationId);
   const saved=f.ledger.readCase({caseId:f.own.caseId});assert.equal(saved.state,'sent');assert.equal(saved.resolutions.length,1);assert.equal(saved.resolutions[0].purpose,'guidance_final');
   expectCode(()=>f.ledger.claim({...f.own,owner:'resend'}),'CASE_NOT_ACTIONABLE');
+});
+
+test('pure FAQ cannot enter technical bindWork and still retains its dedicated guidance route',t=>{
+  const f=fixture(t,faqEvent());const evidence=guidanceProof(f);
+  expectCode(()=>f.ledger.bindWork(f.own),'FAQ_REQUIRES_GUIDANCE_ROUTE');
+  assert.equal(f.ledger.recordGuidanceEvidence({...f.own,evidence}).state,'ready_to_reply');
 });
 
 test('generic smoke, wrong release/binding, incomplete synthetic flow or stale production cannot close FAQ',t=>{
