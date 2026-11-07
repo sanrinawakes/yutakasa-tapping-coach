@@ -291,7 +291,8 @@ test("daily text contains only metadata and separates acceptance by recipient", 
     assert.match(payload.text, /利用者投稿/);
     assert.match(payload.text, /作業記録/);
     assert.match(payload.text, /【今、あなたがすること】/u);
-    assert.match(payload.text, /あなたの判断と返信が必要な問い合わせはありません/u);
+    assert.match(payload.text, /豊かさBOT内の受付DBでは、あなたの判断と返信が必要な問い合わせは0件/u);
+    assert.match(payload.text, /Chatworkとメールはこの日報とは別の巡回対象で、この日報の件数には含みません/u);
     assert.doesNotMatch(payload.text, new RegExp(TICKET_ID));
     for (const privateText of ["PRIVATE SUBJECT", "PRIVATE MESSAGE", "PRIVATE EVENT TYPE", "PRIVATE LOG", "PRIVATE METADATA", "customer@example.com"]) {
       assert.equal(payload.text.includes(privateText), false);
@@ -671,6 +672,10 @@ test("zero activity still creates a truthful daily report", () => {
   assert.match(report.text, /前日の投稿・作業記録は0件/);
   assert.match(report.text, /現在の未解決: 0件/);
   assert.match(report.text, /障害0件とは判定していません/);
+  assert.match(report.text, /豊かさBOT内の受付DBでは、自動対応停止の記録は0件/u);
+  assert.match(report.text, /Chatworkとメールの確認結果を示すものではありません/u);
+  assert.match(report.subject, /受付DBの要対応0件/u);
+  assert.doesNotMatch(report.subject, /返信待ちなし/u);
   assert.equal(report.subject.includes("2026-09-16"), true);
 });
 
@@ -696,8 +701,8 @@ test("an old manual review remains visible as an action in every daily report", 
       updated_at: "2026-09-11T00:00:00.000Z" }] };
   const report = buildDailyReport("2026-09-16", records, NOW);
   assert.match(report.text, /自動処理停止1件/);
-  assert.match(report.text, /あなたの判断と返信が必要な問い合わせはありません/u);
-  assert.match(report.text, /自動対応が止まり、確認が必要な報告が1件あります/u);
+  assert.match(report.text, /豊かさBOT内の受付DBでは、あなたの判断と返信が必要な問い合わせは0件/u);
+  assert.match(report.text, /豊かさBOT内の受付DBに、自動対応が止まり、確認が必要な報告が1件あります/u);
   assert.match(report.text, /技術の報告。自動対応が止まっています/u);
   assert.doesNotMatch(report.text, new RegExp(TICKET_ID));
   assert.equal(report.text.includes("PRIVATE-ADDRESS"), false);

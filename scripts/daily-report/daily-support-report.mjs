@@ -672,13 +672,14 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     stalledLines.push(`ほか${stalledAutomation.length - MAX_LISTED_TICKETS}件。全件は管理画面で確認してください。`);
   const lines = [
     "【今、あなたがすること】",
+    "集計範囲: 豊かさBOT内の受付DBのみ。Chatworkとメールはこの日報とは別の巡回対象で、この日報の件数には含みません。",
     ownerDecisionRequired.length
-      ? `あなたの判断と返信が必要な問い合わせが${ownerDecisionRequired.length}件あります。`
-      : "あなたの判断と返信が必要な問い合わせはありません。",
+      ? `豊かさBOT内の受付DBに、あなたの判断と返信が必要な問い合わせが${ownerDecisionRequired.length}件あります。`
+      : "豊かさBOT内の受付DBでは、あなたの判断と返信が必要な問い合わせは0件です。",
     ...ownerActionLines,
     stalledAutomation.length
-      ? `自動対応が止まり、確認が必要な報告が${stalledAutomation.length}件あります。`
-      : "自動対応が止まっている報告はありません。",
+      ? `豊かさBOT内の受付DBに、自動対応が止まり、確認が必要な報告が${stalledAutomation.length}件あります。`
+      : "豊かさBOT内の受付DBでは、自動対応停止の記録は0件です。Chatworkとメールの確認結果を示すものではありません。",
     ...stalledLines,
     `管理画面: ${APP_SUPPORT_URL}`,
     "",
@@ -721,8 +722,8 @@ export function buildDailyReport(date, source, preparedAt = new Date(), monitorS
     "本メールはDB上の記録の要約です。メール受理、配達、本番復旧を示すものではありません。");
   const actionCount=ownerDecisionRequired.length+stalledAutomation.length;
   return { subject: actionCount
-    ? `【豊かさBOT】確認・返信が必要な問い合わせ${actionCount}件｜${date}`
-    : `【豊かさBOT】昨日の対応｜${date}（返信待ちなし）`, text: lines.join("\n") };
+    ? `【豊かさBOT】受付DBの確認・返信が必要な問い合わせ${actionCount}件｜${date}`
+    : `【豊かさBOT】昨日の対応｜${date}（受付DBの要対応0件）`, text: lines.join("\n") };
 }
 
 function oneRpcRow(payload, code) {

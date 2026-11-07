@@ -60,6 +60,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3-reportlab fonts-ipafont-gothic
       - name: Monitor tests
         run: node --test scripts/automation/*.nodecheck.mjs
+      - name: Strict external-mail decoding tests
+        run: python3 -B -m unittest discover -s scripts/automation -p test_external_support_decode_mail.py
       - name: Atomic support repair bridge database tests
         run: bash scripts/automation/test-support-automation-reply-sql.sh
       - name: Technical escalation notice database tests
