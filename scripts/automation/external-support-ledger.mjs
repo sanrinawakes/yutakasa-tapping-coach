@@ -114,7 +114,7 @@ export function openExternalSupportLedger({dbPath, allowlist, allowedSites, repo
     db.prepare("UPDATE outbox SET status='unknown',updated_at=? WHERE case_id=? AND status='sending'").run(now(), id);
   };
   const binding = (r) => digest({caseId: r.id, revision: r.revision, condition: JSON.parse(r.condition), evidence: JSON.parse(r.evidence)});
-  const historyRows = id => db.prepare('SELECT message_id,message_revision,fingerprint,event_json FROM messages WHERE case_id=? ORDER BY source_updated_at,message_id,message_revision').all(id);
+  const historyRows = id => db.prepare('SELECT message_id,message_revision,fingerprint,event_json FROM messages WHERE case_id=? ORDER BY source_updated_at,message_id,rowid').all(id);
   const eventKey = row => stable({immutableMessageId:row.message_id,messageRevision:row.message_revision,fingerprint:row.fingerprint});
   const messageKey = row => stable({immutableMessageId:row.message_id,messageRevision:row.message_revision});
   const historyDigest = r => digest({sourceKey:r.source_key,verifiedThreadId:r.thread_id,events:historyRows(r.id).map(eventKey)});
@@ -174,13 +174,14 @@ export function openExternalSupportLedger({dbPath, allowlist, allowedSites, repo
     requireValue(isoMs(e.verifiedAt) <= now() && isoMs(e.verifiedAt) >= times.at(-1), 'INVALID_VERIFIED_AT'); return e;
   };
   const api = {
-    bindWork(args) {return tx(()=>{const r=owned(args);requireValue(r.condition&&!r.decision_required&&!TERMINAL.has(r.state),'CONDITION_REQUIRED');markTechnical(r);const c=JSON.parse(r.condition);const wd=workConditionDigest(c);let w=db.prepare('SELECT * FROM work_bindings WHERE case_id=? AND revision=? AND site_url=? AND condition_digest=?').get(r.id,r.revision,c.siteUrl,wd);if(!w){const workId=randomUUID();db.prepare('INSERT INTO work_bindings VALUES(?,?,?,?,?,?)').run(workId,r.id,r.revision,c.siteUrl,wd,now());w=db.prepare('SELECT * FROM work_bindings WHERE work_id=?').get(workId);}return {workId:w.work_id,caseId:r.id,revision:r.revision,siteUrl:c.siteUrl,conditionDigest:c.conditionDigest};});},
+    bindWork(args) {return tx(()=>{const r=owned(args);requireValue(r.condition&&!r.decision_required&&!TERMINAL.has(r.state),'CONDITION_REQUIRED');const pureFAQ=!db.prepare('SELECT 1 FROM case_route_guards WHERE case_id=? AND technical_seen=1').get(r.id)&&isLoginFAQEvent(JSON.parse(r.context))&&isLoginFAQHistory(historyRows(r.id).map(row=>JSON.parse(row.event_json)));requireValue(!pureFAQ,'FAQ_REQUIRES_GUIDANCE_ROUTE');markTechnical(r);const c=JSON.parse(r.condition);const wd=workConditionDigest(c);let w=db.prepare('SELECT * FROM work_bindings WHERE case_id=? AND revision=? AND site_url=? AND condition_digest=?').get(r.id,r.revision,c.siteUrl,wd);if(!w){const workId=randomUUID();db.prepare('INSERT INTO work_bindings VALUES(?,?,?,?,?,?)').run(workId,r.id,r.revision,c.siteUrl,wd,now());w=db.prepare('SELECT * FROM work_bindings WHERE work_id=?').get(workId);}return {workId:w.work_id,caseId:r.id,revision:r.revision,siteUrl:c.siteUrl,conditionDigest:c.conditionDigest};});},
     readWorkBinding({workId}) {requireValue(WORK_UUID.test(workId??''),'INVALID_WORK_ID');const w=db.prepare('SELECT * FROM work_bindings WHERE work_id=?').get(workId);requireValue(w,'WORK_BINDING_NOT_FOUND');const r=get(w.case_id);const c=r.condition?JSON.parse(r.condition):null;requireValue(r.revision===w.revision&&c?.siteUrl===w.site_url&&WORK_UUID.test(c?.generation??'')&&workConditionDigest(c)===w.condition_digest,'STALE_WORK_BINDING');return {workId,caseId:r.id,revision:r.revision,siteUrl:w.site_url,conditionDigest:c.conditionDigest};},
     findVerifiedThread({source,verifiedThreadId}) {const sk=sourceKey(source);requireValue(scopes.has(sk),'UNVERIFIED_OR_FOREIGN_SOURCE');str(verifiedThreadId,'VERIFIED_THREAD_REQUIRED');const r=db.prepare('SELECT id,thread_id FROM cases WHERE source_key=? AND thread_id=?').get(sk,verifiedThreadId);return r?{caseId:r.id,verifiedThreadId:r.thread_id}:null;},
     getScanCursor({source}) {const sk=sourceKey(source);requireValue(scopes.has(sk),'UNVERIFIED_OR_FOREIGN_SOURCE');const r=db.prepare('SELECT * FROM scan_cursors WHERE source_key=?').get(sk);return r?{checkedUntilMs:r.checked_until_ms,cursorRevision:r.revision,checkedAtMs:r.checked_at,coverageFromMs:r.coverage_from_ms}:{checkedUntilMs:0,cursorRevision:0,checkedAtMs:null,coverageFromMs:null};},
     recordScanComplete(args) {return tx(()=>{const sk=sourceKey(args.source);requireValue(scopes.has(sk)&&args.sourceVerified===true,'UNVERIFIED_OR_FOREIGN_SOURCE');requireValue(args.sourceLoaded===true&&args.paginationComplete===true&&!args.nextPageToken&&!args.scanError&&args.failed!==true,'INCOMPLETE_SOURCE_SCAN');requireValue(Number.isSafeInteger(args.expectedRevision)&&args.expectedRevision>=0,'INVALID_CURSOR_REVISION');const old=db.prepare('SELECT * FROM scan_cursors WHERE source_key=?').get(sk);requireValue((old?.revision??0)===args.expectedRevision,'STALE_SCAN_CURSOR');const from=cursorMs(args.from);const to=cursorMs(args.to);requireValue(from>=0&&from<=to&&to<=now(),'INVALID_SCAN_WINDOW');if(old)requireValue(from<=old.checked_until_ms&&to>=old.checked_until_ms,'SCAN_GAP_OR_ROLLBACK');
       if(old){const changed=db.prepare('UPDATE scan_cursors SET checked_until_ms=?,revision=revision+1,checked_at=? WHERE source_key=? AND revision=?').run(to,now(),sk,args.expectedRevision);requireValue(changed.changes===1,'STALE_SCAN_CURSOR');}else db.prepare('INSERT INTO scan_cursors VALUES(?,?,1,?,?)').run(sk,to,now(),from);return api.getScanCursor({source:args.source});});},
     lookupEvent({source,immutableMessageId,messageRevision}) {const sk=sourceKey(source);requireValue(scopes.has(sk),'UNVERIFIED_OR_FOREIGN_SOURCE');str(immutableMessageId,'MESSAGE_ID_REQUIRED');str(messageRevision,'MESSAGE_REVISION_REQUIRED');const found=db.prepare('SELECT event_json FROM messages WHERE source_key=? AND message_id=? AND message_revision=?').get(sk,immutableMessageId,messageRevision);return found?JSON.parse(found.event_json):null;},
+    lookupLatestEvent({source,immutableMessageId}) {const sk=sourceKey(source);requireValue(scopes.has(sk),'UNVERIFIED_OR_FOREIGN_SOURCE');str(immutableMessageId,'MESSAGE_ID_REQUIRED');const found=db.prepare('SELECT event_json FROM messages WHERE source_key=? AND message_id=? ORDER BY rowid DESC LIMIT 1').get(sk,immutableMessageId);return found?JSON.parse(found.event_json):null;},
     ingest(event) { return tx(() => {
       const sk = sourceKey(event.source); requireValue(scopes.has(sk) && event.sourceVerified === true, 'UNVERIFIED_OR_FOREIGN_SOURCE');
       const threadId = str(event.verifiedThreadId, 'VERIFIED_THREAD_REQUIRED');
@@ -195,7 +196,13 @@ export function openExternalSupportLedger({dbPath, allowlist, allowedSites, repo
       if (oldMessage) { requireValue(oldMessage.case_id === id && oldMessage.fingerprint === fp, 'MESSAGE_REVISION_CONFLICT'); return {...rowView(get(id)), duplicate: true}; }
       const other = db.prepare('SELECT case_id,MAX(source_updated_at) AS latest FROM messages WHERE source_key=? AND message_id=?').get(sk,messageId);
       requireValue(!other?.case_id || other.case_id === id, 'MESSAGE_THREAD_MISMATCH');
-      requireValue(other?.latest === null || other?.latest === undefined || sourceTime > other.latest, 'STALE_MESSAGE_REVISION');
+      let unverifiedSourceChange=false;
+      if(event.sourceRevision!==undefined){
+        const revision=event.sourceRevision;const previous=db.prepare('SELECT case_id,message_revision FROM messages WHERE source_key=? AND message_id=? ORDER BY rowid DESC LIMIT 1').get(sk,messageId);
+        requireValue(event.source.kind==='chatwork'&&revision&&typeof revision==='object'&&!Array.isArray(revision)&&Object.keys(revision).sort().join(',')==='kind,previousMessageRevision'&&revision.kind==='observed_change_time_unverified'&&event.decisionRequired===true&&previous?.case_id===id&&previous.message_revision===revision.previousMessageRevision,'UNVERIFIED_REVISION_BINDING_REQUIRED');
+        unverifiedSourceChange=true;
+      }
+      requireValue(unverifiedSourceChange||other?.latest===null||other?.latest===undefined||sourceTime>other.latest,'STALE_MESSAGE_REVISION');
       const oldCase = db.prepare('SELECT * FROM cases WHERE id=?').get(id);
       requireValue(event.decisionRequired === undefined || typeof event.decisionRequired === 'boolean','INVALID_DECISION_FLAG');
       requireValue(event.prohibitedActions === undefined || Array.isArray(event.prohibitedActions),'INVALID_PROHIBITED_ACTIONS');
@@ -218,6 +225,14 @@ export function openExternalSupportLedger({dbPath, allowlist, allowedSites, repo
       requireValue(changed.changes===1,'LEASE_BUSY');db.prepare('INSERT INTO claim_owners VALUES(?,?)').run(r.id,owner); return rowView(get(r.id));
     }); },
     renew(args) { return tx(() => {const r=owned(args); const ms=args.leaseMs??300_000;requireValue(Number.isSafeInteger(ms)&&ms>=1000&&ms<=900_000,'INVALID_LEASE');db.prepare('UPDATE cases SET lease_until=? WHERE id=?').run(now()+ms,r.id);return rowView(get(r.id));}); },
+    releaseClaim({caseId,revision,owner}) {return tx(()=>{
+      const r=get(caseId);requireValue(r.revision===revision,'STALE_REVISION');str(owner,'OWNER_REQUIRED');
+      requireValue(r.owner===owner&&r.lease_until!==null,'LEASE_OWNER_MISMATCH');
+      // A late worker may release its own expired lease, never a successor's.
+      // Keep state, evidence and all sending/unknown/receipt history untouched.
+      const changed=db.prepare('UPDATE cases SET owner=NULL,lease_until=NULL WHERE id=? AND revision=? AND owner=?').run(r.id,revision,owner);
+      requireValue(changed.changes===1,'LEASE_OWNER_MISMATCH');return {...rowView(get(r.id)),released:true};
+    });},
     transition(args) {return tx(()=>{const r=owned(args);requireValue(STATES.includes(args.state),'INVALID_STATE'); requireValue(!r.decision_required && !TERMINAL.has(r.state),'CASE_NOT_ACTIONABLE');requireValue(WORK_STATES.has(args.state)||args.state==='decision_required','GATED_STATE');
       if(['awaiting_release','observing','failed'].includes(args.state))markTechnical(r);
       if(args.state==='decision_required'){db.prepare('UPDATE cases SET state=?,decision_required=1,evidence=NULL WHERE id=?').run(args.state,r.id);invalidate(r.id);}else db.prepare('UPDATE cases SET state=? WHERE id=?').run(args.state,r.id);return rowView(get(r.id));});},
@@ -292,7 +307,7 @@ async function cli() {
   const flags=process.argv.slice(2);requireValue(flags.length===4&&flags[0]==='--db'&&flags[2]==='--config','CLI_FLAGS_REQUIRED');
   const config=readPrivateJson(flags[3]);const dbPath=flags[1];requireValue(config.dbPath===dbPath,'CONFIG_DATABASE_MISMATCH');
   let input='';for await(const chunk of process.stdin){input+=chunk;requireValue(Buffer.byteLength(input)<=MAX_BYTES,'INPUT_TOO_LARGE');}
-  const {command,args={}}=JSON.parse(input);const allowed=new Set(['ingest','claim','renew','transition','setCondition','bindWork','recordEvidence','recordGuidanceEvidence','reserveReply','markSending','recordReceipt','markUnknown','adoptVerifiedReceipt','ack_close','getScanCursor','recordScanComplete','summary','exportContext']);requireValue(allowed.has(command),'CLI_COMMAND_FORBIDDEN');
-  const ledger=openExternalSupportLedger({...config,dbPath});try{const result=ledger[command](args);const safe={};const keys=command==='bindWork'?['workId']:['id','threadKey','revision','state','operationId','status','duplicate','exported','counts','cases','total','checkedUntilMs','cursorRevision','checkedAtMs','coverageFromMs'];for(const key of keys)if(result[key]!==undefined)safe[key]=result[key];process.stdout.write(JSON.stringify(safe)+'\n');}finally{ledger.close();}
+  const {command,args={}}=JSON.parse(input);const allowed=new Set(['ingest','claim','renew','releaseClaim','transition','setCondition','bindWork','recordEvidence','recordGuidanceEvidence','reserveReply','markSending','recordReceipt','markUnknown','adoptVerifiedReceipt','ack_close','getScanCursor','recordScanComplete','summary','exportContext']);requireValue(allowed.has(command),'CLI_COMMAND_FORBIDDEN');
+  const ledger=openExternalSupportLedger({...config,dbPath});try{const result=ledger[command](args);const safe={};const keys=command==='bindWork'?['workId']:['id','threadKey','revision','state','operationId','status','duplicate','released','exported','counts','cases','total','checkedUntilMs','cursorRevision','checkedAtMs','coverageFromMs'];for(const key of keys)if(result[key]!==undefined)safe[key]=result[key];process.stdout.write(JSON.stringify(safe)+'\n');}finally{ledger.close();}
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===path.resolve(process.argv[1]))cli().catch(error=>{process.stdout.write(JSON.stringify({error:error instanceof LedgerError?error.code:'LEDGER_ERROR'})+'\n');process.exitCode=1;});

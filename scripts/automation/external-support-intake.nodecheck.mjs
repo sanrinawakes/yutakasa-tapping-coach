@@ -30,6 +30,37 @@ test('new Chatwork report and own posts are distinguished',t=>{const {config,led
 test('attachment-only Chatwork reports are retained with stable public metadata',t=>{const {config,ledger}=setup(t);const r=cw({body:'',attachments:[{fileId:'123',filename:'screen.jpeg',mimeType:null,sizeBytes:null}]});const event=normalizeChatworkReceipt(r,config,ledger);assert.equal(event.body,'[添付のみの報告]');assert.deepEqual(event.attachments,[{fileId:'123',filename:'screen.jpeg',sourceMessageId:r.messageId}]);const first=ledger.ingest(event);const enriched=normalizeChatworkReceipt(cw({body:'',attachments:[{fileId:'123',filename:'screen.jpeg',mimeType:'image/jpeg',sizeBytes:30110}]}),config,ledger);assert.equal(enriched.messageRevision,event.messageRevision);assert.equal(ledger.ingest(enriched).duplicate,true);assert.equal(first.state,'queued');});
 test('existing Chatwork canonical event survives MIME and size metadata normalization',t=>{const {config,ledger}=setup(t);const r=cw();const current=normalizeChatworkReceipt(r,config);const legacyAttachments=[{...current.attachments[0],mimeType:'image/jpeg',sizeBytes:null}];const legacy={...current,attachments:legacyAttachments,messageRevision:digest({body:current.body,attachments:legacyAttachments,sender:current.sender,recipient:current.recipient})};const inserted=ledger.ingest(legacy);const stored=ledger.readCase({caseId:inserted.id}).history[0];const reread=normalizeChatworkReceipt(cw({attachments:[{fileId:'123',filename:'screen.jpeg',mimeType:null,sizeBytes:null}]}),config,ledger);assert.deepEqual(reread,stored);assert.equal(ledger.ingest(reread).duplicate,true);});
 test('Chatwork nickname changes do not reopen an unchanged message',t=>{const {config,ledger}=setup(t);ledger.ingest(normalizeChatworkReceipt(cw(),config,ledger));assert.equal(ledger.ingest(normalizeChatworkReceipt(cw({authorName:'Reporter away today'}),config,ledger)).duplicate,true);});
+test('created-time-only Chatwork edits are retained as unresolved without losing sent receipts',t=>{
+  const {config,ledger}=setup(t);const original=cw({attachments:[],body:'豊かさBOTを送信すると停止します。'});
+  const initial=normalizeChatworkReceipt(original,config,ledger);const first=ledger.ingest(initial);const own={caseId:first.id,revision:1,owner:'synthetic-edit-owner'};
+  ledger.claim(own);const body='利用先URLを確認させてください。';const op=ledger.reserveReply({...own,purpose:'clarification',recipient:initial.recipient,body,missingFields:['siteUrl']});ledger.markSending({...own,operationId:op.operationId});
+  ledger.recordReceipt({...own,operationId:op.operationId,receipt:{operationId:op.operationId,messageId:'synthetic-sent-clarification',sentAt:new Date(NOW).toISOString(),recipient:initial.recipient,bodyHash:digest(body)}});
+  const edited=normalizeChatworkReceipt({...original,body:'発生URLを訂正します。https://example.invalid/chat'},config,ledger);const changed=ledger.ingest(edited);
+  assert.equal(changed.state,'decision_required');assert.equal(changed.revision,2);assert.equal(edited.sourceUpdatedAt,initial.sourceUpdatedAt);
+  const saved=ledger.readCase({caseId:first.id});assert.deepEqual(saved.history.map(e=>e.body),[initial.body,edited.body]);assert.equal(saved.outbox[0].receipt.messageId,'synthetic-sent-clarification');assert.equal(saved.condition,null);assert.equal(saved.evidence,null);
+  assert.throws(()=>ledger.claim({caseId:first.id,revision:2,owner:'automatic-send-attempt'}),/CASE_NOT_ACTIONABLE/);
+  assert.equal(ledger.ingest(normalizeChatworkReceipt({...original,body:edited.body},config,ledger)).duplicate,true);
+  const reverted=ledger.ingest(normalizeChatworkReceipt(original,config,ledger));assert.equal(reverted.duplicate,false);assert.equal(reverted.revision,3);assert.equal(reverted.state,'decision_required');
+});
+test('provider-edited A to B to A is a new Chatwork revision, not an old-body duplicate',t=>{
+  const {config,ledger}=setup(t);const original=cw({attachments:[],body:'豊かさBOTで質問Aが止まります。'});const first=ledger.ingest(normalizeChatworkReceipt(original,config,ledger));
+  const b={...original,body:'豊かさBOTで質問Bが止まります。',editedAtUnix:original.createdAtUnix+20};assert.equal(ledger.ingest(normalizeChatworkReceipt(b,config,ledger)).revision,2);
+  const reverted=ledger.ingest(normalizeChatworkReceipt({...original,editedAtUnix:original.createdAtUnix+40},config,ledger));assert.equal(reverted.duplicate,false);assert.equal(reverted.revision,3);
+  assert.deepEqual(ledger.readCase({caseId:first.id}).history.map(e=>e.body),[original.body,b.body,original.body]);
+  assert.equal(ledger.ingest(normalizeChatworkReceipt({...original,editedAtUnix:original.createdAtUnix+40},config,ledger)).duplicate,true);
+});
+test('mixed provider and created-only edits keep provider history honest and expose the latest observed body',t=>{
+  const {config,ledger}=setup(t);const a=cw({attachments:[],body:'豊かさBOTの合成報告Aです。'});const first=ledger.ingest(normalizeChatworkReceipt(a,config,ledger));
+  const b={...a,body:'豊かさBOTの合成報告Bです。',editedAtUnix:a.createdAtUnix+20};ledger.ingest(normalizeChatworkReceipt(b,config,ledger));
+  const changed=normalizeChatworkReceipt({...a,body:'豊かさBOTの合成報告Cです。'},config,ledger);assert.equal(ledger.ingest(changed).state,'decision_required');
+  const saved=ledger.readCase({caseId:first.id});assert.equal(saved.context.body,changed.body);assert.equal(ledger.lookupLatestEvent({source:c,immutableMessageId:a.messageId}).body,changed.body);
+  assert.equal(saved.context.sourceUpdatedAt,new Date(a.createdAtUnix*1000).toISOString());
+  // History keeps provider timestamps, not invented edit chronology. Use context
+  // or lookupLatestEvent for the current observed version, not history.at(-1).
+  assert.deepEqual(new Set(saved.history.map(e=>e.body)),new Set([a.body,b.body,changed.body]));
+  const reusedProviderTime=normalizeChatworkReceipt({...a,body:'豊かさBOTの合成報告Dです。',editedAtUnix:b.editedAtUnix},config,ledger);
+  assert.equal(reusedProviderTime.sourceRevision.kind,'observed_change_time_unverified');assert.equal(ledger.ingest(reusedProviderTime).revision,4);assert.equal(ledger.lookupLatestEvent({source:c,immutableMessageId:a.messageId}).body,reusedProviderTime.body);
+});
 test('unknown reply ancestry cannot merge unrelated people by identical text',t=>{const {config,ledger}=setup(t);const first=ledger.ingest(normalizeChatworkReceipt(cw(),config,ledger));const second=ledger.ingest(normalizeChatworkReceipt(cw({messageId:'2170000000000000002',authorAccountId:'400',replyToMessageId:'9999999999999'}),config,ledger));assert.notEqual(first.id,second.id);});
 test('verified reply ancestry preserves the original destination',t=>{const {config,ledger}=setup(t);const original=cw();const first=ledger.ingest(normalizeChatworkReceipt(original,config,ledger));const reply=normalizeChatworkReceipt(cw({messageId:'2170000000000000002',authorAccountId:'400',replyToMessageId:original.messageId,body:'URLは https://example.invalid/chat です。'}),config,ledger);assert.equal(reply.verifiedThreadId,original.messageId);assert.deepEqual(reply.recipient,ledger.readCase({caseId:first.id}).context.recipient);});
 test('customer body text alone cannot claim a separate Chatwork case',t=>{const {config,ledger}=setup(t);const original=cw();const first=ledger.ingest(normalizeChatworkReceipt(original,config,ledger));const raw=cw({messageId:'2170000000000000002',replyToMessageId:original.messageId,body:'別件です。豊かさBOTの回答が途中で止まります。'});const event=normalizeChatworkReceipt(raw,config,ledger);assert.equal(event.verifiedThreadId,original.messageId);assert.equal(ledger.ingest(event).id,first.id);});

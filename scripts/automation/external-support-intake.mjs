@@ -181,12 +181,27 @@ export function normalizeChatworkReceipt(receipt, config, ledger) {
   const date=Number(receipt.editedAtUnix??receipt.createdAtUnix);
   requireValue(Number.isSafeInteger(date)&&date>0,'CHATWORK_DATE_REQUIRED');
   const attachmentIdentity=value=>(value??[]).map(({fileId,filename,sourceMessageId})=>({fileId,filename,sourceMessageId})).sort((a,b)=>String(a.fileId).localeCompare(String(b.fileId))||String(a.filename).localeCompare(String(b.filename)));
-  const priorEvent=prior?.history?.find(event=>event.immutableMessageId===receipt.messageId&&event.body===text&&event.sender?.accountId===sender.accountId&&digest(event.recipient)===digest(recipient)&&digest(attachmentIdentity(event.attachments))===digest(attachmentIdentity(attachments)));
-  if(priorEvent)return structuredClone(priorEvent);
-  const revision=digest({body:text,attachments:attachmentIdentity(attachments),sender,recipient});
+  // Compare only the latest observed version of this immutable source message.
+  // Searching all history would mistake a real A -> B -> A edit for old A.
+  if(existing)requireValue(typeof ledger?.lookupLatestEvent==='function','LATEST_SOURCE_REVISION_REQUIRED');
+  const priorEvent=ledger?.lookupLatestEvent?.({source,immutableMessageId:receipt.messageId});
+  const unchanged=priorEvent&&priorEvent.body===text&&priorEvent.sender?.accountId===sender.accountId&&digest(priorEvent.recipient)===digest(recipient)&&digest(attachmentIdentity(priorEvent.attachments))===digest(attachmentIdentity(attachments));
+  if(unchanged)return structuredClone(priorEvent);
+  const sourceUpdatedAt=new Date(date*1000).toISOString();
+  const priorProviderTimes=(prior?.history??[]).filter(event=>event.immutableMessageId===receipt.messageId).map(event=>Date.parse(event.sourceUpdatedAt));
+  const sourceHighWater=priorEvent?Math.max(Date.parse(priorEvent.sourceUpdatedAt),...priorProviderTimes):-Infinity;
+  const providerEditNewer=receipt.editedAtUnix!==undefined&&receipt.editedAtUnix!==null&&priorEvent&&date*1000>sourceHighWater;
+  // A DOM body change without a newer provider edit timestamp is real evidence
+  // of a difference, not evidence of when it was edited. Preserve the source
+  // timestamp and fail closed; never relabel polling time as provider edit time.
+  const sourceRevision=priorEvent&&!providerEditNewer?{kind:'observed_change_time_unverified',previousMessageRevision:priorEvent.messageRevision}:null;
+  const revision=digest({body:text,attachments:attachmentIdentity(attachments),sender,recipient,
+    ...(priorEvent?{previousMessageRevision:priorEvent.messageRevision,sourceUpdatedAt}:{}),
+    ...(sourceRevision?{sourceRevision}:{})});
   return {source,sourceVerified:true,verifiedThreadId:threadId,immutableMessageId:receipt.messageId,messageRevision:revision,
-    sourceUpdatedAt:unchangedTime(ledger,source,receipt.messageId,revision,new Date(date*1000).toISOString()),body:text,sender,recipient,attachments,
-    decisionRequired:OWNER_DECISION.test(text),replyContext:{messageId:receipt.messageId,roomId:source.scopeId,accountId:receipt.authorAccountId},trust:'untrusted_customer_content'};
+    sourceUpdatedAt,body:text,sender,recipient,attachments,
+    ...(sourceRevision?{sourceRevision}:{}),decisionRequired:OWNER_DECISION.test(text)||Boolean(sourceRevision),
+    replyContext:{messageId:receipt.messageId,roomId:source.scopeId,accountId:receipt.authorAccountId},trust:'untrusted_customer_content'};
 }
 export function scanPlan(config, ledger, now=Date.now()) {
   requireValue(Number.isFinite(now),'NOW_REQUIRED');const gmail=scoped(config,'gmail');const chatwork=scoped(config,'chatwork');
