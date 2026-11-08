@@ -47,6 +47,12 @@ export function collectChatworkDOM(options) {
     requireValue(root.getAttribute('data-rid') === roomId, 'DOM_MESSAGE_ROOM_MISMATCH');
     requireValue(!seen.has(id), 'DOM_DUPLICATE_MESSAGE_ID');
     seen.add(id);
+    // Deleted timeline roots may retain their immutable identity but no time,
+    // author or prose. Preserve the gap without blocking valid siblings or
+    // inventing a receipt from stale content. Deferred IDs forbid scan completion.
+    if (root.getAttribute('data-deleted') === '1') {
+      return defer(id, 'deleted_message_unavailable');
+    }
     const rawTime = root.querySelector('[data-tm]')?.getAttribute('data-tm');
     requireValue(typeof rawTime === 'string' && /^\d+$/.test(rawTime), 'DOM_MESSAGE_TIME_REQUIRED');
     const createdAtUnix = Number(rawTime);
