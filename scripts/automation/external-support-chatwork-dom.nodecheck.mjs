@@ -123,6 +123,39 @@ test('consecutive messages with omitted author are deferred without inheriting o
   assert.deepEqual(result.deferred, [{ messageId: firstId, reason: 'author_header_unverified' }]);
 });
 
+test('empty deleted message roots are deferred without blocking valid siblings or completing coverage', () => {
+  const deletedId = '2170000000000000003';
+  const tombstone = `<div id="_messageId${deletedId}" data-mid="${deletedId}" data-rid="${ROOM}" data-deleted="1"></div>`;
+  const result = run(golden.replace('</body>', tombstone + '</body>'));
+  assert.deepEqual(result.receipts.map(receipt => receipt.messageId), [firstId, secondId]);
+  assert.deepEqual(result.deferred, [{ messageId: deletedId, reason: 'deleted_message_unavailable' }]);
+  assert.deepEqual(result.unverifiedMessageIds, [deletedId]);
+  assert.equal(result.sourceLoaded, true);
+  assert.equal(result.oldestLoadedUnix, NOW - 1200);
+  assert.equal(result.paginationComplete, false);
+  const onlyDeleted = run(`<html><body>${tombstone}</body></html>`);
+  assert.deepEqual(onlyDeleted.receipts, []);
+  assert.deepEqual(onlyDeleted.deferred, result.deferred);
+  assert.equal(onlyDeleted.sourceLoaded, false);
+  assert.equal(onlyDeleted.oldestLoadedUnix, null);
+  assert.equal(onlyDeleted.paginationComplete, false);
+});
+
+test('deleted roots cannot expose stale prose or bypass immutable identity and room guards', () => {
+  const deleted = golden.replace(`data-mid="${firstId}"`, `data-mid="${firstId}" data-deleted="1"`);
+  const result = run(deleted);
+  assert.deepEqual(result.receipts.map(receipt => receipt.messageId), [secondId]);
+  assert.deepEqual(result.deferred, [{ messageId: firstId, reason: 'deleted_message_unavailable' }]);
+  assert.equal(result.oldestLoadedUnix, NOW - 300, 'deleted timestamps are not coverage evidence');
+  assert.equal(result.paginationComplete, false);
+  for (const html of [
+    deleted.replace(`data-mid="${firstId}"`, `data-mid="${secondId}"`),
+    deleted.replace(`data-rid="${ROOM}"`, 'data-rid="999"'),
+    deleted.replace(`_messageId${secondId}`, `_messageId${firstId}`).replace(`data-mid="${secondId}"`, `data-mid="${firstId}"`),
+  ]) assert.throws(() => run(html), /DOM_(?:MESSAGE_ID_MISMATCH|MESSAGE_ROOM_MISMATCH|DUPLICATE_MESSAGE_ID)/);
+  assert.throws(() => run(golden.replace(` data-tm="${NOW - 1200}"`, '')), /DOM_MESSAGE_TIME_REQUIRED/);
+});
+
 test('rendered upload tag and exact preview verify MIME; display size never guesses bytes', () => {
   const html = golden.replaceAll('synthetic-screen.jpeg (30.11 KB)', 'long (name).png (2 MiB)');
   assert.deepEqual(run(html).receipts[0].attachments,

@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
 import { digest, openExternalSupportLedger } from './external-support-ledger.mjs';
-import { normalizeGmailReceipt } from './external-support-intake.mjs';
+import { normalizeChatworkReceipt, normalizeGmailReceipt } from './external-support-intake.mjs';
+import { CHATWORK_DOM_COLLECTOR_SOURCE } from './external-support-chatwork-dom.mjs';
 import {
   buildRegressionArtifact, buildProductionArtifact, buildExternalSupportEvidence,
   externalEvidenceDigest,
@@ -146,4 +149,58 @@ test('synthetic intake to sent is idempotent; caller attestations are not live v
   ownReply.message.payload.headers[0].value = source.accountId;
   ownReply.message.payload.body.content = body;
   assert.equal(normalizeGmailReceipt(ownReply, config, ledger), null);
+});
+
+test('a deleted Chatwork tombstone preserves valid intake but blocks scan cursor advancement', t => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'external-support-chatwork-integration-')));
+  fs.chmodSync(dir, 0o700);
+  const accountId = '200', roomId = '100000001';
+  const validMessageId = '2170000000000000001', deletedMessageId = '2170000000000000002';
+  const nowUnix = 1_794_050_000, fromUnix = nowUnix - 1_000;
+  const source = { kind: 'chatwork', accountId, scopeId: roomId };
+  const config = {
+    dbPath: path.join(dir, 'ledger.sqlite'), allowlist: [source], sources: { chatwork: source },
+    allowedSites: ['https://example.invalid/chat'], repositoryUrl,
+  };
+  const ledger = openExternalSupportLedger({ ...config, now: () => nowUnix * 1_000 });
+  t.after(() => { ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const html = `<!doctype html><html><body>
+    <section id="_messageId${validMessageId}" data-mid="${validMessageId}" data-rid="${roomId}" data-deleted="0">
+      <div data-aid="300" data-source="timeline_message_avatar_profile" data-testid="user-icon">Synthetic reporter</div>
+      <span data-tm="${nowUnix - 1_200}">synthetic time</span>
+      <pre><span>豊かさBOTで質問後に回答がありません。</span></pre>
+    </section>
+    <section id="_messageId${deletedMessageId}" data-mid="${deletedMessageId}" data-rid="${roomId}" data-deleted="1"></section>
+  </body></html>`;
+  const dom = new JSDOM(html, { url: `https://www.chatwork.com/#!rid${roomId}` });
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'innerText', { get() { return this.textContent; } });
+  const beforeDOM = dom.serialize();
+  const options = {
+    verifiedAccountId: accountId, roomId, allowlist: [source], callerAccountVerified: true,
+    callerRoomVerified: true, callerHistoryVerified: true, callerTailVerified: true,
+    fromUnix, nowUnix,
+  };
+  const collected = JSON.parse(JSON.stringify(vm.runInNewContext(
+    `${CHATWORK_DOM_COLLECTOR_SOURCE}(options)`, { document: dom.window.document, URL, options },
+  )));
+  assert.equal(dom.serialize(), beforeDOM, 'collector must not mutate the synthetic source DOM');
+  assert.deepEqual(collected.receipts.map(receipt => receipt.messageId), [validMessageId]);
+  assert.deepEqual(collected.unverifiedMessageIds, [deletedMessageId]);
+  assert.deepEqual(collected.deferred,
+    [{ messageId: deletedMessageId, reason: 'deleted_message_unavailable' }]);
+  assert.equal(collected.sourceLoaded, true);
+  assert.equal(collected.paginationComplete, false);
+
+  const queued = ledger.ingest(normalizeChatworkReceipt(collected.receipts[0], config, ledger));
+  assert.equal(queued.state, 'queued');
+  const cursorBefore = ledger.getScanCursor({ source });
+  assert.throws(() => ledger.recordScanComplete({
+    source: collected.source, sourceVerified: collected.collectorVerified,
+    expectedRevision: cursorBefore.cursorRevision,
+    from: new Date(fromUnix * 1_000).toISOString(),
+    to: new Date(nowUnix * 1_000).toISOString(),
+    sourceLoaded: collected.sourceLoaded, paginationComplete: collected.paginationComplete,
+  }), error => error.code === 'INCOMPLETE_SOURCE_SCAN');
+  assert.deepEqual(ledger.getScanCursor({ source }), cursorBefore);
 });
