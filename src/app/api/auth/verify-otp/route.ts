@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyOTPCode } from "@/lib/supabase";
 import { createSession, setSessionCookie } from "@/lib/auth";
+import { botAccessDenial } from "@/lib/server/bot-access";
 
 export async function POST(request: NextRequest) {
   try {
     const { email, code } = await request.json();
 
-    if (!email || !code) {
+    if (typeof email !== "string" || !email.trim() || !code) {
       return NextResponse.json(
         { error: "Email and code are required" },
         { status: 400 }
@@ -25,6 +26,9 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const denial = await botAccessDenial(normalizedEmail);
+    if (denial) return denial;
 
     // Create JWT session
     const token = await createSession(normalizedEmail);
