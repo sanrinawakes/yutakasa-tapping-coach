@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import ChatSidebar from "@/components/ChatSidebar";
 import ChatMessages from "@/components/ChatMessages";
 import ChatInput from "@/components/ChatInput";
-import { AI_RESPONSE_NOT_GENERATED_MESSAGE } from "@/lib/chat-errors";
 
 interface ChatThread {
   id: string;
@@ -53,6 +52,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initializationStartedRef = useRef(false);
   const createThreadPromiseRef = useRef<Promise<string | null> | null>(null);
+  const pendingSendRef = useRef<{ threadId: string; message: string; id: string } | null>(null);
   const messageLoadVersionRef = useRef(0);
   const skipNextMessageLoadRef = useRef<string | null>(null);
 
@@ -241,9 +241,13 @@ export default function ChatPage() {
 
     setLoading(true);
     setStreaming(true);
-    const clientMessageId = crypto.randomUUID();
-    let safeSendError = "メッセージを送信できませんでした。";
-    let assistantResponseGenerated = false;
+    const pending = pendingSendRef.current;
+    const clientMessageId = pending?.threadId === threadId && pending.message === message
+      ? pending.id
+      : crypto.randomUUID();
+    pendingSendRef.current = { threadId, message, id: clientMessageId };
+    let safeSendError = "送信結果を確認できませんでした。同じ内容で再試行してください。";
+    let expectedAssistantId: string | null = null;
 
     try {
       const userMessage: ChatMessage = {
@@ -253,7 +257,9 @@ export default function ChatPage() {
         content: message,
         created_at: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, userMessage]);
+      setMessages((prev) => prev.some((item) => item.id === clientMessageId)
+        ? prev
+        : [...prev, userMessage]);
 
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -266,6 +272,7 @@ export default function ChatPage() {
       });
 
       if (response.status === 429) {
+        pendingSendRef.current = null;
         const errorData = await response.json();
         setMessages((previous) =>
           previous.filter((item) => item.id !== clientMessageId)
@@ -283,6 +290,7 @@ export default function ChatPage() {
       }
 
       if (!response.ok) {
+        if (response.status === 409) pendingSendRef.current = null;
         safeSendError = await responseErrorMessage(
           response,
           "メッセージを送信できませんでした。"
@@ -290,69 +298,48 @@ export default function ChatPage() {
         throw new Error(safeSendError);
       }
 
-      let assistantMessage = "";
-      const assistantId = crypto.randomUUID();
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        const text = decoder.decode(value, { stream: true });
-        assistantMessage += text;
-
-        setMessages((prev) => {
-          const existing = prev.find((m) => m.id === assistantId);
-          if (existing) {
-            return prev.map((m) =>
-              m.id === assistantId ? { ...m, content: assistantMessage } : m
-            );
-          } else {
-            return [
-              ...prev,
-              {
-                id: assistantId,
-                thread_id: threadId,
-                role: "assistant" as const,
-                content: assistantMessage,
-                created_at: new Date().toISOString(),
-              },
-            ];
-          }
-        });
-      }
-
-      assistantMessage += decoder.decode();
+      // Render a complete reply only; an interrupted response is reconciled
+      // against the stored conversation, not appended to a different reply.
+      expectedAssistantId = response.headers.get("X-Chat-Assistant-Id");
+      const assistantMessage = await response.text();
       if (!assistantMessage.trim()) {
-        safeSendError = AI_RESPONSE_NOT_GENERATED_MESSAGE;
         throw new Error(safeSendError);
       }
-      assistantResponseGenerated = true;
-
+      const assistantId = expectedAssistantId ?? crypto.randomUUID();
+      setMessages((prev) => prev.some((item) => item.id === assistantId)
+        ? prev
+        : [...prev, {
+          id: assistantId,
+          thread_id: threadId,
+          role: "assistant",
+          content: assistantMessage,
+          created_at: new Date().toISOString(),
+        }]);
+      pendingSendRef.current = null;
       await loadThreadMessages(threadId);
       await Promise.all([loadThreads(), loadUsage()]);
       return true;
     } catch {
       console.error("Failed to send message.");
       const persistedMessages = await loadThreadMessages(threadId);
+      if (expectedAssistantId && persistedMessages?.some((item) =>
+        item.id === expectedAssistantId && item.role === "assistant"
+      )) {
+        pendingSendRef.current = null;
+        await Promise.all([loadThreads(), loadUsage()]);
+        return true;
+      }
       const userMessageWasSaved =
-        persistedMessages?.some((item) => item.id === clientMessageId) ?? false;
-      setSendError(
-        userMessageWasSaved && !assistantResponseGenerated
-          ? AI_RESPONSE_NOT_GENERATED_MESSAGE
-          : safeSendError
-      );
+        persistedMessages?.some((item) =>
+          item.id === clientMessageId && item.role === "user" && item.content === message
+        ) ?? false;
+      setSendError(safeSendError);
       if (!userMessageWasSaved) {
         setMessages((previous) =>
           previous.filter((item) => item.id !== clientMessageId)
         );
       }
-      return userMessageWasSaved;
+      return false;
     } finally {
       setLoading(false);
       setStreaming(false);
@@ -424,9 +411,9 @@ export default function ChatPage() {
       <ChatSidebar
         threads={threads}
         currentThreadId={currentThreadId}
-        onSelectThread={setCurrentThreadId}
-        onCreateThread={createNewThread}
-        onDeleteThread={handleDeleteThread}
+        onSelectThread={(id) => { if (!loading) setCurrentThreadId(id); }}
+        onCreateThread={() => { if (!loading) void createNewThread(); }}
+        onDeleteThread={async (id) => { if (!loading) await handleDeleteThread(id); }}
         onRenameThread={handleRenameThread}
         onLogout={handleLogout}
         currentUserEmail={currentUserEmail}

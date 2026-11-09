@@ -2,6 +2,12 @@ name: One-shot production functional smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      chat_only:
+        description: Run chat provider proof without the synthetic support ticket
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,7 +38,7 @@ jobs:
         run: |
           npm test -- src/lib/server/support-service.test.ts
           node --test scripts/automation/ai-repair-functional-smoke.nodecheck.mjs scripts/automation/ai-repair-one-shot-smoke.nodecheck.mjs
-      - name: Verify deployed main and run isolated desktop, mobile, and support checks
+      - name: Verify deployed main and run isolated desktop, mobile, and optional support checks
         env:
           SUPABASE_URL: ${{ secrets.YUTAKASA_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUTAKASA_SUPABASE_SERVICE_ROLE_KEY }}
@@ -40,4 +46,11 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.YUTAKASA_VERCEL_TOKEN }}
           YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID: ${{ vars.YUTAKASA_FULL_AUTO_REHEARSAL_RUN_ID }}
           YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID: ${{ vars.YUTAKASA_AUTO_MERGE_REHEARSAL_WORK_ID }}
-        run: node scripts/automation/ai-repair-one-shot-smoke.mjs
+          YUTAKASA_ONE_SHOT_CHAT_ONLY: ${{ inputs.chat_only }}
+        shell: bash
+        run: |
+          case "${YUTAKASA_ONE_SHOT_CHAT_ONLY}" in
+            true) exec node scripts/automation/ai-repair-one-shot-smoke.mjs --chat-only ;;
+            false) exec node scripts/automation/ai-repair-one-shot-smoke.mjs ;;
+            *) echo "Invalid chat_only workflow input" >&2; exit 1 ;;
+          esac

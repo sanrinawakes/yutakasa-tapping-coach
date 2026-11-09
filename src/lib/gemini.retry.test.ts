@@ -17,8 +17,10 @@ vi.mock("@google/generative-ai", () => ({
 
 import {
   GEMINI_CREDITS_DEPLETED_CODE,
-  streamChatCompletion,
+  generateChatCompletion,
+  type ChatMessage,
 } from "./gemini";
+import { geminiChatCircuit } from "./chat-provider-circuit";
 
 function successfulStream(content: string) {
   return {
@@ -100,14 +102,8 @@ const validDraftReply = `ご連絡に気づくのが1ヶ月以上遅くなって
 
 ② はい。今その出来事を思い浮かべた時の感情の強度を数値で確認し、3以下なら十分に扱えたものとして一区切りにしてください。`;
 
-async function readText(stream: ReadableStream<string>) {
-  const reader = stream.getReader();
-  let output = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) return output;
-    output += value;
-  }
+async function generateText(messages: ChatMessage[]) {
+  return (await generateChatCompletion(messages)).content;
 }
 
 describe("Gemini generation retry", () => {
@@ -115,11 +111,13 @@ describe("Gemini generation retry", () => {
     process.env.GEMINI_API_KEY = "test-key";
     clearOpenAiChatFallbackEnvironment();
     mocks.generateContentStream.mockReset();
+    geminiChatCircuit.reset();
   });
 
   afterEach(() => {
     clearOpenAiChatFallbackEnvironment();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("uses the dedicated OpenAI primary route without a Gemini key or call", async () => {
@@ -130,9 +128,9 @@ describe("Gemini generation retry", () => {
       openAiCompletedResponse(validStructuredResponse("返済が気になっているのですね。"))
     );
 
-    const output = await readText(await streamChatCompletion([
+    const output = await generateText([
       { role: "user", content: "返済が不安です。" },
-    ]));
+    ]);
 
     expect(output).toContain("返済が気になっているのですね。");
     expect(mocks.generateContentStream).not.toHaveBeenCalled();
@@ -143,10 +141,12 @@ describe("Gemini generation retry", () => {
     process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED = "true";
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    await expect(readText(await streamChatCompletion([
+    await expect(generateText([
       { role: "user", content: "返済が不安です。" },
-    ]))).rejects.toThrow("gemini_generation_failed");
+    ])).rejects.toThrow("gemini_generation_failed");
     expect(warn).toHaveBeenCalledWith("OpenAI chat generation did not complete", {
+      path: "openai_primary",
+      geminiReason: undefined,
       reason: "configuration_invalid",
     });
     expect(mocks.generateContentStream).not.toHaveBeenCalled();
@@ -163,9 +163,9 @@ describe("Gemini generation retry", () => {
         steps: [], practicePhrases: [], closing: "",
       }))
     );
-    const result = await readText(await streamChatCompletion([
+    const result = await generateText([
       { role: "user", content: "動作確認です。\n短く返答してください。" },
-    ]));
+    ]);
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.input[0].content).toContain("空欄にはせず");
     expect(body.text.format.schema.properties).toMatchObject({
@@ -186,11 +186,9 @@ describe("Gemini generation retry", () => {
         successfulStream(validStructuredResponse("不安を感じているのですね。"))
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "返済が不安です。" },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("不安を感じているのですね。");
@@ -207,11 +205,11 @@ describe("Gemini generation retry", () => {
     );
     mocks.generateContentStream.mockRejectedValueOnce(depletedError);
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: GEMINI_CREDITS_DEPLETED_CODE,
       message: GEMINI_CREDITS_DEPLETED_CODE,
     });
@@ -224,11 +222,11 @@ describe("Gemini generation retry", () => {
       new Error("Your prepayment credits are depleted")
     );
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: GEMINI_CREDITS_DEPLETED_CODE,
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
@@ -248,11 +246,11 @@ describe("Gemini generation retry", () => {
         )
       );
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: GEMINI_CREDITS_DEPLETED_CODE,
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
@@ -261,9 +259,7 @@ describe("Gemini generation retry", () => {
 
   it("uses the opt-in fallback once after an initial explicit prepay depletion", async () => {
     enableOpenAiChatFallback();
-    const consoleWarn = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -280,8 +276,7 @@ describe("Gemini generation retry", () => {
       )
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "古い相談1です。" },
         { role: "user", content: "古い相談2です。" },
         { role: "assistant", content: "古い回答です。" },
@@ -291,8 +286,7 @@ describe("Gemini generation retry", () => {
           content: "直前の回答です。".repeat(80),
         },
         { role: "user", content: "今の不安を相談したいです。" },
-      ])
-    );
+      ]);
 
     expect(output).toContain("今の不安を確認したいのですね。");
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
@@ -312,9 +306,6 @@ describe("Gemini generation retry", () => {
     expect(request.input).toHaveLength(5);
     expect(JSON.stringify(request.input)).not.toContain("古い相談1");
     expect(JSON.stringify(request.input)).toContain("今の不安を相談したい");
-    expect(consoleWarn).toHaveBeenCalledWith(
-      "Recovered chat generation with the configured OpenAI fallback after Gemini credit depletion."
-    );
   });
 
   it("does not retry Gemini when explicit depletion has a retryable status", async () => {
@@ -333,11 +324,9 @@ describe("Gemini generation retry", () => {
       })
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "今の不安を相談したいです。" },
-      ])
-    );
+      ]);
 
     expect(output).toContain("残高不足時の回答です。");
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
@@ -349,11 +338,11 @@ describe("Gemini generation retry", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     mocks.generateContentStream.mockRejectedValueOnce({ status: 400 });
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: "gemini_generation_failed",
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
@@ -367,20 +356,22 @@ describe("Gemini generation retry", () => {
       Object.assign(new Error("Payment Required"), { status: 402 })
     );
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: GEMINI_CREDITS_DEPLETED_CODE,
     });
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("does not change provider after Gemini emitted any partial response", async () => {
+  it("discards interrupted, unpublished Gemini text before using OpenAI", async () => {
     enableOpenAiChatFallback();
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      openAiCompletedResponse(validStructuredResponse("OpenAIからの完全な回答です。"))
+    );
     const depletion = Object.assign(
       new Error("Your prepayment credits are depleted"),
       { status: 402 }
@@ -389,13 +380,107 @@ describe("Gemini generation retry", () => {
       interruptedStream('{"acknowledgement":"途中', depletion)
     );
 
-    const stream = await streamChatCompletion([
+    const generation = await generateChatCompletion([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
-      code: GEMINI_CREDITS_DEPLETED_CODE,
+    expect(generation).toMatchObject({
+      provider: "openai", path: "openai_fallback", reason: "gemini_credits_depleted",
     });
+    expect(generation.content).toContain("OpenAIからの完全な回答です。");
+    expect(generation.content).not.toContain("途中");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("bounds transient retries and switches once using the same context", async () => {
+    vi.useFakeTimers();
+    enableOpenAiChatFallback();
+    mocks.generateContentStream.mockRejectedValue({ status: 503 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      openAiCompletedResponse(validStructuredResponse("通信障害時の回答です。"))
+    );
+    const request = generateChatCompletion([{ role: "user", content: "同じ相談です。" }]);
+    await vi.advanceTimersByTimeAsync(1_600);
+    await expect(request).resolves.toMatchObject({
+      provider: "openai", path: "openai_fallback", reason: "gemini_transient",
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(3);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(String(fetchSpy.mock.calls[0]?.[1]?.body)).toContain("同じ相談です。");
+  });
+
+  it("aborts hung headers and body attempts within the total Gemini budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    enableOpenAiChatFallback();
+    const signals: AbortSignal[] = [];
+    const never = () => new Promise<never>(() => {});
+    mocks.generateContentStream.mockImplementation((_, { signal }) => {
+      signals.push(signal);
+      return signals.length === 1 ? never() : {
+        stream: { [Symbol.asyncIterator]: () => ({ next: never }) },
+      };
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      openAiCompletedResponse(validStructuredResponse("時間切れから復旧した回答です。"))
+    );
+    const request = generateChatCompletion([{ role: "user", content: "相談です。" }]);
+    await vi.advanceTimersByTimeAsync(34_999);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(request).resolves.toMatchObject({
+      provider: "openai", path: "openai_fallback", reason: "gemini_timeout",
+    });
+    expect(signals).toHaveLength(3);
+    expect(signals.every(({ aborted }) => aborted)).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("skips Gemini while open, admits only one probe and returns to Gemini on success", async () => {
+    vi.useFakeTimers();
+    enableOpenAiChatFallback();
+    mocks.generateContentStream.mockRejectedValueOnce(new Error("Your prepayment credits are depleted"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      openAiCompletedResponse(validStructuredResponse("代替の回答です。"))
+    );
+    const messages: ChatMessage[] = [{ role: "user", content: "同じ会話の相談です。" }];
+    await expect(generateChatCompletion(messages)).resolves.toMatchObject({
+      provider: "openai", path: "openai_fallback",
+    });
+    await expect(generateChatCompletion(messages)).resolves.toMatchObject({
+      provider: "openai", path: "openai_circuit",
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    let finishProbe!: (result: ReturnType<typeof successfulStream>) => void;
+    mocks.generateContentStream.mockImplementationOnce(() => new Promise(resolve => {
+      finishProbe = resolve;
+    }));
+    const probe = generateChatCompletion(messages);
+    await expect(generateChatCompletion(messages)).resolves.toMatchObject({
+      provider: "openai", path: "openai_circuit",
+    });
+    expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
+    finishProbe(successfulStream(validStructuredResponse("Geminiが復旧しました。")));
+    await expect(probe).resolves.toMatchObject({ provider: "gemini", path: "gemini" });
+    mocks.generateContentStream.mockResolvedValueOnce(
+      successfulStream(validStructuredResponse("次の相談もGeminiで応答します。"))
+    );
+    await expect(generateChatCompletion(messages)).resolves.toMatchObject({ provider: "gemini" });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not bypass a safety finish or call OpenAI", async () => {
+    enableOpenAiChatFallback();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    mocks.generateContentStream.mockResolvedValueOnce({
+      stream: (async function* () {
+        yield { candidates: [{ finishReason: "SAFETY" }], text: () => "表示しない" };
+      })(),
+    });
+    await expect(generateChatCompletion([{ role: "user", content: "相談です。" }]))
+      .rejects.toMatchObject({ code: "gemini_generation_failed" });
+    expect(mocks.generateContentStream).toHaveBeenCalledOnce();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -412,11 +497,11 @@ describe("Gemini generation retry", () => {
       })
     );
 
-    const stream = await streamChatCompletion([
+    const generation = generateText([
       { role: "user", content: "今の不安を相談したいです。" },
     ]);
 
-    await expect(readText(stream)).rejects.toMatchObject({
+    await expect(generation).rejects.toMatchObject({
       code: "gemini_generation_failed",
       message: "gemini_generation_failed",
     });
@@ -425,9 +510,7 @@ describe("Gemini generation retry", () => {
 
   it("reuses draft reply validation for the opt-in fallback", async () => {
     enableOpenAiChatFallback();
-    const consoleWarn = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(openAiCompletedResponse(validDraftReply));
@@ -437,9 +520,7 @@ describe("Gemini generation retry", () => {
       })
     );
 
-    const output = await readText(
-      await streamChatCompletion([{ role: "user", content: draftQuestion }])
-    );
+    const output = await generateText([{ role: "user", content: draftQuestion }]);
 
     expect(output).toBe(validDraftReply);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -448,7 +529,6 @@ describe("Gemini generation retry", () => {
     );
     expect(request.text).toEqual({ format: { type: "text" } });
     expect(request.input.at(-1).content).toContain("① 今いちばん強く");
-    expect(consoleWarn).toHaveBeenCalledTimes(1);
   });
 
   it("reuses one-sentence enforcement for the opt-in fallback", async () => {
@@ -467,14 +547,12 @@ describe("Gemini generation retry", () => {
       })
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "user",
           content: "不安なとき最初にすることを一文で教えてください。",
         },
-      ])
-    );
+      ]);
 
     expect(output).toBe("最初に今の感情を1から10で数値化してください。");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -489,11 +567,9 @@ describe("Gemini generation retry", () => {
         successfulStream(validStructuredResponse("不安を感じているのですね。"))
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "今の不安を相談したいです。" },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("不安を感じているのですね。");
@@ -509,11 +585,9 @@ describe("Gemini generation retry", () => {
         successfulStream(validStructuredResponse("再試行後の回答です。"))
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "受け取り方を教えてください。" },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toContain("再試行後の回答です。");
@@ -539,11 +613,9 @@ describe("Gemini generation retry", () => {
         )
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "借金の返済が不安です。" },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).not.toContain("これでは足りない");
@@ -561,15 +633,13 @@ describe("Gemini generation retry", () => {
         successfulStream("今感じている罪悪感を1から10で数値化してください。")
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "user",
           content:
             "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
         },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).toBe(
@@ -585,15 +655,13 @@ describe("Gemini generation retry", () => {
       )
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "user",
           content:
             "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
         },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
     expect(output).toBe("過去の記憶を思い出してください。");
@@ -606,15 +674,13 @@ describe("Gemini generation retry", () => {
       )
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "user",
           content:
             "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
         },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
     expect(output).toBe("その感情を認めてください。");
@@ -627,15 +693,13 @@ describe("Gemini generation retry", () => {
       )
     );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "user",
           content:
             "お金を受け取る罪悪感が出たとき、最初にすることを一文だけで教えてください。",
         },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(1);
     expect(output).toBe(
@@ -673,8 +737,7 @@ describe("Gemini generation retry", () => {
         )
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         {
           role: "assistant",
           content:
@@ -685,8 +748,7 @@ describe("Gemini generation retry", () => {
           content:
             "私がいただいたところてんを好きなだけ食べていいでしょと娘に言われちょっとイラッときた",
         },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(2);
     expect(output).not.toContain("これまでのあなたの質問内容");
@@ -704,11 +766,9 @@ describe("Gemini generation retry", () => {
         )
       );
 
-    const output = await readText(
-      await streamChatCompletion([
+    const output = await generateText([
         { role: "user", content: "借金の返済が不安です。" },
-      ])
-    );
+      ]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(4);
     expect(output).toContain("借金額を見た瞬間に出る不安を1から10で数値化");
@@ -728,9 +788,7 @@ describe("Gemini generation retry", () => {
       successfulStream(validDraftReply)
     );
 
-    const output = await readText(
-      await streamChatCompletion([{ role: "user", content: draftQuestion }])
-    );
+    const output = await generateText([{ role: "user", content: draftQuestion }]);
 
     expect(output).toBe(validDraftReply);
     const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
@@ -758,9 +816,7 @@ describe("Gemini generation retry", () => {
       )
       .mockResolvedValueOnce(successfulStream(validDraftReply));
 
-    const output = await readText(
-      await streamChatCompletion([{ role: "user", content: draftQuestion }])
-    );
+    const output = await generateText([{ role: "user", content: draftQuestion }]);
 
     expect(mocks.generateContentStream).toHaveBeenCalledTimes(3);
     expect(output).toBe(validDraftReply);
@@ -773,8 +829,7 @@ describe("Gemini generation retry", () => {
       successfulStream(validDraftReply)
     );
 
-    await readText(
-      await streamChatCompletion([
+    await generateText([
         { role: "user", content: longAnchor },
         { role: "assistant", content: "一般的な説明だけを返しました。" },
         { role: "user", content: "1ヶ月以上遅れた謝罪を入れて。" },
@@ -785,8 +840,7 @@ describe("Gemini generation retry", () => {
           role: "user",
           content: "イエスかノーか、①と②に真面目に答えて。",
         },
-      ])
-    );
+      ]);
 
     const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
       contents: Array<{ role: string; parts: Array<{ text: string }> }>;
@@ -808,8 +862,7 @@ describe("Gemini generation retry", () => {
       successfulStream(validStructuredResponse("今の不安を確認したいのですね。"))
     );
 
-    await readText(
-      await streamChatCompletion([
+    await generateText([
         { role: "user", content: "一つ前の相談です。" },
         { role: "user", content: "二つ前の相談です。" },
         { role: "assistant", content: "さらに古い回答です。" },
@@ -824,8 +877,7 @@ describe("Gemini generation retry", () => {
           content:
             "私がいただいたところてんを好きなだけ食べていいでしょと娘に言われちょっとイラッときた",
         },
-      ])
-    );
+      ]);
 
     const request = mocks.generateContentStream.mock.calls[0]?.[0] as {
       contents: Array<{ role: string; parts: Array<{ text: string }> }>;

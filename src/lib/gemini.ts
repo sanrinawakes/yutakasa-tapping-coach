@@ -1,5 +1,6 @@
 import {
   GoogleGenerativeAI,
+  type GenerateContentRequest,
   SchemaType,
   type ResponseSchema,
 } from "@google/generative-ai";
@@ -32,6 +33,10 @@ import {
   isOpenAiChatFallbackEnabled,
   OpenAiChatFallbackError,
 } from "./openai-chat-fallback";
+import {
+  geminiChatCircuit,
+  type GeminiAvailabilityReason,
+} from "./chat-provider-circuit";
 
 function getClient(): GoogleGenerativeAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -48,6 +53,9 @@ export interface ChatMessage {
 
 const GEMINI_MAX_ATTEMPTS = 3;
 const GEMINI_RETRY_DELAYS_MS = [400, 1_200] as const;
+const GEMINI_ATTEMPT_TIMEOUT_MS = 15_000;
+const GEMINI_TOTAL_TIMEOUT_MS = 35_000;
+const GEMINI_MAX_RESPONSE_CHARS = 64_000;
 const MAX_CONTEXT_USER_MESSAGES = 3;
 const MAX_CONTEXT_ASSISTANT_MESSAGES = 1;
 const MAX_CONTEXT_TOTAL_CHARS = 2_400;
@@ -293,13 +301,78 @@ function isExplicitGeminiPrepayDepletion(error: unknown): boolean {
 export function isRetryableGeminiError(error: unknown): boolean {
   const status = geminiHttpStatus(error);
   if (status !== null) {
-    return [429, 500, 502, 503, 504].includes(status);
+    return [408, 429, 500, 502, 503, 504].includes(status);
   }
 
   const message = geminiErrorMessage(error);
-  return /(?:failed to fetch|fetch failed|network|socket|timeout|timed out|ECONNRESET|503 Service Unavailable)/iu.test(
+  return /(?:failed to fetch|fetch failed|network error|socket hang up|timeout|timed out|ECONNRESET|EAI_AGAIN|error reading from the stream|503 Service Unavailable)/iu.test(
     message
   );
+}
+
+class GeminiTimeoutError extends Error {}
+class GeminiRejectedOutputError extends Error {}
+
+function geminiAvailabilityReason(error: unknown): GeminiAvailabilityReason | undefined {
+  if (error instanceof GeminiRejectedOutputError || isResponseValidationError(error)) {
+    return undefined;
+  }
+  if (isExplicitGeminiPrepayDepletion(error)) return "gemini_credits_depleted";
+  const status = geminiHttpStatus(error);
+  if (error instanceof GeminiTimeoutError || status === 408 || status === 504) {
+    return "gemini_timeout";
+  }
+  if (isRetryableGeminiError(error)) return "gemini_transient";
+}
+
+async function collectGeminiAnswer(
+  model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
+  request: GenerateContentRequest,
+  deadline: number
+): Promise<string> {
+  const timeLeft = Math.min(GEMINI_ATTEMPT_TIMEOUT_MS, deadline - performance.now());
+  if (timeLeft <= 0) throw new GeminiTimeoutError("Gemini time budget expired");
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new GeminiTimeoutError("Gemini attempt timed out"));
+      abort.abort();
+    }, timeLeft);
+  });
+  try {
+    return await Promise.race([timeout, (async () => {
+      const result = await model.generateContentStream(request, { signal: abort.signal });
+      // The SDK tees the stream; handle rejection before reading either branch.
+      void result.response?.catch(() => undefined);
+      let text = "";
+      for await (const chunk of result.stream) {
+        const reason = chunk.candidates?.[0]?.finishReason;
+        if (chunk.promptFeedback?.blockReason ||
+            (reason && reason !== "STOP" && reason !== "FINISH_REASON_UNSPECIFIED")) {
+          throw new GeminiRejectedOutputError("Gemini did not complete an allowed answer");
+        }
+        try {
+          text += chunk.text();
+        } catch {
+          // A rejected response can contain provider safety details. Never
+          // classify those details as an availability error by string match.
+          throw new GeminiRejectedOutputError("Gemini rejected its output");
+        }
+        if (text.length > GEMINI_MAX_RESPONSE_CHARS) {
+          throw new GeminiRejectedOutputError("Gemini output exceeded its size limit");
+        }
+      }
+      const final = await result.response;
+      if (final && final.candidates?.[0]?.finishReason !== "STOP") {
+        throw new GeminiRejectedOutputError("Gemini did not finish the answer");
+      }
+      return text;
+    })()]);
+  } finally {
+    clearTimeout(timer);
+    abort.abort();
+  }
 }
 
 function wait(delayMs: number) {
@@ -763,9 +836,18 @@ function buildModelMessages(
     : buildCoachModelMessages(trimmedMessages);
 }
 
-export async function streamChatCompletion(
+export type ChatGeneration =
+  | { content: string; provider: "gemini"; path: "gemini" }
+  | {
+      content: string;
+      provider: "openai";
+      path: "openai_primary" | "openai_fallback" | "openai_circuit";
+      reason?: GeminiAvailabilityReason;
+    };
+
+export async function generateChatCompletion(
   messages: ChatMessage[]
-): Promise<ReadableStream<string>> {
+): Promise<ChatGeneration> {
   const responsePlan = buildConversationResponsePlan(messages);
   const systemPrompt = await getSystemPrompt(messages, responsePlan);
   const boundedMessages = buildModelMessages(messages, responsePlan);
@@ -776,45 +858,50 @@ export async function streamChatCompletion(
   const enforceOneSentence =
     !isDraftReply && isOneSentenceRequest(latestUserMessage);
   const useStructuredResponse = !isDraftReply && !enforceOneSentence;
-  const formatOpenAiResponse = (response: string) => responsePlan.draftReply
+  const formatResponse = (response: string) => responsePlan.draftReply
     ? formatDraftReplyResponse(response, responsePlan.draftReply)
     : enforceOneSentence
       ? formatOneSentenceResponse(response, latestUserMessage)
       : formatStructuredResponse(response, latestUserMessage);
-  const generateOpenAiResponse = async () => formatOpenAiResponse(await generateOpenAiChatFallback({
+  const generateOpenAiResponse = async () => formatResponse(await generateOpenAiChatFallback({
     systemPrompt: useStructuredResponse ? `${systemPrompt}${OPENAI_STRUCTURED_OUTPUT_INSTRUCTION}` : systemPrompt,
     messages: boundedMessages,
     responseFormat: useStructuredResponse
       ? { type: "json_schema", name: "yutakasa_coach_response", schema: OPENAI_COACH_RESPONSE_SCHEMA }
       : { type: "text" },
   }));
-  const logOpenAiFailure = (error: unknown) => {
-    console.warn("OpenAI chat generation did not complete", {
-      reason: error instanceof OpenAiChatFallbackError ? error.reason : "formatting_failed",
-      ...(error instanceof OpenAiChatFallbackError && error.upstreamStatus !== undefined
-        ? { upstreamStatus: error.upstreamStatus }
-        : {}),
-    });
-  };
+  async function completeWithOpenAi(
+    path: Extract<ChatGeneration, { provider: "openai" }>["path"],
+    reason?: GeminiAvailabilityReason
+  ): Promise<ChatGeneration> {
+    try {
+      const content = await generateOpenAiResponse();
+      if (!content.trim()) throw new Error("Empty formatted answer");
+      return { content, provider: "openai", path, ...(reason ? { reason } : {}) };
+    } catch (error) {
+      console.warn("OpenAI chat generation did not complete", {
+        path,
+        geminiReason: reason,
+        reason: error instanceof OpenAiChatFallbackError ? error.reason : "formatting_failed",
+        ...(error instanceof OpenAiChatFallbackError && error.upstreamStatus !== undefined
+          ? { upstreamStatus: error.upstreamStatus }
+          : {}),
+      });
+      throw normalizedGeminiGenerationError(error);
+    }
+  }
 
   // An explicit recovery setting avoids a failing Google request on every turn.
   // The dedicated credential and project guards still apply in this mode.
   if (process.env.YUTAKASA_CHAT_OPENAI_PRIMARY_ENABLED === "true") {
-    return new ReadableStream<string>({
-      async start(controller) {
-        try {
-          controller.enqueue(await generateOpenAiResponse());
-          controller.close();
-          console.info("OpenAI primary chat generation completed.");
-        } catch (error) {
-          logOpenAiFailure(error);
-          controller.error(normalizedGeminiGenerationError(error));
-        }
-      },
-    });
+    return completeWithOpenAi("openai_primary");
   }
 
+  const useFallback = isOpenAiChatFallbackEnabled();
   const model = getClient().getGenerativeModel({ model: GEMINI_MODEL });
+  const admission = useFallback ? geminiChatCircuit.admit() : undefined;
+  if (admission && !admission.attempt) return completeWithOpenAi("openai_circuit", admission.reason);
+  const deadline = performance.now() + GEMINI_TOTAL_TIMEOUT_MS;
 
   const request = {
     contents: boundedMessages.map((msg) => ({
@@ -853,111 +940,46 @@ export async function streamChatCompletion(
     systemInstruction: `${systemPrompt}${validationRecoveryInstruction}`,
   };
 
-  return new ReadableStream<string>({
-    async start(controller) {
-      let lastError: unknown = null;
-      let openAiFallbackEligibleForDepletion = false;
+  const geminiSuccess = (content: string): ChatGeneration => {
+    if (!content.trim()) throw new GeminiRejectedOutputError("Empty formatted answer");
+    if (admission) geminiChatCircuit.finish(admission, "success");
+    return { content, provider: "gemini", path: "gemini" };
+  };
+  const maxAttempts = admission?.probe ? 1 : GEMINI_MAX_ATTEMPTS;
+  let lastError: unknown;
+  let sawInvalidAnswer = false;
 
-      for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
-        let bufferedResponse = "";
-        try {
-          const stream = await model.generateContentStream(primaryRequest);
-          for await (const chunk of stream.stream) {
-            const text = chunk.text();
-            if (text) {
-              bufferedResponse += text;
-            }
-          }
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return geminiSuccess(formatResponse(await collectGeminiAnswer(model, primaryRequest, deadline)));
+    } catch (error) {
+      lastError = error;
+      sawInvalidAnswer ||= isResponseValidationError(error);
+      const reason = geminiAvailabilityReason(error);
+      const delayMs = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 1_200;
+      if (reason === "gemini_credits_depleted" || attempt >= maxAttempts ||
+          (!reason && !isResponseValidationError(error)) ||
+          performance.now() + delayMs >= deadline) break;
+      await wait(delayMs);
+    }
+  }
 
-          const formatted = responsePlan.draftReply
-            ? formatDraftReplyResponse(
-                bufferedResponse,
-                responsePlan.draftReply
-              )
-            : enforceOneSentence
-              ? formatOneSentenceResponse(bufferedResponse, latestUserMessage)
-              : formatStructuredResponse(bufferedResponse, latestUserMessage);
-          if (formatted) controller.enqueue(formatted);
-          controller.close();
-          return;
-        } catch (error) {
-          lastError = error;
-          const explicitPrepayDepletion =
-            isExplicitGeminiPrepayDepletion(error);
-          openAiFallbackEligibleForDepletion =
-            attempt === 1 &&
-            bufferedResponse.length === 0 &&
-            explicitPrepayDepletion;
-          const canRetry =
-            !explicitPrepayDepletion &&
-            (isRetryableGeminiError(error) || isResponseValidationError(error)) &&
-            attempt < GEMINI_MAX_ATTEMPTS;
-          if (!canRetry) {
-            break;
-          }
+  if (!admission?.probe && (useStructuredResponse || isDraftReply) &&
+      isResponseValidationError(lastError) && performance.now() < deadline) {
+    try {
+      const text = await collectGeminiAnswer(model, plainTextFallbackRequest, deadline);
+      return geminiSuccess(responsePlan.draftReply
+        ? formatDraftReplyResponse(text, responsePlan.draftReply)
+        : formatPlainTextFallbackResponse(text));
+    } catch (error) {
+      lastError = error;
+    }
+  }
 
-          const delayMs = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 1_200;
-          console.warn("Retrying Gemini generation before response started:", {
-            attempt,
-            nextAttempt: attempt + 1,
-            delayMs,
-          });
-          await wait(delayMs);
-        }
-      }
-
-      if (
-        openAiFallbackEligibleForDepletion &&
-        isOpenAiChatFallbackEnabled()
-      ) {
-        try {
-          controller.enqueue(await generateOpenAiResponse());
-          controller.close();
-          console.warn(
-            "Recovered chat generation with the configured OpenAI fallback after Gemini credit depletion."
-          );
-          return;
-        } catch (fallbackError) {
-          logOpenAiFailure(fallbackError);
-          controller.error(normalizedGeminiGenerationError(fallbackError));
-          return;
-        }
-      }
-
-      if (
-        (useStructuredResponse || isDraftReply) &&
-        isResponseValidationError(lastError)
-      ) {
-        try {
-          let fallbackResponse = "";
-          const fallbackStream =
-            await model.generateContentStream(plainTextFallbackRequest);
-          for await (const chunk of fallbackStream.stream) {
-            const text = chunk.text();
-            if (text) {
-              fallbackResponse += text;
-            }
-          }
-
-          const formatted = responsePlan.draftReply
-            ? formatDraftReplyResponse(
-                fallbackResponse,
-                responsePlan.draftReply
-              )
-            : formatPlainTextFallbackResponse(fallbackResponse);
-          controller.enqueue(formatted);
-          controller.close();
-          console.warn(
-            "Recovered Gemini response with plain-text fallback after validation failures."
-          );
-          return;
-        } catch (fallbackError) {
-          controller.error(normalizedGeminiGenerationError(fallbackError));
-          return;
-        }
-      }
-
-      controller.error(normalizedGeminiGenerationError(lastError));
-    },
-  });
+  const reason = geminiAvailabilityReason(lastError);
+  if (admission) geminiChatCircuit.finish(admission, reason ?? "not_availability_failure");
+  // No Gemini text has reached the client. A safety or validation rejection
+  // by itself is never permission to try a different model.
+  if (reason && useFallback && !sawInvalidAnswer) return completeWithOpenAi("openai_fallback", reason);
+  throw normalizedGeminiGenerationError(lastError);
 }

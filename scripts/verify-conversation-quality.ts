@@ -1,21 +1,11 @@
 import assert from "node:assert/strict";
-import { streamChatCompletion, type ChatMessage } from "../src/lib/gemini";
+import { generateChatCompletion, type ChatMessage } from "../src/lib/gemini";
 
 const question = `受講者から届いた次の質問への返信文を考えてください。
 タッピング中、最初に扱っていた相手よりも別の相手への怒りが強く出てきました。
 ① 今いちばん強く出ている相手へ対象を変える進め方で大丈夫ですか？
 ② 最初の相手への怒りは全くなくなり、その怒りがあったことも忘れていました。十分に感情を扱えたと考えてよいですか？
 連絡に気づくのが1ヶ月以上遅れたので、申し訳ないという謝罪も入れてください。`;
-
-async function readText(stream: ReadableStream<string>) {
-  const reader = stream.getReader();
-  let output = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) return output;
-    output += value;
-  }
-}
 
 function assertReply(output: string, direct: boolean) {
   assert.match(output, /①/u);
@@ -49,9 +39,7 @@ function assertReply(output: string, direct: boolean) {
 }
 
 async function main() {
-  const firstOutput = await readText(
-    await streamChatCompletion([{ role: "user", content: question }])
-  );
+  const { content: firstOutput } = await generateChatCompletion([{ role: "user", content: question }]);
   assertReply(firstOutput, true);
 
   const correctionConversation: ChatMessage[] = [
@@ -72,9 +60,7 @@ async function main() {
       content: "イエスかノーか、①と②に真面目に答えて。",
     },
   ];
-  const correctionOutput = await readText(
-    await streamChatCompletion(correctionConversation)
-  );
+  const { content: correctionOutput } = await generateChatCompletion(correctionConversation);
   assertReply(correctionOutput, true);
 
   console.log("Initial draft reply:\n", firstOutput);

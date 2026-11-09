@@ -1,7 +1,6 @@
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ChatPage from "./page";
-import { AI_RESPONSE_NOT_GENERATED_MESSAGE } from "@/lib/chat-errors";
 
 const push = vi.fn();
 const router = { push };
@@ -15,7 +14,11 @@ vi.mock("@/components/ChatSidebar", () => ({
 }));
 
 vi.mock("@/components/ChatMessages", () => ({
-  default: () => <div data-testid="messages" />,
+  default: ({ messages }: { messages: { id: string; content: string }[] }) => (
+    <div data-testid="messages">{messages.map(({ id, content }) =>
+      <p key={id}>{content}</p>
+    )}</div>
+  ),
 }));
 
 vi.mock("@/components/ChatInput", () => ({
@@ -124,7 +127,7 @@ describe("ChatPage initialization", () => {
     });
   });
 
-  it("shows that a saved input has no AI answer without exposing a stream error", async () => {
+  it("does not show partial text and retries the saved turn with the same ID", async () => {
     const thread = {
       id: "thread-existing",
       user_email: "member@example.com",
@@ -133,6 +136,10 @@ describe("ChatPage initialization", () => {
       updated_at: "2026-11-05T00:00:00.000Z",
     };
     let savedMessageId: string | null = null;
+    let replySaved = false;
+    const attemptedIds: string[] = [];
+    const assistantId = "e69178e6-e754-8132-9559-0610314f5e5d";
+    const reply = "再試行で返った回答です。";
     const rawProviderError = "402 Payment Required: secret provider detail";
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -155,6 +162,13 @@ describe("ChatPage initialization", () => {
                     content: "最初の相談です",
                     created_at: "2026-11-05T00:00:01.000Z",
                   },
+                  ...(replySaved ? [{
+                    id: assistantId,
+                    thread_id: thread.id,
+                    role: "assistant",
+                    content: reply,
+                    created_at: "2026-11-05T00:00:02.000Z",
+                  }] : []),
                 ]
               : [],
           });
@@ -164,9 +178,20 @@ describe("ChatPage initialization", () => {
             clientMessageId: string;
           };
           savedMessageId = requestBody.clientMessageId;
+          attemptedIds.push(savedMessageId);
+          if (attemptedIds.length > 1) {
+            replySaved = true;
+            return new Response(reply, { headers: { "X-Chat-Assistant-Id": assistantId } });
+          }
+          let sentChunk = false;
           return new Response(
             new ReadableStream<Uint8Array>({
-              start(controller) {
+              pull(controller) {
+                if (!sentChunk) {
+                  sentChunk = true;
+                  controller.enqueue(new TextEncoder().encode("表示してはいけない途中の回答"));
+                  return;
+                }
                 controller.error(new Error(rawProviderError));
               },
             }),
@@ -188,9 +213,15 @@ describe("ChatPage initialization", () => {
     fireEvent.click(screen.getByRole("button", { name: "テスト送信" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(AI_RESPONSE_NOT_GENERATED_MESSAGE);
+    expect(alert).toHaveTextContent("送信結果を確認できませんでした。同じ内容で再試行してください。");
     expect(alert).not.toHaveTextContent(rawProviderError);
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(rawProviderError);
+    expect(screen.queryByText("表示してはいけない途中の回答")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "テスト送信" }));
+    expect(await screen.findByText(reply)).toBeInTheDocument();
+    expect(attemptedIds).toEqual([savedMessageId, savedMessageId]);
+    expect(screen.getAllByText(reply)).toHaveLength(1);
+    expect(screen.getAllByText("最初の相談です")).toHaveLength(1);
     consoleError.mockRestore();
   });
 });
