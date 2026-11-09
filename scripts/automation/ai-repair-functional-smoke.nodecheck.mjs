@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BRIDGE_SUPPORT_BODY, FunctionalSmokeError, checkSyntheticSupportTicket, reapStaleSyntheticIdentities, runProductionFunctionalSmoke, TEST_SUPPORT_BODY } from "./ai-repair-functional-smoke.mjs";
+import {
+  BRIDGE_SUPPORT_BODY,
+  FunctionalSmokeError,
+  checkSyntheticSupportTicket,
+  parseChatProviderProvenance,
+  reapStaleSyntheticIdentities,
+  runProductionFunctionalSmoke,
+  TEST_SUPPORT_BODY,
+  validateSavedChatTurns,
+} from "./ai-repair-functional-smoke.mjs";
 
 const env = {
   JWT_SECRET: "j".repeat(40),
@@ -12,6 +21,89 @@ const sha = "a".repeat(40);
 const release = { merge_sha: sha };
 const deployment = { mainSha: sha, deploymentId: "dpl_Abcdefghijklmnop", ready: true };
 const id = "11111111-1111-4111-8111-111111111111";
+
+const assistantId = "22222222-2222-4222-8222-222222222222";
+
+test("chat provenance accepts only the documented provider and path pairs", () => {
+  const pairs = [
+    ["gemini", "gemini"],
+    ["openai", "openai_primary"],
+    ["openai", "openai_fallback"],
+    ["openai", "openai_circuit"],
+  ];
+  for (const [provider, path] of pairs) {
+    assert.deepEqual(parseChatProviderProvenance({ provider, path, assistantId }), {
+      status: "verified", provider, path, assistantId,
+    });
+  }
+});
+
+test("an older deployment with no provenance headers is explicit unknown", () => {
+  assert.deepEqual(parseChatProviderProvenance(), {
+    status: "unknown", provider: "unknown", path: "unknown", assistantId: null,
+  });
+  assert.deepEqual(parseChatProviderProvenance({ assistantId }), {
+    status: "unknown", provider: "unknown", path: "unknown", assistantId,
+  });
+});
+
+test("partial, mismatched, or malformed provenance headers fail closed", () => {
+  const invalid = [
+    { provider: "gemini", assistantId },
+    { path: "gemini", assistantId },
+    { provider: "gemini", path: "openai_fallback", assistantId },
+    { provider: "openai", path: "gemini", assistantId },
+  ];
+  for (const headers of invalid) {
+    assert.throws(() => parseChatProviderProvenance(headers),
+      (error) => error instanceof FunctionalSmokeError &&
+        ["smoke_chat_provider_headers_incomplete", "smoke_chat_provider_headers_invalid"]
+          .includes(error.code));
+  }
+  assert.throws(() => parseChatProviderProvenance({ provider: "gemini", path: "gemini",
+    assistantId: "not-a-uuid" }),
+  (error) => error instanceof FunctionalSmokeError &&
+    error.code === "smoke_chat_assistant_id_invalid");
+});
+
+test("saved chat proof binds response body and exact assistant ID to the database row", () => {
+  const prompt = "synthetic prompt";
+  const responseBody = "synthetic answer";
+  const provenance = parseChatProviderProvenance({
+    provider: "openai", path: "openai_fallback", assistantId,
+  });
+  const rows = [
+    { id, role: "user", content: prompt },
+    { id: assistantId, role: "assistant", content: responseBody },
+  ];
+  const turn = { prompt, responseBody, provenance };
+  assert.deepEqual(validateSavedChatTurns(rows, [turn]), {
+    assistants: [rows[1]], assistantIdsBound: true,
+  });
+  assert.throws(() => validateSavedChatTurns(rows, [{ ...turn, responseBody: "different" }]),
+    (error) => error instanceof FunctionalSmokeError &&
+      error.code === "smoke_chat_assistant_binding_mismatch");
+  const wrongId = parseChatProviderProvenance({
+    provider: "openai", path: "openai_fallback",
+    assistantId: "33333333-3333-4333-8333-333333333333",
+  });
+  assert.throws(() => validateSavedChatTurns(rows, [{ ...turn, provenance: wrongId }]),
+    (error) => error instanceof FunctionalSmokeError &&
+      error.code === "smoke_chat_assistant_binding_mismatch");
+});
+
+test("legacy saved chat evidence stays compatible but cannot claim assistant ID binding", () => {
+  const rows = [
+    { id, role: "user", content: "legacy prompt" },
+    { id: assistantId, role: "assistant", content: "stored sanitized answer" },
+  ];
+  const result = validateSavedChatTurns(rows, [{
+    prompt: "legacy prompt",
+    responseBody: "older raw streamed answer [1]",
+    provenance: parseChatProviderProvenance(),
+  }]);
+  assert.equal(result.assistantIdsBound, false);
+});
 
 function fakeDatabase({ preexisting = false, deleteFails = false } = {}) {
   let account = null;

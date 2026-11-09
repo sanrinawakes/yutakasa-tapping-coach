@@ -18,6 +18,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SHA = /^[a-f0-9]{40}$/u;
 const DEPLOYMENT = /^dpl_[A-Za-z0-9]{8,160}$/u;
 const PARTIAL_RESPONSE = "通信が途中で中断されたため";
+const CHAT_PROVIDER_PATHS = {
+  gemini: new Set(["gemini"]),
+  openai: new Set(["openai_primary", "openai_fallback", "openai_circuit"]),
+};
 const SYNTHETIC_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})@example\.invalid$/iu;
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const PREFLIGHT_LIMIT_MS = 2 * 60 * 1_000;
@@ -39,6 +43,68 @@ export class FunctionalSmokeError extends Error {
 
 function fail(code) {
   throw new FunctionalSmokeError(code);
+}
+
+export function parseChatProviderProvenance({ provider = null, path = null,
+  assistantId = null } = {}) {
+  const providerAbsent = provider === null || provider === undefined;
+  const pathAbsent = path === null || path === undefined;
+  const assistantAbsent = assistantId === null || assistantId === undefined;
+  if (!assistantAbsent && (typeof assistantId !== "string" || !UUID.test(assistantId))) {
+    fail("smoke_chat_assistant_id_invalid");
+  }
+  if (providerAbsent && pathAbsent) {
+    return {
+      status: "unknown",
+      provider: "unknown",
+      path: "unknown",
+      assistantId: assistantAbsent ? null : assistantId.toLowerCase(),
+    };
+  }
+  if (providerAbsent || pathAbsent || assistantAbsent ||
+      typeof provider !== "string" || typeof path !== "string") {
+    fail("smoke_chat_provider_headers_incomplete");
+  }
+  if (!Object.hasOwn(CHAT_PROVIDER_PATHS, provider) ||
+      !CHAT_PROVIDER_PATHS[provider].has(path)) {
+    fail("smoke_chat_provider_headers_invalid");
+  }
+  return {
+    status: "verified",
+    provider,
+    path,
+    assistantId: assistantId.toLowerCase(),
+  };
+}
+
+export function validateSavedChatTurns(rows, turns) {
+  if (!Array.isArray(rows) || !Array.isArray(turns) || turns.length === 0 ||
+      rows.length !== turns.length * 2 ||
+      new Set(rows.map((row) => row?.id)).size !== rows.length ||
+      rows.some((row) => !UUID.test(row?.id ?? "") ||
+        !["user", "assistant"].includes(row?.role) || typeof row.content !== "string")) {
+    fail("smoke_database_save_incomplete");
+  }
+  const users = rows.filter((row) => row.role === "user");
+  const assistants = rows.filter((row) => row.role === "assistant");
+  if (assistants.length !== turns.length || users.length !== turns.length ||
+      users.some((row, index) => row.content !== turns[index]?.prompt) ||
+      assistants.some((row) => !row.content.trim() || row.content.includes(PARTIAL_RESPONSE))) {
+    fail("smoke_database_save_incomplete");
+  }
+  let assistantIdsBound = true;
+  for (const [index, turn] of turns.entries()) {
+    const assistantId = turn?.provenance?.assistantId;
+    if (!assistantId) {
+      assistantIdsBound = false;
+      continue;
+    }
+    if (assistants[index].id.toLowerCase() !== assistantId ||
+        assistants[index].content !== turn.responseBody) {
+      fail("smoke_chat_assistant_binding_mismatch");
+    }
+  }
+  return { assistants, assistantIdsBound };
 }
 
 async function within(promise, milliseconds, code) {
@@ -166,21 +232,12 @@ async function verifySyntheticTicketBeforeDelete(env, fetchImpl, email, ticket) 
   }
 }
 
-async function assertMessagesSaved(env, fetchImpl, threadId, prompts) {
+async function assertMessagesSaved(env, fetchImpl, threadId, turns) {
   const rows = await listMessages(env, fetchImpl, threadId);
-  if (rows.length !== prompts.length * 2 ||
-      rows.some((row) => !UUID.test(row?.id ?? "") || row.thread_id !== threadId ||
-        !["user", "assistant"].includes(row.role) || typeof row.content !== "string")) {
+  if (rows.some((row) => row.thread_id !== threadId)) {
     fail("smoke_database_save_incomplete");
   }
-  const users = rows.filter((row) => row.role === "user");
-  const assistants = rows.filter((row) => row.role === "assistant");
-  if (assistants.length !== prompts.length || users.length !== prompts.length ||
-      users.some((row, index) => row.content !== prompts[index]) ||
-      assistants.some((row) => !row.content.trim() || row.content.includes(PARTIAL_RESPONSE))) {
-    fail("smoke_database_save_incomplete");
-  }
-  return assistants;
+  return validateSavedChatTurns(rows, turns);
 }
 
 function sessionToken(secret, email) {
@@ -260,6 +317,12 @@ async function sendFromBrowser(page, prompt, expectedAssistantCount) {
   await page.getByRole("button", { name: "送信" }).click();
   const response = await pendingResponse;
   if (response.status() !== 200) fail("smoke_chat_send_failed");
+  const [provider, path, assistantId] = await Promise.all([
+    response.headerValue("x-chat-provider"),
+    response.headerValue("x-chat-provider-path"),
+    response.headerValue("x-chat-assistant-id"),
+  ]);
+  const provenance = parseChatProviderProvenance({ provider, path, assistantId });
   const streamError = await within(response.finished(), 90_000, "smoke_chat_stream_timeout");
   if (streamError) fail("smoke_chat_stream_interrupted");
   const body = await within(response.text(), 10_000, "smoke_chat_stream_body_timeout");
@@ -276,7 +339,7 @@ async function sendFromBrowser(page, prompt, expectedAssistantCount) {
   await assistant.waitFor({ timeout: 30_000 });
   const rendered = (await assistant.innerText()).trim();
   if (!rendered || rendered.includes(PARTIAL_RESPONSE)) fail("smoke_chat_render_incomplete");
-  return rendered;
+  return { rendered, responseBody: body, provenance };
 }
 
 async function assertReload(page, prompt, expectedRendered, expectedAssistantCount) {
@@ -624,10 +687,12 @@ export async function runProductionFunctionalSmoke({
   release, deployment, env = process.env, fetchImpl = globalThis.fetch,
   chromiumImpl = null, browserPhaseLimitMs = null,
   includeSupportTicket = false, titleScenario = false,
+  requireProviderProof = false,
 } = {}) {
   requiredConfiguration(env, release, deployment);
   if (typeof includeSupportTicket !== "boolean") fail("smoke_support_option_invalid");
   if (typeof titleScenario !== "boolean") fail("smoke_title_option_invalid");
+  if (typeof requireProviderProof !== "boolean") fail("smoke_provider_proof_option_invalid");
   const phaseLimit = browserPhaseLimitMs ?? (titleScenario ? TITLE_BROWSER_PHASE_LIMIT_MS : BROWSER_PHASE_LIMIT_MS);
   if (!Number.isSafeInteger(phaseLimit) || phaseLimit < 1) fail("smoke_browser_limit_invalid");
   const preflightStartedAt = Date.now();
@@ -646,7 +711,7 @@ export async function runProductionFunctionalSmoke({
 
   const errors = [];
   const token = sessionToken(env.JWT_SECRET, email);
-  const prompts = [];
+  const turns = [];
   const marker = `${TEST_MESSAGE_MARKER} ${randomUUID()}`;
   let browser;
   let primaryError;
@@ -655,6 +720,7 @@ export async function runProductionFunctionalSmoke({
   let phaseTimer;
   let supportEvidence = null;
   let titleEvidence = null;
+  let finalChatBinding = null;
   try {
     const inserted = await databaseRequest(env, fetchImpl, "subscribers", {
       select: "id,email,status,subscription_status,first_payment_date,myasp_data",
@@ -688,14 +754,19 @@ export async function runProductionFunctionalSmoke({
     assertBrowserTime();
     try {
       const prompt = `${marker} desktop：動作確認です。\n短く返答してください。`;
-      prompts.push(prompt);
-      const rendered = await sendFromBrowser(desktop.page, prompt, 1);
+      const turn = { prompt, ...(await sendFromBrowser(desktop.page, prompt, 1)) };
+      if (requireProviderProof && turn.provenance.status !== "verified") {
+        fail("smoke_chat_provider_proof_missing");
+      }
+      turns.push(turn);
       assertBrowserTime();
       const threads = await listThreads(env, fetchImpl, email);
       if (threads.length !== 1) fail("smoke_thread_count_invalid");
-      await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
+      finalChatBinding = await assertMessagesSaved(env, fetchImpl, threads[0].id, turns);
       assertBrowserTime();
-      await assertReload(desktop.page, prompt, rendered, 1);
+      await assertReload(desktop.page, prompt, turn.rendered, 1);
+      assertBrowserTime();
+      finalChatBinding = await assertMessagesSaved(env, fetchImpl, threads[0].id, turns);
       assertBrowserTime();
     } finally {
       await within(desktop.context.close(), 30_000, "smoke_browser_context_close_timeout");
@@ -708,14 +779,19 @@ export async function runProductionFunctionalSmoke({
     assertBrowserTime();
     try {
       const prompt = `${marker} mobile：もう一度、短く返答してください。`;
-      prompts.push(prompt);
-      const rendered = await sendFromBrowser(mobile.page, prompt, 2);
+      const turn = { prompt, ...(await sendFromBrowser(mobile.page, prompt, 2)) };
+      if (requireProviderProof && turn.provenance.status !== "verified") {
+        fail("smoke_chat_provider_proof_missing");
+      }
+      turns.push(turn);
       assertBrowserTime();
       const threads = await listThreads(env, fetchImpl, email);
       if (threads.length !== 1) fail("smoke_thread_count_invalid");
-      await assertMessagesSaved(env, fetchImpl, threads[0].id, prompts);
+      finalChatBinding = await assertMessagesSaved(env, fetchImpl, threads[0].id, turns);
       assertBrowserTime();
-      await assertReload(mobile.page, prompt, rendered, 2);
+      await assertReload(mobile.page, prompt, turn.rendered, 2);
+      assertBrowserTime();
+      finalChatBinding = await assertMessagesSaved(env, fetchImpl, threads[0].id, turns);
       assertBrowserTime();
     } finally {
       await within(mobile.context.close(), 30_000, "smoke_browser_context_close_timeout");
@@ -744,6 +820,20 @@ export async function runProductionFunctionalSmoke({
   }
   if (primaryError) throw primaryError;
   assert.equal(completed, true);
+  const providerProvenance = {
+    status: turns.every((turn) => turn.provenance.status === "verified")
+      ? "verified" : "unknown",
+    turns: turns.map((turn) => ({
+      provider: turn.provenance.provider,
+      path: turn.provenance.path,
+    })),
+  };
+  const assistantIdsBound = turns.length === 2 &&
+    finalChatBinding?.assistantIdsBound === true;
+  if (requireProviderProof &&
+      (providerProvenance.status !== "verified" || !assistantIdsBound)) {
+    fail("smoke_chat_provider_proof_missing");
+  }
   return {
     schemaVersion: 1,
     observedAt: new Date().toISOString(),
@@ -758,6 +848,8 @@ export async function runProductionFunctionalSmoke({
     sendButtonOnly: true,
     testDataCleaned: true,
     clientErrors: 0,
+    providerProvenance,
+    assistantIdsBound,
     ...(supportEvidence ? { support: supportEvidence } : {}),
     ...(titleEvidence ? { titleScenario: { ...titleEvidence, testDataCleaned: true } } : {}),
   };

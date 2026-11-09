@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   DEFAULT_CHAT_TITLE,
@@ -325,12 +327,38 @@ export async function deleteChatThread(threadId: string) {
 }
 
 // Chat message functions
+export class ChatMessageIdConflictError extends Error {
+  readonly code = "CHAT_MESSAGE_ID_CONFLICT";
+
+  constructor() {
+    super("CHAT_MESSAGE_ID_CONFLICT");
+    this.name = "ChatMessageIdConflictError";
+  }
+}
+
+export async function getChatMessageById(
+  threadId: string,
+  role: ChatMessage["role"],
+  messageId: string
+): Promise<ChatMessage | null> {
+  const { data, error } = await getSupabase()
+    .from("chat_messages")
+    .select("*")
+    .eq("id", messageId)
+    .eq("thread_id", threadId)
+    .eq("role", role)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as ChatMessage | null;
+}
+
 export async function addChatMessage(
   threadId: string,
-  role: "user" | "assistant",
+  role: ChatMessage["role"],
   content: string,
   messageId: string = crypto.randomUUID()
-) {
+): Promise<ChatMessage & { inserted: boolean }> {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("chat_messages")
@@ -339,11 +367,22 @@ export async function addChatMessage(
       thread_id: threadId,
       role,
       content,
-    }, { onConflict: "id" })
+    }, { onConflict: "id", ignoreDuplicates: true })
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
+
+  if (!data) {
+    // A global ID collision must not expose or overwrite another row. Resolve
+    // it only within the expected conversation and role. The first assistant
+    // write is canonical, but a user ID may not be reused with changed input.
+    const existing = await getChatMessageById(threadId, role, messageId);
+    if (!existing || (role === "user" && existing.content !== content)) {
+      throw new ChatMessageIdConflictError();
+    }
+    return { ...existing, inserted: false };
+  }
 
   // Update thread's updated_at
   const { error: threadUpdateError } = await supabase
@@ -355,7 +394,7 @@ export async function addChatMessage(
     console.error("Failed to update chat thread timestamp:", threadUpdateError);
   }
 
-  return data as ChatMessage;
+  return { ...(data as ChatMessage), inserted: true };
 }
 
 export async function getDailyUserMessageCount(userEmail: string): Promise<number> {
@@ -390,16 +429,22 @@ export async function getDailyUserMessageCount(userEmail: string): Promise<numbe
   return count || 0;
 }
 
-export async function getChatMessages(threadId: string) {
+export async function getChatMessages(threadId: string, throughCreatedAt?: string) {
   const supabase = getSupabase();
-  const { data, error } = await supabase
+  const query = supabase
     .from("chat_messages")
     .select("*")
-    .eq("thread_id", threadId)
-    .order("created_at", { ascending: true });
+    .eq("thread_id", threadId);
+  const { data, error } = throughCreatedAt
+    ? await query.lte("created_at", throughCreatedAt)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(100)
+    : await query.order("created_at", { ascending: true });
 
   if (error) throw error;
-  return (data || []).map((message) =>
+  const ordered = throughCreatedAt ? (data || []).reverse() : (data || []);
+  return ordered.map((message) =>
     message.role === "assistant"
       ? { ...message, content: sanitizeAssistantContent(message.content) }
       : message
