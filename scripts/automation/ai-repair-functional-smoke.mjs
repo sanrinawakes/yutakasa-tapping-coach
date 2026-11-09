@@ -26,6 +26,9 @@ const SYNTHETIC_EMAIL = /^yutakasa-auto-smoke\+([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const PREFLIGHT_LIMIT_MS = 2 * 60 * 1_000;
 const BROWSER_PHASE_LIMIT_MS = 4 * 60 * 1_000;
+// The chat route saves before sending headers. Its two provider budgets can
+// total 95 seconds before the database round trip.
+const CHAT_RESPONSE_HEADERS_TIMEOUT_MS = 110_000;
 const TITLE_BROWSER_PHASE_LIMIT_MS = 8 * 60 * 1_000;
 const SUPPORT_UNEXPECTED_DEPENDENTS = [
   "support_attachments", "support_work_logs", "yutakasa_repair_ticket_links",
@@ -313,7 +316,7 @@ async function sendFromBrowser(page, prompt, expectedAssistantCount) {
   }
   const pendingResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === "/api/chat" && response.request().method() === "POST",
-  { timeout: 60_000 });
+  { timeout: CHAT_RESPONSE_HEADERS_TIMEOUT_MS });
   await page.getByRole("button", { name: "送信" }).click();
   const response = await pendingResponse;
   if (response.status() !== 200) fail("smoke_chat_send_failed");
