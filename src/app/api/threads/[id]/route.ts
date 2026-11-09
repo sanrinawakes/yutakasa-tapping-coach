@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
+import { botAccessDenial } from "@/lib/server/bot-access";
 import { getChatThread, deleteChatThread, getChatMessages } from "@/lib/supabase";
 
 export async function GET(
@@ -11,6 +12,9 @@ export async function GET(
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const { id } = await params;
 
@@ -45,6 +49,9 @@ export async function DELETE(
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const { id } = await params;
 

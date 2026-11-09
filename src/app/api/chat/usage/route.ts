@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
+import { botAccessDenial } from "@/lib/server/bot-access";
 import { getDailyUserMessageCount } from "@/lib/supabase";
 import { DAILY_MESSAGE_LIMIT } from "@/lib/constants";
 
@@ -9,6 +10,9 @@ export async function GET() {
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const used = await getDailyUserMessageCount(session.email);
     const remaining = Math.max(0, DAILY_MESSAGE_LIMIT - used);
