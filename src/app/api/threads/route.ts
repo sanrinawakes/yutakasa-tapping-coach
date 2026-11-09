@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromCookies } from "@/lib/auth";
-import { accessReasonToMessage, evaluateAccess } from "@/lib/access-control";
+import { botAccessDenial } from "@/lib/server/bot-access";
 import {
   createChatThread,
   getChatThread,
-  getSubscriberByEmail,
   getUserChatThreads,
   updateChatThreadTitle,
 } from "@/lib/supabase";
@@ -16,6 +15,9 @@ export async function GET() {
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const threads = await getUserChatThreads(session.email);
 
@@ -36,18 +38,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const subscriber = await getSubscriberByEmail(session.email);
-    const access = evaluateAccess(subscriber);
-    if (!access.allowed) {
-      return NextResponse.json(
-        {
-          error: accessReasonToMessage(access.reason),
-          reason: access.reason,
-          code: "ACCESS_DENIED",
-        },
-        { status: 403 }
-      );
-    }
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const body = await request.json().catch(() => null);
     if (body !== null && (typeof body !== "object" || Array.isArray(body))) {
@@ -76,6 +68,9 @@ export async function PATCH(request: NextRequest) {
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const denial = await botAccessDenial(session.email);
+    if (denial) return denial;
 
     const body = await request.json().catch(() => null);
     const threadId =

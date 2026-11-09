@@ -62,6 +62,24 @@ describe("threads API", () => {
     });
   });
 
+  it("does not reveal history when a signed-in member's access has expired", async () => {
+    getSubscriberByEmailMock.mockResolvedValue({
+      id: "subscriber-1",
+      email: "member@example.com",
+      status: "active",
+      subscription_status: "none",
+      first_payment_date: "2020-01-01T00:00:00.000Z",
+      created_at: "2020-01-01T00:00:00.000Z",
+      updated_at: "2020-01-01T00:00:00.000Z",
+    });
+
+    const response = await GET();
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ reason: "license_expired_no_subscription" });
+    expect(getThreadsMock).not.toHaveBeenCalled();
+  });
+
   it("returns the signed-in email with the history", async () => {
     getThreadsMock.mockResolvedValue([thread]);
 
