@@ -39,7 +39,7 @@ describe("ChatPage initialization", () => {
     push.mockReset();
   });
 
-  it("shows the incident notice before sending and does not create an empty thread", async () => {
+  it("no longer shows the outage notice and does not create an empty thread", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       void init;
@@ -59,9 +59,13 @@ describe("ChatPage initialization", () => {
       </StrictMode>
     );
 
-    const notice = screen.getByRole("status", { name: "サービスのお知らせ" });
-    expect(notice).toHaveTextContent("質問を送っても回答が返らない不具合");
-    expect(notice).toHaveTextContent("復旧対応を進めています");
+    // Answers recovered (2026-11-11): the outage notice is gone.
+    expect(
+      screen.queryByRole("status", { name: "サービスのお知らせ" })
+    ).toBeNull();
+    expect(
+      screen.queryByText(/回答が返らない不具合/)
+    ).toBeNull();
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/threads");
