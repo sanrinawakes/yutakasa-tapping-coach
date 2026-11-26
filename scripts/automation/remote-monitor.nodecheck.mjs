@@ -125,6 +125,7 @@ test("deployment failures retain only a bounded diagnostic stage", async () => {
     for (const [message, expectedStage] of [
       ["production_parity_mismatch", "production_parity_mismatch"],
       ["github_main_http_503", "provider_read_failed"],
+      ["vercel_deployment_aliases_http_503", "provider_read_failed"],
       ["private provider response", "deployment_snapshot_invalid"],
     ]) {
       await assert.rejects(preflightRemoteMonitor({

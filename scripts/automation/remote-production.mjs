@@ -41,7 +41,7 @@ const FAILURE_LOG_WORDS = /\b(?:error|timeout|timed out|fail(?:ed|ure)?|exceptio
 const LOG_CHILD_ENV_NAMES = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
 const LOG_QUERY_TIMEOUT_MS = 90_000;
 const LOG_QUERY_RETRY_DELAY_MS = 1_000;
-const TRANSIENT_DEPLOYMENT_READ = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
+const TRANSIENT_DEPLOYMENT_READ = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|vercel_deployment_aliases|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
 const TRANSIENT_READ_RETRY_DELAYS_MS = Object.freeze([
   1_000,
   5_000,
@@ -139,8 +139,7 @@ async function collectRemoteDeploymentOnce(token, fetchImpl) {
     deployment?.id !== id ||
     deployment?.target !== "production" ||
     deployment?.projectId !== PROJECT_ID ||
-    !Array.isArray(deployment?.alias) ||
-    !deployment.alias.includes(ALIAS_HOST)
+    !Array.isArray(deployment?.alias)
   ) fail("vercel_deployment_invalid");
   if (deployment.readyState !== "READY") {
     if (VERCEL_CONVERGING_STATES.has(deployment.readyState)) {
@@ -179,6 +178,19 @@ async function collectRemoteDeploymentOnce(token, fetchImpl) {
     loginIds.length === 0 ||
     loginIds.some((loginId) => loginId !== id)
   ) fail("production_parity_mismatch");
+  if (!deployment.alias.includes(ALIAS_HOST)) {
+    // Promoted deployments can report an empty alias array in their details.
+    // Require the deployment-scoped alias list to corroborate the canonical lookup.
+    const aliasList = await getJson(
+      `https://api.vercel.com/v2/deployments/${id}/aliases?teamId=${TEAM_ID}`,
+      vercelHeaders, "vercel_deployment_aliases", fetchImpl,
+    );
+    if (!Array.isArray(aliasList?.aliases)) fail("vercel_deployment_aliases_invalid");
+    const canonical = aliasList.aliases.filter((entry) => entry?.alias === ALIAS_HOST);
+    if (canonical.length !== 1 || canonical[0].redirect !== null) {
+      fail("production_parity_mismatch");
+    }
+  }
   return Object.freeze({
     observedAt: new Date().toISOString(),
     mainSha,

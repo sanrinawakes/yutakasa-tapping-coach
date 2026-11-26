@@ -9,6 +9,8 @@ import {
 
 const sha = "9e30bbefd52eb03b67a95dcce7ed2120ee8defaa";
 const id = "dpl_CnNGM63s3fmYAsHpe1RhkXqvJru4";
+const aliasHost = "yutakasa-tapping-coach.vercel.app";
+const deploymentAliasesUrl = `https://api.vercel.com/v2/deployments/${id}/aliases?teamId=team_H7RDZStJJtoqfh7pJ0OU4l5G`;
 const deploymentUrl = "https://yutakasa-tapping-coach-example.vercel.app";
 const knownDisabledReplyProbe = Object.freeze({
   id: "khkhd-1789602181091-f3e1581be96c",
@@ -64,6 +66,8 @@ function fakeFetch({
   readyState = "READY",
   mainSha = sha,
   commitRef = "main",
+  embeddedAliases = [aliasHost],
+  listedAliases = { aliases: [{ alias: aliasHost, redirect: null }] },
 } = {}) {
   return async (url) => {
     let value;
@@ -79,10 +83,11 @@ function fakeFetch({
       readyState,
       target: "production",
       projectId: "prj_YJUFNmsjGF7hHFJ3A0BTNvrGTXBW",
-      alias: ["yutakasa-tapping-coach.vercel.app"],
+      alias: embeddedAliases,
       meta: { githubCommitSha: sha, githubCommitRef: commitRef },
       url: deploymentUrl.replace(/^https:\/\//u, ""),
     };
+    else if (url === deploymentAliasesUrl) value = listedAliases;
     else if (url.includes("/statuses?")) value = [{ state: "success", environment_url: deploymentUrl }];
     else if (url.endsWith("/login")) value = `<html data-dpl-id="${loginId}"></html>`;
     else throw new Error("unexpected URL");
@@ -98,6 +103,95 @@ test("deployment parity requires all production identifiers to agree", async () 
   });
   assert.equal(result.mainSha, sha);
   assert.equal(result.deploymentId, id);
+});
+
+test("deployment-scoped alias list corroborates a promoted build with an empty embedded list", async () => {
+  const fetchGood = fakeFetch({ embeddedAliases: [] });
+  let listReads = 0;
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url, options) => {
+      if (url === deploymentAliasesUrl) {
+        assert.equal(options.method, "GET");
+        assert.equal(options.redirect, "error");
+        assert.equal(options.headers.Authorization, `Bearer ${"x".repeat(30)}`);
+        listReads += 1;
+      }
+      return fetchGood(url);
+    },
+  });
+  assert.equal(result.deploymentId, id);
+  assert.equal(result.mainSha, sha);
+  assert.equal(listReads, 1);
+});
+
+test("an empty embedded list still rejects unconfirmed, redirected, or duplicate canonical aliases", async () => {
+  for (const aliases of [
+    [],
+    [{ alias: "another.vercel.app", redirect: null }],
+    [{ alias: aliasHost, redirect: "another.vercel.app" }],
+    [{ alias: aliasHost, redirect: null }, { alias: aliasHost, redirect: null }],
+    [{ alias: aliasHost }],
+  ]) {
+    await assert.rejects(
+      collectRemoteDeployment({
+        token: "x".repeat(30),
+        fetchImpl: fakeFetch({ embeddedAliases: [], listedAliases: { aliases } }),
+        waitImpl: async () => {},
+      }),
+      /production_parity_mismatch/u,
+    );
+  }
+  await assert.rejects(
+    collectRemoteDeployment({
+      token: "x".repeat(30),
+      fetchImpl: fakeFetch({ embeddedAliases: [], listedAliases: {} }),
+    }),
+    /vercel_deployment_aliases_invalid/u,
+  );
+});
+
+test("alias fallback does not mask public login mismatch or malformed deployment data", async () => {
+  const fetchWrongLogin = fakeFetch({ embeddedAliases: [], loginId: "dpl_12345678" });
+  let listReads = 0;
+  await assert.rejects(
+    collectRemoteDeployment({
+      token: "x".repeat(30),
+      fetchImpl: async (url) => {
+        if (url === deploymentAliasesUrl) listReads += 1;
+        return fetchWrongLogin(url);
+      },
+      waitImpl: async () => {},
+    }),
+    /production_parity_mismatch/u,
+  );
+  assert.equal(listReads, 0);
+  await assert.rejects(
+    collectRemoteDeployment({ token: "x".repeat(30), fetchImpl: fakeFetch({ embeddedAliases: {} }) }),
+    /vercel_deployment_invalid/u,
+  );
+});
+
+test("a transient deployment-scoped alias read retries the entire snapshot", async () => {
+  const fetchGood = fakeFetch({ embeddedAliases: [] });
+  let listReads = 0;
+  let mainReads = 0;
+  const waits = [];
+  const result = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: async (url) => {
+      if (url.endsWith("/commits/main")) mainReads += 1;
+      if (url === deploymentAliasesUrl && listReads++ === 0) {
+        return new Response("unavailable", { status: 503 });
+      }
+      return fetchGood(url);
+    },
+    waitImpl: async (milliseconds) => { waits.push(milliseconds); },
+  });
+  assert.equal(result.deploymentId, id);
+  assert.equal(mainReads, 2);
+  assert.equal(listReads, 2);
+  assert.deepEqual(waits, [1_000]);
 });
 
 test("persistent deployment mismatch and terminal states fail closed", async () => {
