@@ -187,7 +187,7 @@ async function collectRemoteDeploymentOnce(token, fetchImpl) {
     );
     if (!Array.isArray(aliasList?.aliases)) fail("vercel_deployment_aliases_invalid");
     const canonical = aliasList.aliases.filter((entry) => entry?.alias === ALIAS_HOST);
-    if (canonical.length !== 1 || canonical[0].redirect !== null) {
+    if (canonical.length !== 1 || canonical[0].redirect != null) {
       fail("production_parity_mismatch");
     }
   }

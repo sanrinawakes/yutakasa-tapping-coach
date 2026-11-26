@@ -131,24 +131,36 @@ test("an empty embedded list still rejects unconfirmed, redirected, or duplicate
     [{ alias: "another.vercel.app", redirect: null }],
     [{ alias: aliasHost, redirect: "another.vercel.app" }],
     [{ alias: aliasHost, redirect: null }, { alias: aliasHost, redirect: null }],
-    [{ alias: aliasHost }],
   ]) {
+    const waits = [];
     await assert.rejects(
       collectRemoteDeployment({
         token: "x".repeat(30),
         fetchImpl: fakeFetch({ embeddedAliases: [], listedAliases: { aliases } }),
-        waitImpl: async () => {},
+        waitImpl: async (ms) => { waits.push(ms); },
       }),
       /production_parity_mismatch/u,
     );
+    assert.deepEqual(waits, [1_000, 15_000, 45_000, 150_000]);
   }
+  let waits = 0;
   await assert.rejects(
     collectRemoteDeployment({
       token: "x".repeat(30),
       fetchImpl: fakeFetch({ embeddedAliases: [], listedAliases: {} }),
+      waitImpl: async () => { waits += 1; },
     }),
     /vercel_deployment_aliases_invalid/u,
   );
+  assert.equal(waits, 0);
+  const optionalRedirect = await collectRemoteDeployment({
+    token: "x".repeat(30),
+    fetchImpl: fakeFetch({
+      embeddedAliases: [],
+      listedAliases: { aliases: [{ alias: aliasHost }] },
+    }),
+  });
+  assert.equal(optionalRedirect.deploymentId, id);
 });
 
 test("alias fallback does not mask public login mismatch or malformed deployment data", async () => {
