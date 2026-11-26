@@ -56,7 +56,7 @@ const DEPLOYMENT_FAILURE_STAGES = new Set([
   "production_parity_mismatch",
   "provider_read_failed",
 ]);
-const DEPLOYMENT_PROVIDER_READ_FAILURE = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
+const DEPLOYMENT_PROVIDER_READ_FAILURE = /^(?:github_main|github_deployments|vercel_alias|login|vercel_deployment|vercel_deployment_aliases|github_status)_(?:request_failed|http_(?:429|5[0-9][0-9]))$/u;
 
 export class RemoteMonitorError extends Error {
   constructor(code, { deploymentFailureStage = null } = {}) {
